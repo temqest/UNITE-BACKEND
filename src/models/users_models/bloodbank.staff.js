@@ -18,6 +18,11 @@ const bloodbankStaffSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  Middle_Name: {
+    type: String,
+    required: false,
+    trim: true
+  },
   Last_Name: {
     type: String,
     required: true,

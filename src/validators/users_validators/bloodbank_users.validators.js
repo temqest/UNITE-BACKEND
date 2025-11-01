@@ -38,6 +38,18 @@ const createBloodbankStaffSchema = Joi.object({
       'string.pattern.base': 'First Name can only contain letters, spaces, hyphens, and apostrophes'
     }),
 
+  Middle_Name: Joi.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .pattern(/^[a-zA-Z\s-']+$/)
+    .allow(null, '')
+    .messages({
+      'string.min': 'Middle Name must be at least 1 character long',
+      'string.max': 'Middle Name must not exceed 100 characters',
+      'string.pattern.base': 'Middle Name can only contain letters, spaces, hyphens, and apostrophes'
+    }),
+
   Last_Name: Joi.string()
     .required()
     .trim()
@@ -126,6 +138,18 @@ const updateBloodbankStaffSchema = Joi.object({
       'string.min': 'First Name must be at least 1 character long',
       'string.max': 'First Name must not exceed 100 characters',
       'string.pattern.base': 'First Name can only contain letters, spaces, hyphens, and apostrophes'
+    }),
+
+  Middle_Name: Joi.string()
+    .trim()
+    .min(1)
+    .max(100)
+    .pattern(/^[a-zA-Z\s-']+$/)
+    .allow(null, '')
+    .messages({
+      'string.min': 'Middle Name must be at least 1 character long',
+      'string.max': 'Middle Name must not exceed 100 characters',
+      'string.pattern.base': 'Middle Name can only contain letters, spaces, hyphens, and apostrophes'
     }),
 
   Last_Name: Joi.string()
