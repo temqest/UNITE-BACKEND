@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const BloodbankStaff = require('./users_models/bloodbank.staff');
 const SystemAdmin = require('./users_models/systemAdmin.model');
 const Coordinator = require('./users_models/coordinator.model');
+const Stakeholder = require('./users_models/stakeholder.model');
 
 // ============================================
 // EVENT MODELS
@@ -27,6 +28,7 @@ const EventRequestHistory = require('./request_models/eventRequestHistory.model'
 // ============================================
 const District = require('./utility_models/distric.model');
 const Notification = require('./utility_models/notifications.model');
+const RegistrationCode = require('./utility_models/registrationCode.model');
 
 // ============================================
 // MODEL RELATIONSHIPS & CONSTRAINTS
@@ -156,6 +158,7 @@ module.exports = {
   BloodbankStaff,
   SystemAdmin,
   Coordinator,
+  Stakeholder,
   
   // Event Models
   Event,
@@ -171,6 +174,7 @@ module.exports = {
   // Utility Models
   District,
   Notification,
+  RegistrationCode,
   
   // Validation Helpers
   validateCoordinator,

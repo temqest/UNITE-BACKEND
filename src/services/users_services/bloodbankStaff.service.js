@@ -3,27 +3,27 @@ const { BloodbankStaff, SystemAdmin, Coordinator } = require('../../models/index
 
 class BloodbankStaffService {
   /**
-   * Authenticate user by username and password
+   * Authenticate user by email and password
    * Returns user data and their role-specific information
    * 
-   * @param {string} username 
+   * @param {string} email 
    * @param {string} password 
    * @returns {Object} User data with role information
    */
-  async authenticateUser(username, password) {
+  async authenticateUser(email, password) {
     try {
-      // Find staff by username
-      const staff = await BloodbankStaff.findOne({ Username: username });
+      // Find staff by email
+      const staff = await BloodbankStaff.findOne({ Email: email.toLowerCase() });
 
       if (!staff) {
-        throw new Error('Invalid username or password');
+        throw new Error('Invalid email or password');
       }
 
       // Verify password
       const isPasswordValid = await bcrypt.compare(password, staff.Password);
 
       if (!isPasswordValid) {
-        throw new Error('Invalid username or password');
+        throw new Error('Invalid email or password');
       }
 
       // Get role-specific data
@@ -54,7 +54,6 @@ class BloodbankStaffService {
         success: true,
         user: {
           id: staff.ID,
-          username: staff.Username,
           first_name: staff.First_Name,
           middle_name: staff.Middle_Name,
           last_name: staff.Last_Name,
@@ -161,7 +160,7 @@ class BloodbankStaffService {
         success: true,
         message: 'Password reset successfully',
         credentials: {
-          username: staff.Username,
+          email: staff.Email,
           password: newPassword
         }
       };
@@ -211,7 +210,6 @@ class BloodbankStaffService {
         success: true,
         user: {
           id: staff.ID,
-          username: staff.Username,
           first_name: staff.First_Name,
           middle_name: staff.Middle_Name,
           last_name: staff.Last_Name,
@@ -229,51 +227,7 @@ class BloodbankStaffService {
     }
   }
 
-  /**
-   * Get user by username
-   * @param {string} username 
-   * @returns {Object} User data
-   */
-  async getUserByUsername(username) {
-    try {
-      const staff = await BloodbankStaff.findOne({ Username: username });
-
-      if (!staff) {
-        throw new Error('User not found');
-      }
-
-      return {
-        success: true,
-        user: {
-          id: staff.ID,
-          username: staff.Username,
-          first_name: staff.First_Name,
-          middle_name: staff.Middle_Name,
-          last_name: staff.Last_Name,
-          email: staff.Email,
-          phone_number: staff.Phone_Number,
-          staff_type: staff.StaffType
-        }
-      };
-
-    } catch (error) {
-      throw new Error(`Failed to get user: ${error.message}`);
-    }
-  }
-
-  /**
-   * Check if username is available
-   * @param {string} username 
-   * @returns {boolean} True if available
-   */
-  async isUsernameAvailable(username) {
-    try {
-      const existingUser = await BloodbankStaff.findOne({ Username: username });
-      return !existingUser;
-    } catch (error) {
-      throw new Error(`Failed to check username: ${error.message}`);
-    }
-  }
+  // Username is no longer used
 
   /**
    * Check if email is available
@@ -325,7 +279,6 @@ class BloodbankStaffService {
         message: 'Profile updated successfully',
         user: {
           id: staff.ID,
-          username: staff.Username,
           first_name: staff.First_Name,
           middle_name: staff.Middle_Name,
           last_name: staff.Last_Name,
@@ -367,7 +320,7 @@ class BloodbankStaffService {
   }
 
   /**
-   * Search users by name or username
+   * Search users by name or email
    * @param {string} searchTerm 
    * @param {number} limit 
    * @returns {Array} List of matching users
@@ -378,11 +331,11 @@ class BloodbankStaffService {
         $or: [
           { First_Name: { $regex: searchTerm, $options: 'i' } },
           { Last_Name: { $regex: searchTerm, $options: 'i' } },
-          { Username: { $regex: searchTerm, $options: 'i' } }
+          { Email: { $regex: searchTerm, $options: 'i' } }
         ]
       })
       .limit(limit)
-      .select('ID Username First_Name Middle_Name Last_Name Email StaffType');
+      .select('ID First_Name Middle_Name Last_Name Email StaffType');
 
       return {
         success: true,

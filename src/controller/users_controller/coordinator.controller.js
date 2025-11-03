@@ -1,4 +1,5 @@
 const coordinatorService = require('../../services/users_services/coordinator.service');
+const registrationCodeService = require('../../services/users_services/registrationCode.service');
 
 /**
  * Coordinator Controller
@@ -187,4 +188,27 @@ class CoordinatorController {
 }
 
 module.exports = new CoordinatorController();
+
+// Registration code endpoints
+module.exports.createRegistrationCode = async (req, res) => {
+  try {
+    const { coordinatorId } = req.params;
+    const { districtId, maxUses, expiresAt } = req.body || {};
+    const result = await registrationCodeService.createCode(coordinatorId, { districtId, maxUses, expiresAt });
+    return res.status(201).json({ success: true, data: result.code });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+module.exports.listRegistrationCodes = async (req, res) => {
+  try {
+    const { coordinatorId } = req.params;
+    const result = await registrationCodeService.listCodes(coordinatorId);
+    return res.status(200).json({ success: true, data: result.codes });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 

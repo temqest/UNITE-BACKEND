@@ -13,6 +13,11 @@ const coordinatorSchema = new mongoose.Schema({
     required: true,
     trim: true,
     ref: 'District'
+  },
+  Province_Name: {
+    type: String,
+    required: false,
+    trim: true
   }
 }, {
   timestamps: true

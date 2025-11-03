@@ -21,6 +21,10 @@ const eventSchema = new mongoose.Schema({
     type: Date,
     required: true
   },
+  End_Date: {
+    type: Date,
+    required: false
+  },
   ApprovedByAdminID: {
     type: String,
     trim: true,

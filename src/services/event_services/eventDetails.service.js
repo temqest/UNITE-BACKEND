@@ -196,8 +196,7 @@ class EventDetailsService {
         district_id: coordinator.District_ID,
         name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
         email: staff.Email,
-        phone: staff.Phone_Number,
-        username: staff.Username
+        phone: staff.Phone_Number
       };
 
     } catch (error) {
