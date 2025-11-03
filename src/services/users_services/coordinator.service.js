@@ -34,16 +34,13 @@ class CoordinatorService {
         throw new Error('Invalid District ID. District does not exist');
       }
 
-      // Check if username or email already exists
+      // Check if email already exists
       const existingStaff = await BloodbankStaff.findOne({
-        $or: [
-          { Username: staffData.Username },
-          { Email: staffData.Email }
-        ]
+        Email: staffData.Email
       });
 
       if (existingStaff) {
-        throw new Error('Username or Email already exists');
+        throw new Error('Email already exists');
       }
 
       // Generate unique coordinator ID
@@ -53,10 +50,9 @@ class CoordinatorService {
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(staffData.Password, saltRounds);
 
-      // Create BloodbankStaff record
+      // Create BloodbankStaff record (no Username)
       const bloodbankStaff = new BloodbankStaff({
         ID: coordinatorId,
-        Username: staffData.Username,
         First_Name: staffData.First_Name,
         Middle_Name: staffData.Middle_Name || null,
         Last_Name: staffData.Last_Name,
@@ -71,7 +67,8 @@ class CoordinatorService {
       // Create Coordinator record
       const coordinator = new Coordinator({
         Coordinator_ID: coordinatorId,
-        District_ID: coordinatorData.District_ID
+        District_ID: coordinatorData.District_ID,
+        Province_Name: coordinatorData.Province_Name || null
       });
 
       const savedCoordinator = await coordinator.save();
@@ -85,7 +82,6 @@ class CoordinatorService {
           District: district,
           Staff: {
             ID: savedStaff.ID,
-            Username: savedStaff.Username,
             First_Name: savedStaff.First_Name,
             Middle_Name: savedStaff.Middle_Name,
             Last_Name: savedStaff.Last_Name,
@@ -99,7 +95,7 @@ class CoordinatorService {
           updated_at: savedCoordinator.updatedAt
         },
         credentials: {
-          Username: staffData.Username,
+          Email: staffData.Email,
           Password: staffData.Password // Return plain password for admin to provide to coordinator
         },
         created_by: createdByAdminId,
@@ -142,7 +138,6 @@ class CoordinatorService {
           District: district,
           Staff: {
             ID: staff.ID,
-            Username: staff.Username,
             First_Name: staff.First_Name,
             Middle_Name: staff.Middle_Name,
             Last_Name: staff.Last_Name,
@@ -197,7 +192,6 @@ class CoordinatorService {
             District_ID: coord.District_ID,
             District: district || null,
             Staff: staff ? {
-              Username: staff.Username,
               First_Name: staff.First_Name,
               Middle_Name: staff.Middle_Name,
               Last_Name: staff.Last_Name,
@@ -255,6 +249,12 @@ class CoordinatorService {
         await coordinator.save();
       }
 
+      // Update province name if provided
+      if (updateData.Province_Name !== undefined) {
+        coordinator.Province_Name = updateData.Province_Name;
+        await coordinator.save();
+      }
+
       // Update staff information
       if (updateData.First_Name) staff.First_Name = updateData.First_Name;
       if (updateData.Middle_Name !== undefined) staff.Middle_Name = updateData.Middle_Name;
@@ -281,7 +281,6 @@ class CoordinatorService {
           District: district,
           Staff: {
             ID: staff.ID,
-            Username: staff.Username,
             First_Name: staff.First_Name,
             Middle_Name: staff.Middle_Name,
             Last_Name: staff.Last_Name,

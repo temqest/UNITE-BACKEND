@@ -3,8 +3,12 @@ const router = express.Router();
 const {
   systemAdminController,
   coordinatorController,
-  bloodbankStaffController
+  bloodbankStaffController,
+  stakeholderController
 } = require('../controller/users_controller');
+
+const authenticate = require('../middleware/authenticate');
+const { requireAdmin, requireCoordinator } = require('../middleware/requireRoles');
 
 const {
   validateCreateBloodbankStaff,
@@ -41,7 +45,7 @@ router.post('/:userId/verify-password', async (req, res, next) => {
  * @desc    Change user password
  * @access  Private
  */
-router.put('/:userId/password', async (req, res, next) => {
+router.put('/:userId/password', authenticate, async (req, res, next) => {
   try {
     await bloodbankStaffController.changePassword(req, res);
   } catch (error) {
@@ -54,7 +58,7 @@ router.put('/:userId/password', async (req, res, next) => {
  * @desc    Reset password (admin operation)
  * @access  Private (Admin only)
  */
-router.put('/:userId/reset-password', async (req, res, next) => {
+router.put('/:userId/reset-password', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await bloodbankStaffController.resetPassword(req, res);
   } catch (error) {
@@ -67,7 +71,7 @@ router.put('/:userId/reset-password', async (req, res, next) => {
  * @desc    Get user by ID
  * @access  Private
  */
-router.get('/:userId', async (req, res, next) => {
+router.get('/:userId', authenticate, async (req, res, next) => {
   try {
     await bloodbankStaffController.getUserById(req, res);
   } catch (error) {
@@ -75,31 +79,7 @@ router.get('/:userId', async (req, res, next) => {
   }
 });
 
-/**
- * @route   GET /api/users/username/:username
- * @desc    Get user by username
- * @access  Private
- */
-router.get('/username/:username', async (req, res, next) => {
-  try {
-    await bloodbankStaffController.getUserByUsername(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/users/check-username/:username
- * @desc    Check if username is available
- * @access  Public
- */
-router.get('/check-username/:username', async (req, res, next) => {
-  try {
-    await bloodbankStaffController.isUsernameAvailable(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
+// Username-related endpoints removed (username no longer used)
 
 /**
  * @route   GET /api/users/check-email/:email
@@ -158,7 +138,7 @@ router.get('/search', async (req, res, next) => {
  * @desc    Check if staff ID exists
  * @access  Private
  */
-router.get('/check-staff/:staffId', async (req, res, next) => {
+router.get('/check-staff/:staffId', authenticate, async (req, res, next) => {
   try {
     await bloodbankStaffController.staffExists(req, res);
   } catch (error) {
@@ -173,7 +153,7 @@ router.get('/check-staff/:staffId', async (req, res, next) => {
  * @desc    Create a new system admin account
  * @access  Private (Admin only)
  */
-router.post('/admin', validateCreateSystemAdmin, async (req, res, next) => {
+router.post('/admin', authenticate, requireAdmin, validateCreateSystemAdmin, async (req, res, next) => {
   try {
     await systemAdminController.createSystemAdminAccount(req, res);
   } catch (error) {
@@ -186,7 +166,7 @@ router.post('/admin', validateCreateSystemAdmin, async (req, res, next) => {
  * @desc    Get admin by ID
  * @access  Private (Admin only)
  */
-router.get('/admin/:adminId', async (req, res, next) => {
+router.get('/admin/:adminId', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.getAdminById(req, res);
   } catch (error) {
@@ -199,7 +179,7 @@ router.get('/admin/:adminId', async (req, res, next) => {
  * @desc    Get all admins
  * @access  Private (Admin only)
  */
-router.get('/admin', async (req, res, next) => {
+router.get('/admin', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.getAllAdmins(req, res);
   } catch (error) {
@@ -212,7 +192,7 @@ router.get('/admin', async (req, res, next) => {
  * @desc    Update admin information
  * @access  Private (Admin only)
  */
-router.put('/admin/:adminId', validateUpdateSystemAdmin, async (req, res, next) => {
+router.put('/admin/:adminId', authenticate, requireAdmin, validateUpdateSystemAdmin, async (req, res, next) => {
   try {
     await systemAdminController.updateAdmin(req, res);
   } catch (error) {
@@ -225,7 +205,7 @@ router.put('/admin/:adminId', validateUpdateSystemAdmin, async (req, res, next) 
  * @desc    Get admin dashboard
  * @access  Private (Admin only)
  */
-router.get('/admin/:adminId/dashboard', async (req, res, next) => {
+router.get('/admin/:adminId/dashboard', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.getAdminDashboard(req, res);
   } catch (error) {
@@ -238,7 +218,7 @@ router.get('/admin/:adminId/dashboard', async (req, res, next) => {
  * @desc    Get system-wide statistics
  * @access  Private (Admin only)
  */
-router.get('/admin/statistics', async (req, res, next) => {
+router.get('/admin/statistics', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.getSystemStatistics(req, res);
   } catch (error) {
@@ -251,7 +231,7 @@ router.get('/admin/statistics', async (req, res, next) => {
  * @desc    Delete admin account
  * @access  Private (Admin only)
  */
-router.delete('/admin/:adminId', async (req, res, next) => {
+router.delete('/admin/:adminId', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.deleteAdmin(req, res);
   } catch (error) {
@@ -264,7 +244,7 @@ router.delete('/admin/:adminId', async (req, res, next) => {
  * @desc    Get managed coordinators
  * @access  Private (Admin only)
  */
-router.get('/admin/:adminId/coordinators', async (req, res, next) => {
+router.get('/admin/:adminId/coordinators', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.getManagedCoordinators(req, res);
   } catch (error) {
@@ -277,7 +257,7 @@ router.get('/admin/:adminId/coordinators', async (req, res, next) => {
  * @desc    Create coordinator account
  * @access  Private (Admin only)
  */
-router.post('/admin/:adminId/coordinators', validateCreateCoordinator, async (req, res, next) => {
+router.post('/admin/:adminId/coordinators', authenticate, requireAdmin, validateCreateCoordinator, async (req, res, next) => {
   try {
     await systemAdminController.createCoordinatorAccount(req, res);
   } catch (error) {
@@ -290,7 +270,7 @@ router.post('/admin/:adminId/coordinators', validateCreateCoordinator, async (re
  * @desc    Get requests requiring admin attention
  * @access  Private (Admin only)
  */
-router.get('/admin/:adminId/requests/attention', async (req, res, next) => {
+router.get('/admin/:adminId/requests/attention', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.getRequestsRequiringAttention(req, res);
   } catch (error) {
@@ -305,7 +285,7 @@ router.get('/admin/:adminId/requests/attention', async (req, res, next) => {
  * @desc    Create a new coordinator account
  * @access  Private (Admin only)
  */
-router.post('/coordinators', validateCreateCoordinator, async (req, res, next) => {
+router.post('/coordinators', authenticate, requireAdmin, validateCreateCoordinator, async (req, res, next) => {
   try {
     await coordinatorController.createCoordinatorAccount(req, res);
   } catch (error) {
@@ -318,7 +298,7 @@ router.post('/coordinators', validateCreateCoordinator, async (req, res, next) =
  * @desc    Get coordinator by ID
  * @access  Private
  */
-router.get('/coordinators/:coordinatorId', async (req, res, next) => {
+router.get('/coordinators/:coordinatorId', authenticate, async (req, res, next) => {
   try {
     await coordinatorController.getCoordinatorById(req, res);
   } catch (error) {
@@ -331,7 +311,7 @@ router.get('/coordinators/:coordinatorId', async (req, res, next) => {
  * @desc    Get all coordinators with filtering and pagination
  * @access  Private
  */
-router.get('/coordinators', async (req, res, next) => {
+router.get('/coordinators', authenticate, async (req, res, next) => {
   try {
     await coordinatorController.getAllCoordinators(req, res);
   } catch (error) {
@@ -344,7 +324,7 @@ router.get('/coordinators', async (req, res, next) => {
  * @desc    Update coordinator information
  * @access  Private (Admin or Coordinator)
  */
-router.put('/coordinators/:coordinatorId', validateUpdateCoordinator, async (req, res, next) => {
+router.put('/coordinators/:coordinatorId', authenticate, requireCoordinator, validateUpdateCoordinator, async (req, res, next) => {
   try {
     await coordinatorController.updateCoordinator(req, res);
   } catch (error) {
@@ -357,7 +337,7 @@ router.put('/coordinators/:coordinatorId', validateUpdateCoordinator, async (req
  * @desc    Get coordinator dashboard
  * @access  Private (Coordinator)
  */
-router.get('/coordinators/:coordinatorId/dashboard', async (req, res, next) => {
+router.get('/coordinators/:coordinatorId/dashboard', authenticate, requireCoordinator, async (req, res, next) => {
   try {
     await coordinatorController.getCoordinatorDashboard(req, res);
   } catch (error) {
@@ -370,7 +350,7 @@ router.get('/coordinators/:coordinatorId/dashboard', async (req, res, next) => {
  * @desc    Delete/deactivate coordinator account
  * @access  Private (Admin only)
  */
-router.delete('/coordinators/:coordinatorId', async (req, res, next) => {
+router.delete('/coordinators/:coordinatorId', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await coordinatorController.deleteCoordinator(req, res);
   } catch (error) {
@@ -383,7 +363,23 @@ router.delete('/coordinators/:coordinatorId', async (req, res, next) => {
  * @desc    Get coordinator event history
  * @access  Private (Coordinator)
  */
-router.get('/coordinators/:coordinatorId/events/history', async (req, res, next) => {
+router.get('/coordinators/:coordinatorId/events/history', authenticate, requireCoordinator, async (req, res, next) => {
+// Registration code management (Coordinator only)
+router.post('/coordinators/:coordinatorId/registration-codes', authenticate, requireCoordinator, async (req, res, next) => {
+  try {
+    await coordinatorController.createRegistrationCode(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requireCoordinator, async (req, res, next) => {
+  try {
+    await coordinatorController.listRegistrationCodes(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
   try {
     await coordinatorController.getCoordinatorEventHistory(req, res);
   } catch (error) {
@@ -391,5 +387,21 @@ router.get('/coordinators/:coordinatorId/events/history', async (req, res, next)
   }
 });
 
+// ==================== STAKEHOLDER ROUTES ====================
+
+/**
+ * @route   POST /api/stakeholders/register
+ * @desc    Register stakeholder (optionally via registration code)
+ * @access  Public or Coordinator (depending on flow)
+ */
+router.post('/stakeholders/register', async (req, res, next) => {
+  try {
+    await stakeholderController.register(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
+
 

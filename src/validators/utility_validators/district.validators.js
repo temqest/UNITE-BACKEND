@@ -10,6 +10,18 @@ const createDistrictSchema = Joi.object({
       'string.empty': 'District ID cannot be empty'
     }),
 
+  Province_Name: Joi.string()
+    .required()
+    .trim()
+    .min(2)
+    .max(100)
+    .messages({
+      'any.required': 'Province Name is required',
+      'string.empty': 'Province Name cannot be empty',
+      'string.min': 'Province Name must be at least 2 characters long',
+      'string.max': 'Province Name must not exceed 100 characters'
+    }),
+
   District_Name: Joi.string()
     .required()
     .trim()
@@ -34,6 +46,16 @@ const createDistrictSchema = Joi.object({
       'string.max': 'District City must not exceed 100 characters'
     }),
 
+  District_Number: Joi.string()
+    .required()
+    .trim()
+    .max(20)
+    .messages({
+      'any.required': 'District Number is required',
+      'string.empty': 'District Number cannot be empty',
+      'string.max': 'District Number must not exceed 20 characters'
+    }),
+
   Region: Joi.string()
     .required()
     .trim()
@@ -55,6 +77,16 @@ const updateDistrictSchema = Joi.object({
       'string.empty': 'District ID cannot be empty'
     }),
 
+  Province_Name: Joi.string()
+    .trim()
+    .min(2)
+    .max(100)
+    .messages({
+      'string.empty': 'Province Name cannot be empty',
+      'string.min': 'Province Name must be at least 2 characters long',
+      'string.max': 'Province Name must not exceed 100 characters'
+    }),
+
   District_Name: Joi.string()
     .trim()
     .min(2)
@@ -73,6 +105,14 @@ const updateDistrictSchema = Joi.object({
       'string.empty': 'District City cannot be empty',
       'string.min': 'District City must be at least 2 characters long',
       'string.max': 'District City must not exceed 100 characters'
+    }),
+
+  District_Number: Joi.string()
+    .trim()
+    .max(20)
+    .messages({
+      'string.empty': 'District Number cannot be empty',
+      'string.max': 'District Number must not exceed 20 characters'
     }),
 
   Region: Joi.string()

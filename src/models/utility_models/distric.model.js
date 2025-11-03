@@ -7,12 +7,22 @@ const districtSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  Province_Name: {
+    type: String,
+    required: true,
+    trim: true
+  },
   District_Name: {
     type: String,
     required: true,
     trim: true
   },
   District_City: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  District_Number: {
     type: String,
     required: true,
     trim: true

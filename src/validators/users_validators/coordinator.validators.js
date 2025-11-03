@@ -16,6 +16,15 @@ const createCoordinatorSchema = Joi.object({
     .messages({
       'any.required': 'District ID is required',
       'string.empty': 'District ID cannot be empty'
+    }),
+
+  Province_Name: Joi.string()
+    .trim()
+    .min(2)
+    .max(100)
+    .messages({
+      'string.min': 'Province Name must be at least 2 characters long',
+      'string.max': 'Province Name must not exceed 100 characters'
     })
 });
 
@@ -31,6 +40,16 @@ const updateCoordinatorSchema = Joi.object({
     .trim()
     .messages({
       'string.empty': 'District ID cannot be empty'
+    }),
+
+  Province_Name: Joi.string()
+    .trim()
+    .min(2)
+    .max(100)
+    .messages({
+      'string.empty': 'Province Name cannot be empty',
+      'string.min': 'Province Name must be at least 2 characters long',
+      'string.max': 'Province Name must not exceed 100 characters'
     })
 }).min(1).messages({
   'object.min': 'At least one field must be provided for update'

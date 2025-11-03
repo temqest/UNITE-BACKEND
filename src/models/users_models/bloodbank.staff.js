@@ -7,12 +7,6 @@ const bloodbankStaffSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
-  Username: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true
-  },
   First_Name: {
     type: String,
     required: true,

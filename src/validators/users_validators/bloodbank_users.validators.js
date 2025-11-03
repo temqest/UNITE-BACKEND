@@ -10,20 +10,6 @@ const createBloodbankStaffSchema = Joi.object({
       'string.empty': 'ID cannot be empty'
     }),
 
-  Username: Joi.string()
-    .required()
-    .trim()
-    .min(3)
-    .max(50)
-    .alphanum()
-    .messages({
-      'any.required': 'Username is required',
-      'string.empty': 'Username cannot be empty',
-      'string.min': 'Username must be at least 3 characters long',
-      'string.max': 'Username must not exceed 50 characters',
-      'string.alphanum': 'Username must contain only alphanumeric characters'
-    }),
-
   First_Name: Joi.string()
     .required()
     .trim()
@@ -114,18 +100,6 @@ const updateBloodbankStaffSchema = Joi.object({
     .trim()
     .messages({
       'string.empty': 'ID cannot be empty'
-    }),
-
-  Username: Joi.string()
-    .trim()
-    .min(3)
-    .max(50)
-    .alphanum()
-    .messages({
-      'string.empty': 'Username cannot be empty',
-      'string.min': 'Username must be at least 3 characters long',
-      'string.max': 'Username must not exceed 50 characters',
-      'string.alphanum': 'Username must contain only alphanumeric characters'
     }),
 
   First_Name: Joi.string()

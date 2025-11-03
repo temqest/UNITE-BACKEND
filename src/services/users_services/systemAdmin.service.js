@@ -27,16 +27,13 @@ class SystemAdminService {
         throw new Error('Staff data and admin data are required');
       }
 
-      // Check if username or email already exists
+      // Check if email already exists
       const existingStaff = await BloodbankStaff.findOne({
-        $or: [
-          { Username: staffData.Username },
-          { Email: staffData.Email }
-        ]
+        Email: staffData.Email
       });
 
       if (existingStaff) {
-        throw new Error('Username or Email already exists');
+        throw new Error('Email already exists');
       }
 
       // Generate unique admin ID
@@ -46,10 +43,9 @@ class SystemAdminService {
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(staffData.Password, saltRounds);
 
-      // Create BloodbankStaff record
+      // Create BloodbankStaff record (no Username)
       const bloodbankStaff = new BloodbankStaff({
         ID: adminId,
-        Username: staffData.Username,
         First_Name: staffData.First_Name,
         Middle_Name: staffData.Middle_Name || null,
         Last_Name: staffData.Last_Name,
@@ -76,7 +72,6 @@ class SystemAdminService {
           AccessLevel: savedAdmin.AccessLevel,
           Staff: {
             ID: savedStaff.ID,
-            Username: savedStaff.Username,
             First_Name: savedStaff.First_Name,
             Middle_Name: savedStaff.Middle_Name,
             Last_Name: savedStaff.Last_Name,
@@ -89,10 +84,7 @@ class SystemAdminService {
           created_at: savedAdmin.createdAt,
           updated_at: savedAdmin.updatedAt
         },
-        credentials: {
-          Username: staffData.Username,
-          Password: staffData.Password
-        },
+        credentials: { Email: staffData.Email, Password: staffData.Password },
         message: 'System Admin account created successfully'
       };
 
@@ -126,7 +118,6 @@ class SystemAdminService {
           AccessLevel: admin.AccessLevel,
           Staff: {
             ID: staff.ID,
-            Username: staff.Username,
             First_Name: staff.First_Name,
             Middle_Name: staff.Middle_Name,
             Last_Name: staff.Last_Name,
@@ -162,7 +153,6 @@ class SystemAdminService {
             Admin_ID: admin.Admin_ID,
             AccessLevel: admin.AccessLevel,
             Staff: staff ? {
-              Username: staff.Username,
               First_Name: staff.First_Name,
               Middle_Name: staff.Middle_Name,
               Last_Name: staff.Last_Name,
@@ -232,7 +222,6 @@ class SystemAdminService {
           AccessLevel: admin.AccessLevel,
           Staff: {
             ID: staff.ID,
-            Username: staff.Username,
             First_Name: staff.First_Name,
             Middle_Name: staff.Middle_Name,
             Last_Name: staff.Last_Name,

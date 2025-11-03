@@ -43,6 +43,15 @@ const createEventSchema = Joi.object({
       'date.format': 'Start Date must be in ISO format'
     }),
 
+  End_Date: Joi.date()
+    .iso()
+    .greater(Joi.ref('Start_Date'))
+    .messages({
+      'date.base': 'End Date must be a valid date',
+      'date.greater': 'End Date must be after Start Date',
+      'date.format': 'End Date must be in ISO format'
+    }),
+
   ApprovedByAdminID: Joi.string()
     .trim()
     .allow('', null)
@@ -131,6 +140,13 @@ const updateEventSchema = Joi.object({
     .messages({
       'date.base': 'Start Date must be a valid date',
       'date.format': 'Start Date must be in ISO format'
+    }),
+
+  End_Date: Joi.date()
+    .iso()
+    .messages({
+      'date.base': 'End Date must be a valid date',
+      'date.format': 'End Date must be in ISO format'
     }),
 
   ApprovedByAdminID: Joi.string()

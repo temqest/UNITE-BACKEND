@@ -1,4 +1,5 @@
 const bloodbankStaffService = require('../../services/users_services/bloodbankStaff.service');
+const { signToken } = require('../../utils/jwt');
 
 /**
  * Bloodbank Staff Controller
@@ -11,21 +12,24 @@ class BloodbankStaffController {
    */
   async authenticateUser(req, res) {
     try {
-      const { username, password } = req.body;
+      const { email, password } = req.body;
       
-      if (!username || !password) {
+      if (!email || !password) {
         return res.status(400).json({
           success: false,
-          message: 'Username and password are required'
+          message: 'Email and password are required'
         });
       }
 
-      const result = await bloodbankStaffService.authenticateUser(username, password);
+      const result = await bloodbankStaffService.authenticateUser(email, password);
+
+      const token = signToken({ id: result.user.id, role: result.user.staff_type, district_id: result.user.role_data?.district_id || null });
 
       return res.status(200).json({
         success: result.success,
         message: result.message,
-        data: result.user
+        data: result.user,
+        token
       });
     } catch (error) {
       return res.status(401).json({
