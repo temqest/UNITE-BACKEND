@@ -120,15 +120,31 @@ class EventRequestService {
     };
 
     try {
+      // Normalize date to Date instance
+      const startDate = new Date(eventData.Start_Date);
+      if (isNaN(startDate.getTime())) {
+        return { isValid: false, errors: ['Invalid Start_Date'], warnings: [] };
+      }
+      let endDate = null;
+      if (eventData.End_Date) {
+        endDate = new Date(eventData.End_Date);
+        if (isNaN(endDate.getTime())) {
+          return { isValid: false, errors: ['Invalid End_Date'], warnings: [] };
+        }
+        if (endDate.getTime() < startDate.getTime()) {
+          return { isValid: false, errors: ['End_Date must be on/after Start_Date'], warnings: [] };
+        }
+      }
+
       // 1. Check advance booking limit (1 month/30 days)
-      const advanceBooking = systemSettings.validateAdvanceBooking(eventData.Start_Date);
+      const advanceBooking = systemSettings.validateAdvanceBooking(startDate);
       if (!advanceBooking.isValid) {
         validationResults.isValid = false;
         validationResults.errors.push(advanceBooking.message);
       }
 
       // 2. Check weekend restriction
-      const weekendCheck = systemSettings.validateWeekendRestriction(eventData.Start_Date);
+      const weekendCheck = systemSettings.validateWeekendRestriction(startDate);
       if (weekendCheck.requiresOverride) {
         // Weekend events need admin approval, but don't block creation
         validationResults.warnings.push(weekendCheck.message);
@@ -149,7 +165,7 @@ class EventRequestService {
       if (systemSettings.getSetting('preventOverlappingRequests')) {
         const hasOverlap = await this.checkCoordinatorOverlappingRequests(
           coordinatorId,
-          eventData.Start_Date,
+          startDate,
           excludeRequestId
         );
         if (hasOverlap) {
@@ -161,7 +177,7 @@ class EventRequestService {
       // 5. Check double booking (same location, same date)
       if (systemSettings.getSetting('preventDoubleBooking')) {
         const isDoubleBooked = await this.checkDoubleBooking(
-          eventData.Start_Date,
+          startDate,
           eventData.Location,
           excludeRequestId ? await Event.findOne({ Request_ID: excludeRequestId }) : null
         );
@@ -173,7 +189,7 @@ class EventRequestService {
 
       // 6. Additional checks for BloodDrive events
       if (eventData.categoryType === 'BloodDrive' && eventData.Target_Donation) {
-        const totalBloodBags = await this.getTotalBloodBagsForDate(eventData.Start_Date);
+        const totalBloodBags = await this.getTotalBloodBagsForDate(startDate);
         const maxAllowed = systemSettings.getSetting('maxBloodBagsPerDay');
         
         if (totalBloodBags + eventData.Target_Donation > maxAllowed) {
@@ -187,8 +203,8 @@ class EventRequestService {
       // 7. Check daily event limit
       const eventsOnDate = await Event.countDocuments({
         Start_Date: {
-          $gte: new Date(eventData.Start_Date).setHours(0, 0, 0, 0),
-          $lt: new Date(eventData.Start_Date).setHours(23, 59, 59, 999)
+          $gte: new Date(new Date(startDate).setHours(0, 0, 0, 0)),
+          $lt: new Date(new Date(endDate || startDate).setHours(23, 59, 59, 999))
         },
         Status: { $in: ['Approved', 'Completed'] }
       });
@@ -300,7 +316,8 @@ class EventRequestService {
         Event_ID: eventId,
         Event_Title: eventData.Event_Title,
         Location: eventData.Location,
-        Start_Date: eventData.Start_Date,
+        Start_Date: new Date(eventData.Start_Date),
+        End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
         MadeByCoordinatorID: coordinatorId,
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
@@ -356,6 +373,89 @@ class EventRequestService {
 
     } catch (error) {
       throw new Error(`Failed to create event request: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create an event immediately (auto-published) when created by admin or coordinator
+   * - Reuses the same scheduling validation rules
+   * - Creates category data and main Event only (no EventRequest)
+   */
+  async createImmediateEvent(creatorId, creatorRole, eventData) {
+    try {
+      // Validate creator (admin or coordinator)
+      if (creatorRole !== 'Admin' && creatorRole !== 'Coordinator') {
+        throw new Error('Unauthorized: Only Admin or Coordinator can auto-publish events');
+      }
+
+      const coordinatorId = creatorRole === 'Coordinator' ? creatorId : (eventData.MadeByCoordinatorID || null);
+      if (creatorRole === 'Coordinator') {
+        const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
+        if (!coordinator) throw new Error('Coordinator not found');
+      }
+
+      // Validate scheduling rules (use coordinatorId when present, otherwise bypass overlap checks)
+      const validation = await this.validateSchedulingRules(coordinatorId || 'ADMIN', eventData);
+      if (!validation.isValid) {
+        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
+      }
+
+      // Generate event ID
+      const eventId = this.generateEventID();
+
+      // Create category-specific data
+      let categoryData = null;
+      if (eventData.categoryType === 'BloodDrive') {
+        categoryData = new BloodDrive({
+          BloodDrive_ID: eventId,
+          Target_Donation: eventData.Target_Donation,
+          VenueType: eventData.VenueType
+        });
+        await categoryData.save();
+      } else if (eventData.categoryType === 'Advocacy') {
+        categoryData = new Advocacy({
+          Advocacy_ID: eventId,
+          Topic: eventData.Topic,
+          TargetAudience: eventData.TargetAudience,
+          ExpectedAudienceSize: eventData.ExpectedAudienceSize,
+          PartnerOrganization: eventData.PartnerOrganization
+        });
+        await categoryData.save();
+      } else if (eventData.categoryType === 'Training') {
+        categoryData = new Training({
+          Training_ID: eventId,
+          TrainingType: eventData.TrainingType,
+          MaxParticipants: eventData.MaxParticipants
+        });
+        await categoryData.save();
+      } else {
+        throw new Error('Invalid event category type');
+      }
+
+      // Create main event with Approved/Completed status (auto-publish)
+      const event = new Event({
+        Event_ID: eventId,
+        Event_Title: eventData.Event_Title,
+        Location: eventData.Location,
+        Start_Date: new Date(eventData.Start_Date),
+        End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
+        MadeByCoordinatorID: coordinatorId || undefined,
+        Email: eventData.Email,
+        Phone_Number: eventData.Phone_Number,
+        ApprovedByAdminID: creatorRole === 'Admin' ? creatorId : undefined,
+        Status: 'Approved'
+      });
+      await event.save();
+
+      return {
+        success: true,
+        message: 'Event created and published successfully',
+        event,
+        category: categoryData,
+        warnings: validation.warnings
+      };
+    } catch (error) {
+      throw new Error(`Failed to create event: ${error.message}`);
     }
   }
 

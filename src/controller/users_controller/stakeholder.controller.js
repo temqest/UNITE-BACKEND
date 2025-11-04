@@ -18,10 +18,25 @@ class StakeholderController {
         return res.status(400).json({ success: false, message: 'Email and password are required' });
       }
       const result = await stakeholderService.authenticate(email, password);
-      const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.District_ID });
+  const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.District_ID, coordinator_id: result.stakeholder.Coordinator_ID });
       return res.status(200).json({ success: true, data: result.stakeholder, token });
     } catch (error) {
       return res.status(401).json({ success: false, message: error.message });
+    }
+  }
+
+  async list(req, res) {
+    try {
+      const filters = {
+        district_id: req.query.district_id,
+        email: req.query.email
+      };
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const result = await stakeholderService.list(filters, page, limit);
+      return res.status(200).json({ success: true, data: result.data, pagination: result.pagination });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
     }
   }
 }

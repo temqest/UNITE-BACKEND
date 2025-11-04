@@ -22,7 +22,9 @@ export default function EventRequestPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  if (role !== 'coordinator') {
+  // Allow coordinators, admins and stakeholders to open the request page.
+  // Admins/coordinators can publish directly; stakeholders will create a request.
+  if (role !== 'coordinator' && role !== 'admin' && role !== 'stakeholder') {
     if (typeof window !== "undefined") router.replace('/dashboard');
     return null;
   }
@@ -33,8 +35,36 @@ export default function EventRequestPage() {
     setError(null);
     setLoading(true);
     try {
+      // Resolve coordinator id: use explicit fields if present, otherwise try to
+      // look up the coordinator for the stakeholder's district so the backend
+      // receives a Coordinator ID (the backend requires it).
+      // Prefer explicit Coordinator_ID on the user object (added server-side).
+      let resolvedCoordinatorId: any = role === 'coordinator' ? user?.id : (user?.Coordinator_ID ?? user?.role_data?.coordinator_id ?? user?.MadeByCoordinatorID ?? undefined);
+      if (role === 'stakeholder' && !resolvedCoordinatorId) {
+        const districtId = user?.role_data?.district_id ?? user?.District_ID ?? user?.district_id;
+        if (districtId) {
+          try {
+            const base = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+            const url = `${base}/coordinators?district_id=${encodeURIComponent(districtId)}`;
+            const res = await fetch(url, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, credentials: 'include' });
+            const data = await res.json();
+            const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+            const first = list[0];
+            resolvedCoordinatorId = first?.Coordinator_ID ?? first?.CoordinatorId ?? first?.id ?? first?.CoordinatorID ?? undefined;
+          } catch (fetchErr) {
+            // ignore — we'll surface a friendly error below if still undefined
+          }
+        }
+      }
+
+      if (role === 'stakeholder' && !resolvedCoordinatorId) {
+        throw new Error('Coordinator not found for your district. Please contact your coordinator or system admin.');
+      }
+
       const payload: any = {
-        coordinatorId: user?.id,
+        // Provide both shapes just in case the backend expects one or the other.
+        coordinatorId: resolvedCoordinatorId,
+        Coordinator_ID: resolvedCoordinatorId,
         categoryType: type,
         Event_Title: title,
         Location: location,
@@ -43,6 +73,10 @@ export default function EventRequestPage() {
         Email: email,
         Phone_Number: phone,
       };
+      // If a stakeholder created the request, include their stakeholder id for traceability.
+      if (role === 'stakeholder') {
+        payload.MadeByStakeholderID = user?.Stakeholder_ID ?? user?.StakeholderId ?? user?.id ?? undefined;
+      }
       if (type === 'BloodDrive') {
         payload.Target_Donation = targetDonation;
         payload.VenueType = venueType;

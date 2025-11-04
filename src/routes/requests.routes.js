@@ -17,7 +17,7 @@ const {
  * @desc    Coordinator submits event request
  * @access  Private (Coordinator)
  */
-router.post('/requests', validateCreateEventRequest, async (req, res, next) => {
+router.post('/requests', async (req, res, next) => {
   try {
     await eventRequestController.createEventRequest(req, res);
   } catch (error) {
@@ -25,6 +25,105 @@ router.post('/requests', validateCreateEventRequest, async (req, res, next) => {
   }
 });
 
+/**
+ * @route   POST /api/events/direct
+ * @desc    Create and publish event immediately (Admin or Coordinator)
+ * @access  Private
+ */
+router.post('/events/direct', async (req, res, next) => {
+  try {
+    await eventRequestController.createImmediateEvent(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/pending
+ * @desc    Get all pending requests for admin
+ * @access  Private (Admin only)
+ */
+router.get('/requests/pending', async (req, res, next) => {
+  try {
+    await eventRequestController.getPendingRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+
+/**
+ * @route   GET /api/requests/coordinator/:coordinatorId
+ * @desc    Get all requests for coordinator
+ * @access  Private (Coordinator)
+ */
+router.get('/requests/coordinator/:coordinatorId', async (req, res, next) => {
+  try {
+    await eventRequestController.getCoordinatorRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+
+/**
+ * @route   GET /api/requests/check-overlap
+ * @desc    Check if coordinator has overlapping requests
+ * @access  Private
+ */
+router.get('/requests/check-overlap', async (req, res, next) => {
+  try {
+    await eventRequestController.checkCoordinatorOverlappingRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/check-double-booking
+ * @desc    Check if date has double booking (location/venue)
+ * @access  Private
+ */
+router.get('/requests/check-double-booking', async (req, res, next) => {
+  try {
+    await eventRequestController.checkDoubleBooking(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/requests/validate
+ * @desc    Validate all scheduling rules
+ * @access  Private
+ */
+router.post('/requests/validate', async (req, res, next) => {
+  try {
+    await eventRequestController.validateSchedulingRules(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/blood-bags/:date
+ * @desc    Get total blood bags for a specific date
+ * @access  Private
+ */
+router.get('/requests/blood-bags/:date', async (req, res, next) => {
+  try {
+    await eventRequestController.getTotalBloodBagsForDate(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Parameterized request routes - placed after all specific routes to avoid
+ * Express treating static paths like 'pending' or 'coordinator' as a requestId.
+ */
 /**
  * @route   GET /api/requests/:requestId
  * @desc    Get event request by ID with full details
@@ -98,84 +197,6 @@ router.post('/requests/:requestId/coordinator-confirm', async (req, res, next) =
 router.delete('/requests/:requestId', async (req, res, next) => {
   try {
     await eventRequestController.cancelEventRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/coordinator/:coordinatorId
- * @desc    Get all requests for coordinator
- * @access  Private (Coordinator)
- */
-router.get('/requests/coordinator/:coordinatorId', async (req, res, next) => {
-  try {
-    await eventRequestController.getCoordinatorRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/pending
- * @desc    Get all pending requests for admin
- * @access  Private (Admin only)
- */
-router.get('/requests/pending', async (req, res, next) => {
-  try {
-    await eventRequestController.getPendingRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/check-overlap
- * @desc    Check if coordinator has overlapping requests
- * @access  Private
- */
-router.get('/requests/check-overlap', async (req, res, next) => {
-  try {
-    await eventRequestController.checkCoordinatorOverlappingRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/check-double-booking
- * @desc    Check if date has double booking (location/venue)
- * @access  Private
- */
-router.get('/requests/check-double-booking', async (req, res, next) => {
-  try {
-    await eventRequestController.checkDoubleBooking(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/validate
- * @desc    Validate all scheduling rules
- * @access  Private
- */
-router.post('/requests/validate', async (req, res, next) => {
-  try {
-    await eventRequestController.validateSchedulingRules(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/blood-bags/:date
- * @desc    Get total blood bags for a specific date
- * @access  Private
- */
-router.get('/requests/blood-bags/:date', async (req, res, next) => {
-  try {
-    await eventRequestController.getTotalBloodBagsForDate(req, res);
   } catch (error) {
     next(error);
   }

@@ -13,12 +13,16 @@ class StakeholderService {
     let effectiveDistrict = district;
 
     // If Registration_Code provided, validate and set district if missing
+    let codeCoordinatorId;
     if (stakeholderData.Registration_Code) {
       const code = await RegistrationCode.findOne({ Code: stakeholderData.Registration_Code });
       if (!code) throw new Error('Invalid registration code');
       if (!code.IsActive) throw new Error('Registration code is inactive');
       if (code.Expires_At && code.Expires_At < new Date()) throw new Error('Registration code expired');
       if (code.Uses >= code.Max_Uses) throw new Error('Registration code usage limit reached');
+
+      // capture the coordinator referenced by the registration code
+      codeCoordinatorId = code.Coordinator_ID;
 
       if (!effectiveDistrict) {
         effectiveDistrict = await District.findOne({ District_ID: code.District_ID });
@@ -40,7 +44,8 @@ class StakeholderService {
       Stakeholder_ID,
       Email: stakeholderData.Email.toLowerCase(),
       Password: hashed,
-      District_ID: effectiveDistrict.District_ID
+      District_ID: effectiveDistrict.District_ID,
+      Coordinator_ID: stakeholderData.Coordinator_ID || codeCoordinatorId || undefined
     });
     const saved = await stakeholder.save();
 
@@ -59,6 +64,7 @@ class StakeholderService {
         Email: saved.Email,
         Phone_Number: saved.Phone_Number,
         District_ID: saved.District_ID,
+        Coordinator_ID: saved.Coordinator_ID,
         Province_Name: saved.Province_Name,
         City_Municipality: saved.City_Municipality,
         Organization_Institution: saved.Organization_Institution,
@@ -82,8 +88,34 @@ class StakeholderService {
         Email: stakeholder.Email,
         Phone_Number: stakeholder.Phone_Number,
         District_ID: stakeholder.District_ID,
+        Coordinator_ID: stakeholder.Coordinator_ID,
         Province_Name: stakeholder.Province_Name
       }
+    };
+  }
+
+  async list(filters = {}, page = 1, limit = 20) {
+    const query = {};
+    if (filters.district_id) query.District_ID = filters.district_id;
+    if (filters.email) query.Email = { $regex: filters.email, $options: 'i' };
+
+    const skip = (page - 1) * limit;
+    const items = await Stakeholder.find(query).skip(skip).limit(limit).sort({ createdAt: -1 });
+    const total = await Stakeholder.countDocuments(query);
+
+    return {
+      success: true,
+      data: items.map(s => ({
+        Stakeholder_ID: s.Stakeholder_ID,
+        First_Name: s.First_Name,
+        Middle_Name: s.Middle_Name,
+        Last_Name: s.Last_Name,
+        Email: s.Email,
+        Phone_Number: s.Phone_Number,
+        District_ID: s.District_ID,
+        created_at: s.createdAt
+      })),
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
     };
   }
 }

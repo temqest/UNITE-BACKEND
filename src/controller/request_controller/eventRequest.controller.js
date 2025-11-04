@@ -42,6 +42,35 @@ class EventRequestController {
   }
 
   /**
+   * Immediate event creation (auto-publish for Admin or Coordinator)
+   * POST /api/events/direct
+   */
+  async createImmediateEvent(req, res) {
+    try {
+      const { creatorId, creatorRole } = req.body;
+      const eventData = req.body;
+
+      if (!creatorId || !creatorRole) {
+        return res.status(400).json({ success: false, message: 'creatorId and creatorRole are required' });
+      }
+
+      const result = await eventRequestService.createImmediateEvent(creatorId, creatorRole, eventData);
+
+      return res.status(201).json({
+        success: result.success,
+        message: result.message,
+        data: {
+          event: result.event,
+          category: result.category
+        },
+        warnings: result.warnings
+      });
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message || 'Failed to create event' });
+    }
+  }
+
+  /**
    * Get event request by ID with full details
    * GET /api/requests/:requestId
    */

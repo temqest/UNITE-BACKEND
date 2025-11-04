@@ -64,7 +64,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       loginStakeholder: async (email, password) => {
         const res = await AuthAPI.loginStakeholder(email, password);
-        persist({ token: res.token, role: (res as any).role ?? "stakeholder", user: (res as any).user ?? null });
+        // Backend returns { success: true, data: stakeholder, token }
+        const userPayload = (res as any)?.data ?? (res as any)?.stakeholder ?? (res as any)?.user ?? null;
+        persist({ token: (res as any).token, role: "stakeholder", user: userPayload });
       },
       logout: clear,
     }),

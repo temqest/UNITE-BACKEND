@@ -364,6 +364,13 @@ router.delete('/coordinators/:coordinatorId', authenticate, requireAdmin, async 
  * @access  Private (Coordinator)
  */
 router.get('/coordinators/:coordinatorId/events/history', authenticate, requireCoordinator, async (req, res, next) => {
+  try {
+    await coordinatorController.getCoordinatorEventHistory(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Registration code management (Coordinator only)
 router.post('/coordinators/:coordinatorId/registration-codes', authenticate, requireCoordinator, async (req, res, next) => {
   try {
@@ -380,12 +387,6 @@ router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requ
     next(error);
   }
 });
-  try {
-    await coordinatorController.getCoordinatorEventHistory(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
 
 // ==================== STAKEHOLDER ROUTES ====================
 
@@ -397,6 +398,19 @@ router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requ
 router.post('/stakeholders/register', async (req, res, next) => {
   try {
     await stakeholderController.register(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/stakeholders
+ * @desc    List stakeholders (filter by district_id/email)
+ * @access  Private (Admin/Coordinator)
+ */
+router.get('/stakeholders', authenticate, async (req, res, next) => {
+  try {
+    await stakeholderController.list(req, res);
   } catch (error) {
     next(error);
   }

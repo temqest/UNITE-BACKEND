@@ -37,6 +37,16 @@ export default function UsersPage() {
 
   useEffect(() => { load(); }, [token, role]);
 
+  // Only admin and coordinator may access this page.
+  if (role !== 'admin' && role !== 'coordinator') {
+    if (typeof window !== 'undefined') {
+      const { useRouter } = require('next/navigation');
+      const router = useRouter();
+      router.replace('/dashboard');
+    }
+    return null;
+  }
+
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-5xl mx-auto">
