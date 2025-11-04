@@ -257,7 +257,7 @@ router.get('/admin/:adminId/coordinators', authenticate, requireAdmin, async (re
  * @desc    Create coordinator account
  * @access  Private (Admin only)
  */
-router.post('/admin/:adminId/coordinators', authenticate, requireAdmin, validateCreateCoordinator, async (req, res, next) => {
+router.post('/admin/:adminId/coordinators', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await systemAdminController.createCoordinatorAccount(req, res);
   } catch (error) {
@@ -285,7 +285,7 @@ router.get('/admin/:adminId/requests/attention', authenticate, requireAdmin, asy
  * @desc    Create a new coordinator account
  * @access  Private (Admin only)
  */
-router.post('/coordinators', authenticate, requireAdmin, validateCreateCoordinator, async (req, res, next) => {
+router.post('/coordinators', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await coordinatorController.createCoordinatorAccount(req, res);
   } catch (error) {
