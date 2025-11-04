@@ -5,7 +5,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { NotificationsAPI } from "../../services/api";
 
 export default function NotificationsPage() {
-  const { token } = useAuth();
+  const { token, role, user } = useAuth();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -15,8 +15,16 @@ export default function NotificationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await NotificationsAPI.list(token);
-      setItems((res as any)?.data ?? (res as any) ?? []);
+      const params = new URLSearchParams();
+      if (role === 'admin') {
+        params.set('recipientId', user?.id);
+        params.set('recipientType', 'Admin');
+      } else if (role === 'coordinator') {
+        params.set('recipientId', user?.id);
+        params.set('recipientType', 'Coordinator');
+      }
+      const res = await NotificationsAPI.list(token, params);
+      setItems((res as any)?.data ?? []);
     } catch (e: any) {
       setError(e?.message || 'Failed to load notifications');
     } finally {
@@ -24,11 +32,11 @@ export default function NotificationsPage() {
     }
   };
 
-  useEffect(() => { load(); }, [token]);
+  useEffect(() => { load(); }, [token, role]);
 
   const markAll = async () => {
-    if (!token) return;
-    await NotificationsAPI.markAllRead(token);
+    if (!token || !user?.id) return;
+    await NotificationsAPI.markAllRead(token, user.id, role === 'admin' ? 'Admin' : 'Coordinator');
     await load();
   };
 

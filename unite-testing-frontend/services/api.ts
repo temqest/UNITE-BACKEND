@@ -112,10 +112,10 @@ export const SettingsAPI = {
 };
 
 export const NotificationsAPI = {
-  list: (token: string) => apiFetch(`/notifications`, { token }),
-  unreadCount: (token: string) => apiFetch(`/notifications/unread-count`, { token }),
-  markRead: (token: string, id: string) => apiFetch(`/notifications/${id}/read`, { method: 'PUT', token }),
-  markAllRead: (token: string) => apiFetch(`/notifications/mark-all-read`, { method: 'PUT', token }),
+  list: (token: string, params: URLSearchParams) => apiFetch(`/notifications?${params.toString()}`, { token }),
+  unreadCount: (token: string, params: URLSearchParams) => apiFetch(`/notifications/unread-count?${params.toString()}`, { token }),
+  markRead: (token: string, id: string, recipientId: string) => apiFetch(`/notifications/${id}/read`, { method: 'PUT', token, body: { recipientId } }),
+  markAllRead: (token: string, recipientId: string, recipientType: 'Admin'|'Coordinator') => apiFetch(`/notifications/mark-all-read`, { method: 'PUT', token, body: { recipientId, recipientType } }),
 };
 
 export const UsersAPI = {
@@ -139,7 +139,17 @@ export const UsersAPI = {
 };
 
 export const DistrictsAPI = {
-  list: (token: string) => apiFetch(`/districts`, { token }),
+  list: (token?: string) => apiFetch(`/districts`, token ? { token } : {}),
+};
+
+export const EventsAPI = {
+  createDirect: (token: string, payload: Record<string, unknown>) =>
+    apiFetch(`/events/direct`, { method: 'POST', token, body: payload }),
+};
+
+export const StakeholdersAPI = {
+  list: (token: string, params: URLSearchParams) => apiFetch(`/stakeholders?${params.toString()}`, { token }),
+  register: (payload: Record<string, unknown>) => apiFetch(`/stakeholders/register`, { method: 'POST', body: payload }),
 };
 
 

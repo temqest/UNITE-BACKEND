@@ -23,6 +23,7 @@ export default function DashboardPage() {
         </header>
         <nav className="flex gap-3 mb-6">
           <Link className="px-3 py-2 bg-red-600 text-white rounded" href="/calendar">Global Calendar</Link>
+          <Link className="px-3 py-2 border border-red-600 text-red-600 rounded" href="/users">Users</Link>
           {role !== 'stakeholder' && (
             <Link className="px-3 py-2 border border-red-600 text-red-600 rounded" href="/review">Request Review</Link>
           )}
