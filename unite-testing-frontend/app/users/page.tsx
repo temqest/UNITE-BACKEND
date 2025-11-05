@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "../../contexts/AuthContext";
 import { UsersAPI, StakeholdersAPI } from "../../services/api";
+import { useRouter } from 'next/navigation';
 
 export default function UsersPage() {
   const { role, token, user } = useAuth();
@@ -17,10 +18,39 @@ export default function UsersPage() {
     setError(null);
     try {
       if (role === 'admin') {
-        const res: any = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/coordinators`, { headers: { Authorization: `Bearer ${token}` }, credentials: 'include' });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.message || 'Failed to load coordinators');
-        setItems(data?.data || []);
+        // Use combined users endpoint
+        const res: any = await UsersAPI.listUsers(token);
+        // res.data can be { coordinators, stakeholders }
+        const data = res?.data ?? {};
+        // flatten coordinators into expected table shape (take Staff object)
+        const combined: any[] = [];
+        if (Array.isArray(data.coordinators)) {
+          for (const c of data.coordinators) {
+            combined.push({
+              type: 'coordinator',
+              id: c.id || c.Coordinator_ID,
+              First_Name: c.staff?.First_Name,
+              Last_Name: c.staff?.Last_Name,
+              Email: c.staff?.Email,
+              Phone_Number: c.staff?.Phone_Number,
+              District_Name: c.district?.District_Name || c.district?.District_Name
+            });
+          }
+        }
+        if (Array.isArray(data.stakeholders)) {
+          for (const s of data.stakeholders) {
+            combined.push({
+              type: 'stakeholder',
+              id: s.id || s.Stakeholder_ID,
+              First_Name: s.first_name || s.First_Name,
+              Last_Name: s.last_name || s.Last_Name,
+              Email: s.email || s.Email,
+              Phone_Number: s.phone || s.Phone_Number,
+              District_Name: s.district_id || s.District_ID
+            });
+          }
+        }
+        setItems(combined);
       } else if (role === 'coordinator') {
         const params = new URLSearchParams();
         if (user?.role_data?.district_id) params.set('district_id', user.role_data.district_id);
@@ -36,12 +66,12 @@ export default function UsersPage() {
   };
 
   useEffect(() => { load(); }, [token, role]);
+  const router = useRouter();
 
   // Only admin and coordinator may access this page.
   if (role !== 'admin' && role !== 'coordinator') {
+    // redirect client-side; router is available as a hook at top-level
     if (typeof window !== 'undefined') {
-      const { useRouter } = require('next/navigation');
-      const router = useRouter();
       router.replace('/dashboard');
     }
     return null;
@@ -49,35 +79,74 @@ export default function UsersPage() {
 
   return (
     <div className="min-h-screen p-6">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold text-red-600">Users</h1>
-          {role === 'admin' && (
-            <Link href="/coordinators/new" className="px-3 py-2 border border-red-600 text-red-600 rounded">Create Coordinator</Link>
-          )}
-          {role === 'coordinator' && (
-            <Link href="/coordinators/registration-codes" className="px-3 py-2 border border-red-600 text-red-600 rounded">Invite Stakeholders</Link>
-          )}
-        </div>
-        {loading && <p>Loading...</p>}
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <ul className="divide-y border rounded">
-          {items.map((it: any) => (
-            <li key={it.Coordinator_ID || it.Stakeholder_ID} className="p-3">
-              {role === 'admin' ? (
-                <div>
-                  <p className="font-medium">{it?.Staff?.First_Name} {it?.Staff?.Last_Name}</p>
-                  <p className="text-sm text-zinc-600">{it?.Staff?.Email} • District: {it?.District?.District_Name || it?.District_ID}</p>
-                </div>
-              ) : (
-                <div>
-                  <p className="font-medium">{it.First_Name} {it.Last_Name}</p>
-                  <p className="text-sm text-zinc-600">{it.Email} • {it.Organization_Institution || 'Stakeholder'}</p>
-                </div>
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white border rounded-md p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h1 className="text-2xl font-semibold text-zinc-900">Coordinator Management</h1>
+              <p className="text-sm text-zinc-500">{role === 'admin' ? 'Admin view' : 'Coordinator view'}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <input placeholder="Search user..." className="px-4 py-2 border rounded-full w-64" />
+              </div>
+              <button className="px-3 py-2 border rounded text-sm">Export</button>
+              <button className="px-3 py-2 border rounded text-sm">Quick Filter</button>
+              <button className="px-3 py-2 border rounded text-sm">Advanced Filter</button>
+              {role === 'admin' && (
+                <Link href="/coordinators/new" className="px-4 py-2 bg-zinc-900 text-white rounded">Add a coordinator</Link>
               )}
-            </li>
-          ))}
-        </ul>
+            </div>
+          </div>
+
+          {loading && <p>Loading...</p>}
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="overflow-x-auto mt-4">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="text-left text-sm text-zinc-500">
+                  <th className="p-3 w-12"> </th>
+                  <th className="p-3">Staff</th>
+                  <th className="p-3">Email</th>
+                  <th className="p-3">Phone Number</th>
+                  <th className="p-3">District</th>
+                  <th className="p-3">Province</th>
+                  <th className="p-3">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it: any) => {
+                  const id = it.Coordinator_ID || it.Stakeholder_ID || it.id || it._id;
+                  const staff = it.Staff || it;
+                  const district = it.District || { District_Name: it?.District_Name ?? it?.District_ID };
+                  return (
+                    <tr key={id} className="border-t text-sm">
+                      <td className="p-3 align-top">
+                        <input type="checkbox" className="w-4 h-4" />
+                      </td>
+                      <td className="p-3 align-top">
+                        <div className="font-medium">{staff?.First_Name} {staff?.Last_Name}</div>
+                      </td>
+                      <td className="p-3 align-top">{staff?.Email}</td>
+                      <td className="p-3 align-top">{staff?.Phone_Number || staff?.Phone}</td>
+                      <td className="p-3 align-top">{district?.District_Name || it?.District_Name || it?.district}</td>
+                      <td className="p-3 align-top">{it?.Province_Name || it?.Province || '—'}</td>
+                      <td className="p-3 align-top">
+                        <button className="px-2 py-1 rounded border">•••</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {items.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-sm text-zinc-500">No coordinators found.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );

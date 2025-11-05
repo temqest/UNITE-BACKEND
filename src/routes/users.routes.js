@@ -32,7 +32,7 @@ const {
  * @desc    Verify password for a user
  * @access  Private
  */
-router.post('/:userId/verify-password', async (req, res, next) => {
+router.post('/users/:userId/verify-password', async (req, res, next) => {
   try {
     await bloodbankStaffController.verifyPassword(req, res);
   } catch (error) {
@@ -45,7 +45,7 @@ router.post('/:userId/verify-password', async (req, res, next) => {
  * @desc    Change user password
  * @access  Private
  */
-router.put('/:userId/password', authenticate, async (req, res, next) => {
+router.put('/users/:userId/password', authenticate, async (req, res, next) => {
   try {
     await bloodbankStaffController.changePassword(req, res);
   } catch (error) {
@@ -58,7 +58,7 @@ router.put('/:userId/password', authenticate, async (req, res, next) => {
  * @desc    Reset password (admin operation)
  * @access  Private (Admin only)
  */
-router.put('/:userId/reset-password', authenticate, requireAdmin, async (req, res, next) => {
+router.put('/users/:userId/reset-password', authenticate, requireAdmin, async (req, res, next) => {
   try {
     await bloodbankStaffController.resetPassword(req, res);
   } catch (error) {
@@ -71,7 +71,7 @@ router.put('/:userId/reset-password', authenticate, requireAdmin, async (req, re
  * @desc    Get user by ID
  * @access  Private
  */
-router.get('/:userId', authenticate, async (req, res, next) => {
+router.get('/users/:userId', authenticate, async (req, res, next) => {
   try {
     await bloodbankStaffController.getUserById(req, res);
   } catch (error) {
@@ -86,7 +86,7 @@ router.get('/:userId', authenticate, async (req, res, next) => {
  * @desc    Check if email is available
  * @access  Public
  */
-router.get('/check-email/:email', async (req, res, next) => {
+router.get('/users/check-email/:email', async (req, res, next) => {
   try {
     await bloodbankStaffController.isEmailAvailable(req, res);
   } catch (error) {
@@ -99,7 +99,7 @@ router.get('/check-email/:email', async (req, res, next) => {
  * @desc    Update user profile
  * @access  Private
  */
-router.put('/:userId/profile', validateUpdateBloodbankStaff, async (req, res, next) => {
+router.put('/users/:userId/profile', validateUpdateBloodbankStaff, async (req, res, next) => {
   try {
     await bloodbankStaffController.updateProfile(req, res);
   } catch (error) {
@@ -112,7 +112,7 @@ router.put('/:userId/profile', validateUpdateBloodbankStaff, async (req, res, ne
  * @desc    Get full name of user
  * @access  Private
  */
-router.get('/:userId/full-name', async (req, res, next) => {
+router.get('/users/:userId/full-name', async (req, res, next) => {
   try {
     await bloodbankStaffController.getFullName(req, res);
   } catch (error) {
@@ -125,7 +125,7 @@ router.get('/:userId/full-name', async (req, res, next) => {
  * @desc    Search users by name or username
  * @access  Private
  */
-router.get('/search', async (req, res, next) => {
+router.get('/users/search', async (req, res, next) => {
   try {
     await bloodbankStaffController.searchUsers(req, res);
   } catch (error) {
@@ -138,7 +138,7 @@ router.get('/search', async (req, res, next) => {
  * @desc    Check if staff ID exists
  * @access  Private
  */
-router.get('/check-staff/:staffId', authenticate, async (req, res, next) => {
+router.get('/users/check-staff/:staffId', authenticate, async (req, res, next) => {
   try {
     await bloodbankStaffController.staffExists(req, res);
   } catch (error) {
@@ -411,6 +411,19 @@ router.post('/stakeholders/register', async (req, res, next) => {
 router.get('/stakeholders', authenticate, async (req, res, next) => {
   try {
     await stakeholderController.list(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/users
+ * @desc    List users for admin or coordinator
+ * @access  Private (Admin/Coordinator)
+ */
+router.get('/users', authenticate, async (req, res, next) => {
+  try {
+    await require('../controller/users_controller').bloodbankStaffController.listUsers(req, res);
   } catch (error) {
     next(error);
   }

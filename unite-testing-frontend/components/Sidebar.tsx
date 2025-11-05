@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useAuth } from "../contexts/AuthContext";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 export default function Sidebar() {
   const { role, logout } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
 
   // Do not render sidebar for public (not logged in)
   // Also hide on auth/public pages regardless of auth state (login/signup/home)
@@ -23,10 +24,8 @@ export default function Sidebar() {
       <nav className="flex-1 flex flex-col items-center gap-4 py-6">
         <Link href="/dashboard" title="Campaign" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-slate-700">📅</Link>
       <Link href="/calendar" title="Calendar" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-slate-700">🗓️</Link>
-        {/* Create event / event request form (keeps existing /request route) */}
-        <Link href="/request" title="Create Event" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-slate-700">✉️</Link>
-        {/* Requests list page (view all requests) */}
-        <Link href="/requests" title="Requests" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-slate-700">�</Link>
+  {/* Requests / Review page: admins/coordinators will see the review table */}
+  <Link href="/review" title="Requests" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-slate-700">📨</Link>
 
         {/* Users visible only to admin/coordinator */}
         {(role === 'admin' || role === 'coordinator') && (
@@ -37,7 +36,16 @@ export default function Sidebar() {
       </nav>
 
       <div className="py-6">
-        <button onClick={() => { logout(); }} title="Logout" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-red-600">⎋</button>
+        <button onClick={() => {
+          // navigate to landing page first, then clear auth state to avoid hook-order races
+          try {
+            router.replace('/');
+          } catch (e) {
+            try { window.location.href = '/'; } catch {}
+          }
+          // Delay clearing context so components can unmount after navigation begins
+          setTimeout(() => { logout(); }, 60);
+        }} title="Logout" className="w-12 h-12 rounded-full bg-white shadow flex items-center justify-center text-red-600">⎋</button>
       </div>
     </aside>
   );

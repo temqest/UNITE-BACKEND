@@ -10,12 +10,6 @@ import CreateEventModal from "../../components/CreateEventModal";
 export default function DashboardPage() {
   const { role, logout, token } = useAuth();
   const router = useRouter();
-
-  useEffect(() => {
-    if (!role) router.replace('/login');
-  }, [role, router]);
-  if (!role) return null;
-
   const [events, setEvents] = useState<any[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [errorEvents, setErrorEvents] = useState<string | null>(null);
@@ -24,6 +18,12 @@ export default function DashboardPage() {
   const [limit] = useState(6);
   const [totalPages, setTotalPages] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!role) router.replace('/login');
+  }, [role, router]);
+
+  if (!role) return null;
 
   const loadEvents = async () => {
     if (!role) return;

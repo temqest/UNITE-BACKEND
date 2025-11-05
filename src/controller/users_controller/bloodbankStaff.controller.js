@@ -1,5 +1,7 @@
 const bloodbankStaffService = require('../../services/users_services/bloodbankStaff.service');
 const { signToken } = require('../../utils/jwt');
+const coordinatorService = require('../../services/users_services/coordinator.service');
+const stakeholderService = require('../../services/users_services/stakeholder.service');
 
 /**
  * Bloodbank Staff Controller
@@ -268,6 +270,67 @@ class BloodbankStaffController {
         success: false,
         message: error.message || 'User not found'
       });
+    }
+  }
+
+  /**
+   * List users for admin or coordinator
+   * Admin: return all coordinators and stakeholders (exclude the requesting admin)
+   * Coordinator: return stakeholders in their district
+   */
+  async listUsers(req, res) {
+    try {
+      const requester = req.user || {};
+      const role = requester.role || requester.Roles || null;
+      const requesterId = requester.id;
+
+      // Pagination params
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 50;
+
+      if (role === 'Admin') {
+        // Get coordinators (all)
+        const coordResult = await coordinatorService.getAllCoordinators({}, 1, 1000);
+        const coords = Array.isArray(coordResult?.coordinators) ? coordResult.coordinators : coordResult?.coordinators || [];
+
+        // Get stakeholders (all)
+        const stakeResult = await stakeholderService.list({}, 1, 1000);
+        const stakes = Array.isArray(stakeResult?.data) ? stakeResult.data : [];
+
+        // Normalize and combine
+        const coordinators = coords
+          .filter(c => !(c.Staff && (c.Staff.ID === requesterId || c.Staff.ID === requesterId)))
+          .map(c => ({
+            type: 'coordinator',
+            id: c.Coordinator_ID,
+            staff: c.Staff,
+            district: c.District
+          }));
+
+        const stakeholders = stakes.map(s => ({
+          type: 'stakeholder',
+          id: s.Stakeholder_ID,
+          first_name: s.First_Name,
+          last_name: s.Last_Name,
+          email: s.Email,
+          district_id: s.District_ID
+        }));
+
+        return res.status(200).json({ success: true, data: { coordinators, stakeholders } });
+      } else if (role === 'Coordinator') {
+        // Coordinator can only see stakeholders in their district
+        const districtId = requester.district_id || (requester.role_data && requester.role_data.district_id) || null;
+        if (!districtId) {
+          return res.status(400).json({ success: false, message: 'Coordinator district_id not found' });
+        }
+
+        const stakeResult = await stakeholderService.list({ district_id: districtId }, page, limit);
+        return res.status(200).json({ success: true, data: stakeResult.data, pagination: stakeResult.pagination });
+      }
+
+      return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to list users' });
     }
   }
 

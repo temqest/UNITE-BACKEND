@@ -144,6 +144,10 @@ export const UsersAPI = {
       };
     }
   ) => apiFetch(`/coordinators`, { method: 'POST', token, body: payload }),
+  // List coordinators (admins)
+  listCoordinators: (token: string) => apiFetch(`/coordinators`, { token }),
+  // Combined users endpoint: returns coordinators + stakeholders for admins, or district stakeholders for coordinators
+  listUsers: (token: string, params?: URLSearchParams) => apiFetch(`/users${params ? `?${params.toString()}` : ''}`, { token }),
 };
 
 export const DistrictsAPI = {

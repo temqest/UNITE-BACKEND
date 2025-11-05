@@ -17,21 +17,24 @@ interface AuthState {
 const AuthContext = createContext<AuthState | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [role, setRole] = useState<Role>(null);
-  const [user, setUser] = useState<any | null>(null);
-
-  useEffect(() => {
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem("unite_auth") : null;
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as { token: string; role: Role; user: any };
-        setToken(parsed.token);
-        setRole(parsed.role);
-        setUser(parsed.user);
-      } catch {}
+  // Initialize auth state synchronously from localStorage so initial render
+  // matches the persisted auth state and avoids hook-order/hydration races.
+  // This runs only on the client because this is a "use client" component.
+  const initialAuth = (() => {
+    try {
+      if (typeof window === 'undefined') return { token: null, role: null, user: null };
+      const stored = window.localStorage.getItem('unite_auth');
+      if (!stored) return { token: null, role: null, user: null };
+      const parsed = JSON.parse(stored) as { token?: string; role?: Role; user?: any };
+      return { token: parsed.token ?? null, role: parsed.role ?? null, user: parsed.user ?? null };
+    } catch (e) {
+      return { token: null, role: null, user: null };
     }
-  }, []);
+  })();
+
+  const [token, setToken] = useState<string | null>(initialAuth.token);
+  const [role, setRole] = useState<Role>(initialAuth.role);
+  const [user, setUser] = useState<any | null>(initialAuth.user);
 
   const persist = (next: { token: string; role: Role; user: any }) => {
     setToken(next.token);
