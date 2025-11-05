@@ -76,6 +76,26 @@ class EventRequestService {
   }
 
   /**
+   * Resolve an EventRequest by either Request_ID or Mongo _id
+   * @param {string} requestId
+   * @returns {Document|null}
+   */
+  async _findRequest(requestId) {
+    if (!requestId) return null;
+    // Try by Request_ID first
+    let request = await EventRequest.findOne({ Request_ID: requestId });
+    if (request) return request;
+    // Try by Mongo _id
+    try {
+      request = await EventRequest.findById(requestId);
+      if (request) return request;
+    } catch (e) {
+      // ignore invalid ObjectId errors
+    }
+    return null;
+  }
+
+  /**
    * Check if date has double booking (location/venue)
    * @param {Date} eventDate 
    * @param {string} location 
@@ -319,6 +339,8 @@ class EventRequestService {
         Start_Date: new Date(eventData.Start_Date),
         End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
         MadeByCoordinatorID: coordinatorId,
+        // If this request was created by a stakeholder, persist that too
+        MadeByStakeholderID: eventData.MadeByStakeholderID || undefined,
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
         Status: 'Pending'
@@ -330,6 +352,8 @@ class EventRequestService {
         Request_ID: requestId,
         Event_ID: eventId,
         Coordinator_ID: coordinatorId,
+        // Keep trace of which stakeholder created the request (if any)
+        MadeByStakeholderID: eventData.MadeByStakeholderID || undefined,
         Status: 'Pending_Admin_Review'
       });
       await request.save();
@@ -466,7 +490,7 @@ class EventRequestService {
    */
   async getEventRequestById(requestId) {
     try {
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Event request not found');
       }
@@ -529,7 +553,7 @@ class EventRequestService {
    */
   async updateEventRequest(requestId, coordinatorId, updateData) {
     try {
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Event request not found');
       }
@@ -609,7 +633,7 @@ class EventRequestService {
    */
   async adminAcceptRequest(adminId, requestId, adminAction = {}) {
     try {
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Request not found');
       }
@@ -618,33 +642,57 @@ class EventRequestService {
         throw new Error('Request is not pending admin review');
       }
 
-      // Validate admin
-      const admin = await SystemAdmin.findOne({ Admin_ID: adminId });
-      if (!admin) {
-        throw new Error('Admin not found');
+      // Validate actor: try SystemAdmin first, then Coordinator (coordinators may act as admins)
+      let actorRole = 'Admin';
+      let actorRecord = await SystemAdmin.findOne({ Admin_ID: adminId });
+      if (!actorRecord) {
+        // Allow coordinators to perform admin actions in this system (they have admin-like privileges)
+        const coordActor = await Coordinator.findOne({ Coordinator_ID: adminId });
+        if (!coordActor) {
+          throw new Error('Admin not found');
+        }
+        actorRole = 'Coordinator';
+        actorRecord = coordActor;
       }
 
       const action = adminAction.action || 'Accepted'; // Accepted, Rejected, Rescheduled
       const note = adminAction.note || null;
       const rescheduledDate = adminAction.rescheduledDate || null;
 
-      // Update request with admin decision
+      // Update request with admin/coordinator decision
+      // Record the acting user in Admin_ID for audit (even if actor is a coordinator)
       request.Admin_ID = adminId;
       request.AdminAction = action;
       request.AdminNote = note;
       request.RescheduledDate = rescheduledDate;
       request.AdminActionDate = new Date();
-      
+
       if (action === 'Rescheduled' && !rescheduledDate) {
         throw new Error('Rescheduled date is required when rescheduling');
       }
+
+      // NOTE: coordinators are allowed to act like admins, but their action
+      // should not auto-finalize the request. The stakeholder must still
+      // confirm before the event is published. Do not set CoordinatorFinalAction
+      // here — that field is reserved for explicit coordinator confirmations.
 
       await request.save();
 
       // Update event status
       const event = await Event.findOne({ Event_ID: request.Event_ID });
       if (event) {
-        event.Status = action === 'Accepted' ? 'Approved' : action;
+        // Map admin action to an event status, but do NOT mark as 'Approved'
+        // when an admin/coordinator accepts. Final approval (Approved) must
+        // happen only after stakeholder confirmation.
+        if (action === 'Rescheduled') {
+          event.Status = 'Rescheduled';
+        } else if (action === 'Rejected') {
+          event.Status = 'Rejected';
+        } else if (action === 'Accepted') {
+          // Admin accepted, awaiting stakeholder confirmation. Keep event
+          // in Pending state to avoid publishing prematurely.
+          event.Status = 'Pending';
+        }
         event.ApprovedByAdminID = adminId;
         await event.save();
       }
@@ -752,7 +800,7 @@ class EventRequestService {
    */
   async coordinatorConfirmRequest(coordinatorId, requestId, action) {
     try {
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Request not found');
       }
@@ -818,6 +866,108 @@ class EventRequestService {
   }
 
   /**
+   * Stakeholder confirms admin/coordinator decision
+   * @param {string} stakeholderId
+   * @param {string} requestId
+   * @param {string} action ('Accepted' | 'Rejected')
+   */
+  async stakeholderConfirmRequest(stakeholderId, requestId, action) {
+    try {
+      const request = await this._findRequest(requestId);
+      if (!request) {
+        throw new Error('Request not found');
+      }
+
+      // Verify stakeholder created the request (if MadeByStakeholderID exists)
+      if (request.MadeByStakeholderID && request.MadeByStakeholderID !== stakeholderId) {
+        throw new Error('Unauthorized: Stakeholder did not create this request');
+      }
+
+      // Ensure an admin or coordinator action has happened before stakeholder confirms
+      if (!request.AdminAction && !request.AdminActionDate && !request.CoordinatorFinalAction) {
+        throw new Error('Admin or coordinator must review the request before stakeholder confirmation');
+      }
+
+      // Only allow acceptance as the stakeholder final step. Stakeholders
+      // may only confirm acceptance; explicit rejection flows should be
+      // handled via admin/coordinator actions.
+      const validActions = ['Accepted'];
+      if (!validActions.includes(action)) {
+        throw new Error(`Invalid action. Stakeholders may only perform: ${validActions.join(', ')}`);
+      }
+
+      // Update request with stakeholder decision
+      request.StakeholderFinalAction = action;
+      request.StakeholderFinalActionDate = new Date();
+
+      // Finalize the event and request on stakeholder acceptance
+      // Approve the linked event
+      const event = await Event.findOne({ Event_ID: request.Event_ID });
+      if (event) {
+        event.Status = 'Approved';
+        await event.save();
+      }
+      request.Status = 'Completed';
+
+      await request.save();
+
+      // Create history entry for stakeholder action if history helper exists
+      const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: stakeholderId }).catch(() => null);
+      const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+      try {
+        if (typeof EventRequestHistory.createCoordinatorActionHistory === 'function') {
+          await EventRequestHistory.createCoordinatorActionHistory(
+            request.Request_ID,
+            request.Event_ID,
+            stakeholderId,
+            stakeholderName,
+            action,
+            request.Status
+          );
+        }
+      } catch (e) {
+        // ignore history creation failures
+      }
+
+      // Send notification to the coordinator (recipient: Coordinator)
+      try {
+        await Notification.createAdminActionNotification(
+          request.Coordinator_ID,
+          request.Request_ID,
+          request.Event_ID,
+          action,
+          null,
+          null
+        );
+      } catch (e) {
+        // swallow notification errors
+      }
+
+      // Also notify the admin who handled this request (if any)
+      if (request.Admin_ID) {
+        try {
+          await Notification.createCoordinatorActionNotification(
+            request.Admin_ID,
+            request.Request_ID,
+            request.Event_ID,
+            action
+          );
+        } catch (e) {
+          // swallow notification errors
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Stakeholder confirmation recorded',
+        request: request
+      };
+    } catch (error) {
+      throw new Error(`Failed to record stakeholder confirmation: ${error.message}`);
+    }
+  }
+
+  /**
    * Cancel/Delete pending request
    * @param {string} requestId 
    * @param {string} coordinatorId 
@@ -825,7 +975,7 @@ class EventRequestService {
    */
   async cancelEventRequest(requestId, coordinatorId) {
     try {
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Request not found');
       }
@@ -870,7 +1020,34 @@ class EventRequestService {
     try {
       const skip = (page - 1) * limit;
 
-      const query = { Coordinator_ID: coordinatorId };
+      // Some older/legacy requests may not have Coordinator_ID populated on
+      // the EventRequest document but the linked Event may have
+      // MadeByCoordinatorID. To be resilient, query for requests where
+      // either the EventRequest.Coordinator_ID matches OR the linked Event
+      // was created by the coordinator.
+      // Gather possible ways a request could be linked to this coordinator:
+      // 1) EventRequest.Coordinator_ID === coordinatorId
+      // 2) Event.MadeByCoordinatorID === coordinatorId (legacy where EventRequest.Coordinator_ID missing)
+      // 3) Stakeholders who belong to this coordinator created requests (MadeByStakeholderID)
+
+      const orClauses = [{ Coordinator_ID: coordinatorId }];
+
+      // (2) Events created by the coordinator
+      const eventIdsForCoordinator = await Event.find({ MadeByCoordinatorID: coordinatorId }).select('Event_ID');
+      const eventIdList = Array.isArray(eventIdsForCoordinator) ? eventIdsForCoordinator.map(e => e.Event_ID) : [];
+      if (eventIdList.length > 0) {
+        orClauses.push({ Event_ID: { $in: eventIdList } });
+      }
+
+      // (3) Stakeholders that belong to this coordinator may have created requests
+      // where MadeByStakeholderID is populated but Coordinator_ID is missing.
+      const stakeholderDocs = await require('../../models/index').Stakeholder.find({ Coordinator_ID: coordinatorId }).select('Stakeholder_ID');
+      const stakeholderIds = Array.isArray(stakeholderDocs) ? stakeholderDocs.map(s => s.Stakeholder_ID) : [];
+      if (stakeholderIds.length > 0) {
+        orClauses.push({ MadeByStakeholderID: { $in: stakeholderIds } });
+      }
+
+      const query = { $or: orClauses };
       
       if (filters.status) {
         query.Status = filters.status;
@@ -902,6 +1079,55 @@ class EventRequestService {
 
     } catch (error) {
       throw new Error(`Failed to get requests: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get all requests created by a stakeholder
+   * @param {string} stakeholderId
+   * @param {number} page
+   * @param {number} limit
+   */
+  async getRequestsByStakeholder(stakeholderId, page = 1, limit = 10) {
+    try {
+      const skip = (page - 1) * limit;
+
+      const query = { MadeByStakeholderID: stakeholderId };
+
+      const requests = await EventRequest.find(query)
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 });
+
+      const total = await EventRequest.countDocuments(query);
+
+      // Optionally enrich each request with event and coordinator staff
+      const enriched = await Promise.all(requests.map(async (r) => {
+        const event = await Event.findOne({ Event_ID: r.Event_ID });
+        const coordinator = await Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID });
+        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+        return {
+          ...r.toObject(),
+          event: event ? event.toObject() : null,
+          coordinator: coordinator ? {
+            ...coordinator.toObject(),
+            staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null
+          } : null
+        };
+      }));
+
+      return {
+        success: true,
+        requests: enriched,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      };
+    } catch (error) {
+      throw new Error(`Failed to get stakeholder requests: ${error.message}`);
     }
   }
 
@@ -944,6 +1170,36 @@ class EventRequestService {
 
     } catch (error) {
       throw new Error(`Failed to get pending requests: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get all requests (admin history view)
+   * @param {number} page
+   * @param {number} limit
+   */
+  async getAllRequests(page = 1, limit = 50) {
+    try {
+      const skip = (page - 1) * limit;
+      const requests = await EventRequest.find({})
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 });
+
+      const total = await EventRequest.countDocuments({});
+
+      return {
+        success: true,
+        requests,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      };
+    } catch (error) {
+      throw new Error(`Failed to get all requests: ${error.message}`);
     }
   }
 }

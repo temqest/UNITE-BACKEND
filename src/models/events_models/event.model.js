@@ -36,6 +36,12 @@ const eventSchema = new mongoose.Schema({
     trim: true,
     ref: 'Coordinator'
   },
+  MadeByStakeholderID: {
+    type: String,
+    required: false,
+    trim: true,
+    ref: 'Stakeholder'
+  },
   StaffAssignmentID: {
     type: String,
     trim: true

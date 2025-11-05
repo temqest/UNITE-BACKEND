@@ -89,11 +89,19 @@ export const RequestsAPI = {
   create: (token: string, payload: Record<string, unknown>) =>
     apiFetch(`/requests`, { method: 'POST', body: payload, token }),
   getPending: (token: string) => apiFetch(`/requests/pending`, { token }),
+  getAll: (token: string) => apiFetch(`/requests/all`, { token }),
   getById: (token: string, id: string) => apiFetch(`/requests/${id}`, { token }),
-  adminAction: (token: string, id: string, action: 'approve' | 'reject' | 'reschedule', notes?: string) =>
-    apiFetch(`/requests/${id}/admin-action`, { method: 'POST', token, body: { action, notes } }),
+  getByStakeholder: (token: string, stakeholderId: string) => apiFetch(`/requests/stakeholder/${stakeholderId}`, { token }),
+  getCoordinatorRequests: (token: string, coordinatorId: string) => apiFetch(`/requests/coordinator/${coordinatorId}`, { token }),
+  // adminId: the staff ID of the admin performing the action (required by backend)
+  adminAction: (token: string, id: string, action: string, notes?: string, adminId?: string, rescheduledDate?: string) =>
+    apiFetch(`/requests/${id}/admin-action`, { method: 'POST', token, body: { adminId, action, note: notes, rescheduledDate } }),
   coordinatorConfirm: (token: string, id: string, confirm: boolean) =>
     apiFetch(`/requests/${id}/coordinator-confirm`, { method: 'POST', token, body: { confirm } }),
+  stakeholderConfirm: (token: string, id: string, action: 'Accepted', stakeholderId?: string) =>
+    apiFetch(`/requests/${id}/stakeholder-confirm`, { method: 'POST', token, body: { stakeholderId, action } }),
+  assignStaff: (token: string, requestId: string, payload: { adminId: string; eventId: string; staffMembers: Array<{ FullName: string; Role: string }> }) =>
+    apiFetch(`/requests/${requestId}/staff`, { method: 'POST', token, body: payload }),
 };
 
 export const CalendarAPI = {

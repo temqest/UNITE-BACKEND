@@ -51,6 +51,19 @@ router.get('/requests/pending', async (req, res, next) => {
   }
 });
 
+/**
+ * @route   GET /api/requests/all
+ * @desc    Get all requests (admin view)
+ * @access  Private (Admin)
+ */
+router.get('/requests/all', async (req, res, next) => {
+  try {
+    await eventRequestController.getAllRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 
 
 /**
@@ -61,6 +74,32 @@ router.get('/requests/pending', async (req, res, next) => {
 router.get('/requests/coordinator/:coordinatorId', async (req, res, next) => {
   try {
     await eventRequestController.getCoordinatorRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/stakeholder/:stakeholderId
+ * @desc    Get all requests created by a stakeholder
+ * @access  Private (Stakeholder)
+ */
+router.get('/requests/stakeholder/:stakeholderId', async (req, res, next) => {
+  try {
+    await eventRequestController.getStakeholderRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/requests/:requestId/stakeholder-confirm
+ * @desc    Stakeholder confirms admin/coordinator decision
+ * @access  Private (Stakeholder)
+ */
+router.post('/requests/:requestId/stakeholder-confirm', async (req, res, next) => {
+  try {
+    await eventRequestController.stakeholderConfirmRequest(req, res);
   } catch (error) {
     next(error);
   }

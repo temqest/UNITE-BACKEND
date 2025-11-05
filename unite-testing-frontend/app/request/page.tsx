@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../contexts/AuthContext";
 import { RequestsAPI, EventsAPI } from "../../services/api";
+import { useEffect } from "react";
 
 export default function EventRequestPage() {
   const { token, role, user } = useAuth();
@@ -21,6 +22,9 @@ export default function EventRequestPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [requestsList, setRequestsList] = useState<any[] | null>(null);
+  const [loadingList, setLoadingList] = useState(false);
+  
 
   // Allow coordinators, admins and stakeholders to open the request page.
   // Admins/coordinators can publish directly; stakeholders will create a request.
@@ -102,11 +106,56 @@ export default function EventRequestPage() {
     }
   };
 
+  // Load persisted requests for the current user role
+  useEffect(() => {
+    const load = async () => {
+      if (!token) return;
+      setLoadingList(true);
+      try {
+        if (role === 'stakeholder') {
+          const stakeholderId = user?.Stakeholder_ID ?? user?.StakeholderId ?? user?.id ?? undefined;
+          if (stakeholderId) {
+            const res = await RequestsAPI.getByStakeholder(token, stakeholderId);
+            
+            const payload: any = res as any;
+            setRequestsList(Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? []);
+          } else {
+            setRequestsList([]);
+          }
+        } else if (role === 'coordinator') {
+          // Prefer role_data.coordinator_id (provided by backend) then Coordinator_ID then id
+          const coordinatorId = user?.role_data?.coordinator_id ?? user?.Coordinator_ID ?? user?.id ?? undefined;
+          if (coordinatorId) {
+            const res = await RequestsAPI.getCoordinatorRequests(token, coordinatorId);
+            
+            const payload: any = res as any;
+            setRequestsList(Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? []);
+          } else {
+            setRequestsList([]);
+          }
+        } else if (role === 'admin') {
+          // For admins show all requests (history + current)
+          const res = await RequestsAPI.getAll(token);
+          
+          const payload: any = res as any;
+          setRequestsList(Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? []);
+        }
+      } catch (err) {
+        // ignore — show empty list
+        setRequestsList([]);
+      } finally {
+        setLoadingList(false);
+      }
+    };
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, role, user]);
+
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-xl mx-auto border rounded-md p-6">
         <h1 className="text-xl font-semibold text-red-600 mb-4">New Event Request</h1>
-        <form onSubmit={submit} className="space-y-3">
+  <form onSubmit={submit} className="space-y-3">
           <div>
             <label className="block text-sm mb-1">Title</label>
             <input className="w-full border px-3 py-2 rounded" value={title} onChange={(e) => setTitle(e.target.value)} required />
@@ -158,6 +207,33 @@ export default function EventRequestPage() {
           <button disabled={loading} className="px-4 py-2 bg-red-600 text-white rounded">{loading ? 'Submitting...' : 'Submit Request'}</button>
         </form>
       </div>
+        <div className="max-w-3xl mx-auto mt-8">
+          <h2 className="text-lg font-semibold mb-3">Your requests</h2>
+          {loadingList && <p>Loading...</p>}
+          {!loadingList && (!requestsList || requestsList.length === 0) && <p className="text-sm text-gray-600">No requests found.</p>}
+          {!loadingList && requestsList && requestsList.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="text-left">
+                    <th className="p-2">Title / Event ID</th>
+                    <th className="p-2">Status</th>
+                    <th className="p-2">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {requestsList.map((r: any) => (
+                    <tr key={r.Request_ID || r._id} className="border-t">
+                      <td className="p-2">{r.event?.Event_Title ?? r.Event_Title ?? r.event?.Event_Title ?? r.Event_ID ?? r.Event_ID}</td>
+                      <td className="p-2">{r.Status ?? r.status ?? 'Unknown'}</td>
+                      <td className="p-2">{new Date(r.createdAt || r.created_at || r.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
     </div>
   );
 }

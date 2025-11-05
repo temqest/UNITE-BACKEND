@@ -249,6 +249,31 @@ class EventRequestController {
   }
 
   /**
+   * Stakeholder confirms admin/coordinator decision
+   * POST /api/requests/:requestId/stakeholder-confirm
+   */
+  async stakeholderConfirmRequest(req, res) {
+    try {
+      const { requestId } = req.params;
+      const { stakeholderId, action } = req.body;
+
+      if (!stakeholderId) {
+        return res.status(400).json({ success: false, message: 'Stakeholder ID is required' });
+      }
+
+      if (!action) {
+        return res.status(400).json({ success: false, message: 'Action is required' });
+      }
+
+      const result = await eventRequestService.stakeholderConfirmRequest(stakeholderId, requestId, action);
+
+      return res.status(200).json({ success: result.success, message: result.message, data: result.request });
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message || 'Failed to record stakeholder confirmation' });
+    }
+  }
+
+  /**
    * Cancel/Delete pending request
    * DELETE /api/requests/:requestId
    */
@@ -313,6 +338,28 @@ class EventRequestController {
   }
 
   /**
+   * Get requests made by a stakeholder
+   * GET /api/requests/stakeholder/:stakeholderId
+   */
+  async getStakeholderRequests(req, res) {
+    try {
+      const { stakeholderId } = req.params;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+
+      const result = await eventRequestService.getRequestsByStakeholder(stakeholderId, page, limit);
+
+      return res.status(200).json({
+        success: result.success,
+        data: result.requests,
+        pagination: result.pagination
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to retrieve stakeholder requests' });
+    }
+  }
+
+  /**
    * Get all pending requests for admin
    * GET /api/requests/pending
    */
@@ -341,6 +388,27 @@ class EventRequestController {
         success: false,
         message: error.message || 'Failed to retrieve pending requests'
       });
+    }
+  }
+
+  /**
+   * Get all requests (admin history)
+   * GET /api/requests/all
+   */
+  async getAllRequests(req, res) {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 50;
+
+      const result = await eventRequestService.getAllRequests(page, limit);
+
+      return res.status(200).json({
+        success: result.success,
+        data: result.requests,
+        pagination: result.pagination
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to retrieve requests' });
     }
   }
 
