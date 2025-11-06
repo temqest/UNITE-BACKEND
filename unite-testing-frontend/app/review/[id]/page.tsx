@@ -37,7 +37,48 @@ export default function RequestDetailPage(/* props omitted because client compon
     load();
   }, [token, id]);
 
-  if (role !== 'admin' && role !== 'coordinator') return null;
+  // If role is not yet initialized, show a loading placeholder instead of
+  // returning null which causes blank page/hydration issues.
+  if (!role) {
+    return (
+      <div className="min-h-screen p-6">
+        <div className="max-w-3xl mx-auto">
+          <h1 className="text-xl font-semibold text-red-600 mb-4">Request Review</h1>
+          <p className="text-sm text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Determine whether the current user may view this request. Admins and
+  // coordinators may always view. Stakeholders may view only their own
+  // requests (i.e., when their stakeholder id matches the request maker).
+  const canView = (() => {
+    if (role === 'admin' || role === 'coordinator') return true;
+    if (role === 'stakeholder' && detail) {
+      // Try multiple common shapes for stakeholder id on both user and detail
+      const userStakeholderId =
+        user?.role_data?.stakeholder_id ?? user?.role_data?.Stakeholder_ID ?? user?.Stakeholder_ID ?? user?.StakeholderId ?? user?.id ?? user?._id;
+      const madeById =
+        detail?.MadeByStakeholder?.Stakeholder_ID ?? detail?.MadeByStakeholder?.id ?? detail?.MadeByStakeholder?._id ??
+        detail?.stakeholder?.Stakeholder_ID ?? detail?.stakeholder?.id ?? detail?.stakeholder?._id ??
+        detail?.event?.Stakeholder_ID ?? detail?.event?.MadeByStakeholder_ID ?? null;
+      return !!userStakeholderId && !!madeById && userStakeholderId.toString() === madeById.toString();
+    }
+    return false;
+  })();
+
+  // Debug log to help in-browser troubleshooting
+  try {
+    console.log('[RequestDetailPage] init', {
+      id,
+      role,
+      tokenPresent: !!token,
+      userSummary: user ? { id: user?.id ?? user?._id ?? null, email: user?.Email ?? user?.email } : null,
+      madeBy: detail ? (detail?.MadeByStakeholder ?? detail?.stakeholder ?? detail?.event ?? null) : null,
+      canView
+    });
+  } catch (e) {}
 
   const doAction = async (action: 'approve'|'reject'|'reschedule') => {
   if (!token || !id) return;
@@ -73,7 +114,14 @@ export default function RequestDetailPage(/* props omitted because client compon
         <h1 className="text-xl font-semibold text-red-600 mb-4">Request Review</h1>
         {loading && <p>Loading...</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {detail && (
+        {detail && !canView && (
+          <div className="border rounded p-4 space-y-4">
+            <h2 className="font-medium text-lg">Request not available</h2>
+            <p className="text-sm text-zinc-600">You don't have permission to view this request. If you are the requester, please make sure you're logged in with the account used to submit the request. Go to <a href="/request" className="text-red-600 underline">Your Requests</a> to view or submit requests.</p>
+          </div>
+        )}
+
+        {detail && canView && (
           <div className="border rounded p-4 space-y-4">
             <div>
               <h2 className="font-medium text-lg">{detail?.event?.Event_Title ?? 'Untitled'}</h2>

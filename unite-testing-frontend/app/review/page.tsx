@@ -17,6 +17,10 @@ type PendingSummary = {
 export default function ReviewPage() {
   const { token, role, user } = useAuth();
   const [items, setItems] = useState<PendingSummary[]>([]);
+  // Debug logging to help diagnose blank page / hydration issues
+  try {
+    console.log('[ReviewPage] init', { role, tokenPresent: !!token, user: user ? { id: user?.id, email: user?.Email ?? user?.email } : null });
+  } catch (e) {}
   // helper to format ISO date to 'Oct 13, 2025'
   const formatDate = (iso?: string) => {
     if (!iso) return '';
@@ -45,51 +49,74 @@ export default function ReviewPage() {
 
   const load = async () => {
     if (!token) return;
+    console.log('[ReviewPage] load start', { role, tokenPresent: !!token });
     setLoading(true);
     setError(null);
     try {
-  const res: any = await RequestsAPI.getPending(token);
-  let list: any[] = (res?.data ?? res) as any[];
-  
+      let list: any[] = [];
 
-      // If no pending requests, fall back to admin history so admins can
-      // see past requests (accepted/rejected/completed). This addresses the
-      // common issue where admins only see pending items and lose history
-      // after acting on requests.
-      if ((!list || list.length === 0) && role === 'admin') {
-        try {
-          const allRes: any = await RequestsAPI.getAll(token);
-          list = (allRes?.data ?? allRes) as any[];
-        } catch (e) {
-          // swallow here and keep list empty; outer catch will surface error
-        }
-      }
-      // If coordinator and nothing pending, show coordinator history (their past requests)
-      if ((!list || list.length === 0) && role === 'coordinator') {
-        try {
-          const coordinatorId = user?.role_data?.coordinator_id ?? user?.Coordinator_ID ?? user?.id ?? undefined;
-          if (coordinatorId) {
-            const coordRes: any = await RequestsAPI.getCoordinatorRequests(token, coordinatorId);
-            list = (coordRes?.data ?? coordRes?.requests ?? coordRes) as any[];
+      if (role === 'admin' || role === 'coordinator') {
+        const res: any = await RequestsAPI.getPending(token);
+        list = (res?.data ?? res) as any[];
+        console.log('[ReviewPage] getPending response', { raw: res, len: Array.isArray(list) ? list.length : 'n/a' });
+
+        if ((!list || list.length === 0) && role === 'admin') {
+          try {
+            const allRes: any = await RequestsAPI.getAll(token);
+            list = (allRes?.data ?? allRes) as any[];
+          } catch (e) {
+            // ignore
           }
+        }
+
+        if ((!list || list.length === 0) && role === 'coordinator') {
+          try {
+            const coordinatorId = user?.role_data?.coordinator_id ?? user?.Coordinator_ID ?? user?.id ?? undefined;
+            if (coordinatorId) {
+              const coordRes: any = await RequestsAPI.getCoordinatorRequests(token, coordinatorId);
+              list = (coordRes?.data ?? coordRes?.requests ?? coordRes) as any[];
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+      } else if (role === 'stakeholder') {
+        // Load only requests made by this stakeholder
+        const stakeholderId =
+          user?.role_data?.stakeholder_id ?? user?.role_data?.Stakeholder_ID ?? user?.Stakeholder_ID ?? user?.StakeholderId ?? user?.id ?? user?._id;
+        if (!stakeholderId) {
+          setError('Unable to determine stakeholder id from profile');
+          setItems([]);
+          return;
+        }
+        try {
+          const res: any = await RequestsAPI.getByStakeholder(token, stakeholderId);
+          list = (res?.data ?? res?.requests ?? res) as any[];
+          console.log('[ReviewPage] getByStakeholder response', { raw: res, len: Array.isArray(list) ? list.length : 'n/a' });
         } catch (e) {
-          // swallow
+          // propagate
+          throw e;
         }
       }
 
-      // Fetch details for each request in parallel to get requester/coordinator info
+      // Map/normalize list into PendingSummary items. If the item already
+      // contains enough detail use it directly; otherwise fetch full details
+      // by id.
       const details = await Promise.all(
         list.map(async (rq) => {
           const id = rq.Request_ID ?? rq.RequestId ?? rq._id ?? rq.id;
           try {
-            const det: any = await RequestsAPI.getById(token, id);
-            const req = det?.data ?? det?.request ?? det;
-            // det.request is the enriched structure returned by backend
-            const requestObj = det?.data ?? det?.request ?? det;
+            // If the list item already contains event or stakeholder info, avoid extra fetch
+            const hasDetail = !!(rq.event || rq.MadeByStakeholder || rq.stakeholder || rq.Status || rq.Coordinator);
+            let requestObj: any = rq;
+            if (!hasDetail) {
+              const det: any = await RequestsAPI.getById(token, id);
+              requestObj = det?.data ?? det?.request ?? det ?? rq;
+            }
+
             const event = requestObj?.event ?? requestObj;
             const coordinator = requestObj?.coordinator ?? requestObj?.Coordinator ?? requestObj?.CoordinatorObj;
 
-            // Resolve requester full name from likely locations
             const requesterName =
               requestObj?.MadeByStakeholder?.First_Name && requestObj?.MadeByStakeholder?.Last_Name
                 ? `${requestObj.MadeByStakeholder.First_Name} ${requestObj.MadeByStakeholder.Last_Name}`
@@ -99,7 +126,6 @@ export default function ReviewPage() {
                 ? `${event.Requester_First_Name} ${event.Requester_Last_Name}`
                 : event?.ContactName || event?.FullName || event?.Email || 'Unknown';
 
-            // Resolve district full name from several possible shapes
             const districtName =
               coordinator?.District_Name || coordinator?.districtName || coordinator?.District?.Name || event?.District_Name || event?.DistrictName || rq?.District_Name || rq?.District_ID || 'Unknown';
 
@@ -130,16 +156,29 @@ export default function ReviewPage() {
       );
 
       setItems(details);
+      console.log('[ReviewPage] set items', { count: details.length });
     } catch (e: any) {
+      console.error('[ReviewPage] load error', e);
       setError(e?.message || 'Failed to load');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, [token]);
+  useEffect(() => { load(); }, [token, role, user?.id]);
 
-  if (role !== 'admin' && role !== 'coordinator') return null;
+  // While auth is initializing, show a loading placeholder to avoid hydration
+  // mismatches and blank screens.
+  if (!role) {
+    return (
+      <div className="min-h-screen p-6">
+        <div className="max-w-3xl mx-auto">
+          <h1 className="text-xl font-semibold text-red-600 mb-4">Request Review</h1>
+          <p className="text-sm text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6">

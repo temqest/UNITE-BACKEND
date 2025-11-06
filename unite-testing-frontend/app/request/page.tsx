@@ -9,6 +9,17 @@ import { useEffect } from "react";
 export default function EventRequestPage() {
   const { token, role, user } = useAuth();
   const router = useRouter();
+  // Debug: log auth and initial state to help diagnose blank/white page issues
+  // (inspect browser console for these messages)
+  try {
+    console.debug('[EventRequestPage] init', {
+      role,
+      tokenPresent: !!token,
+      user: user ? { id: user?.id ?? user?.Stakeholder_ID ?? user?.Coordinator_ID, email: user?.Email ?? user?.email } : null,
+    });
+  } catch (e) {
+    // swallow logging errors
+  }
   const [title, setTitle] = useState("");
   const [type, setType] = useState<'BloodDrive' | 'Advocacy' | 'Training'>('BloodDrive');
   const [date, setDate] = useState<string>("");
@@ -28,6 +39,12 @@ export default function EventRequestPage() {
 
   // Allow coordinators, admins and stakeholders to open the request page.
   // Admins/coordinators can publish directly; stakeholders will create a request.
+  // If `role` is still `null` we may be waiting for client auth initialization
+  // (avoid an immediate redirect which shows a blank screen). Show a small
+  // loading placeholder until the role is known.
+  if (role === null) {
+    return <div className="min-h-screen p-6"><p>Loading...</p></div>;
+  }
   if (role !== 'coordinator' && role !== 'admin' && role !== 'stakeholder') {
     if (typeof window !== "undefined") router.replace('/dashboard');
     return null;
@@ -99,6 +116,7 @@ export default function EventRequestPage() {
       setSuccess("Request submitted");
       setTimeout(() => router.push('/dashboard'), 800);
     } catch (err: any) {
+      console.error('[EventRequestPage] submit error', err);
       const details = err?.errors ? `\n${JSON.stringify(err.errors)}` : '';
       setError((err?.message || 'Failed to submit request') + details);
     } finally {
@@ -110,15 +128,17 @@ export default function EventRequestPage() {
   useEffect(() => {
     const load = async () => {
       if (!token) return;
+      console.debug('[EventRequestPage] load: start', { role, tokenPresent: !!token, userSummary: user ? { id: user?.id ?? user?.Stakeholder_ID } : null });
       setLoadingList(true);
       try {
         if (role === 'stakeholder') {
           const stakeholderId = user?.Stakeholder_ID ?? user?.StakeholderId ?? user?.id ?? undefined;
           if (stakeholderId) {
             const res = await RequestsAPI.getByStakeholder(token, stakeholderId);
-            
             const payload: any = res as any;
-            setRequestsList(Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? []);
+            const list = Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? [];
+            console.debug('[EventRequestPage] load: fetched stakeholder requests', { count: Array.isArray(list) ? list.length : 'unknown', sample: list?.[0] ?? null });
+            setRequestsList(list);
           } else {
             setRequestsList([]);
           }
@@ -127,22 +147,25 @@ export default function EventRequestPage() {
           const coordinatorId = user?.role_data?.coordinator_id ?? user?.Coordinator_ID ?? user?.id ?? undefined;
           if (coordinatorId) {
             const res = await RequestsAPI.getCoordinatorRequests(token, coordinatorId);
-            
-            const payload: any = res as any;
-            setRequestsList(Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? []);
+              const payload: any = res as any;
+              const list = Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? [];
+              console.debug('[EventRequestPage] load: fetched coordinator requests', { count: Array.isArray(list) ? list.length : 'unknown', sample: list?.[0] ?? null });
+              setRequestsList(list);
           } else {
             setRequestsList([]);
           }
         } else if (role === 'admin') {
           // For admins show all requests (history + current)
           const res = await RequestsAPI.getAll(token);
-          
-          const payload: any = res as any;
-          setRequestsList(Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? []);
+            const payload: any = res as any;
+            const list = Array.isArray(payload.data) ? payload.data : payload.requests ?? payload.data ?? [];
+            console.debug('[EventRequestPage] load: fetched admin all-requests', { count: Array.isArray(list) ? list.length : 'unknown', sample: list?.[0] ?? null });
+            setRequestsList(list);
         }
       } catch (err) {
-        // ignore — show empty list
-        setRequestsList([]);
+          console.error('[EventRequestPage] load error', err);
+          // ignore — show empty list
+          setRequestsList([]);
       } finally {
         setLoadingList(false);
       }

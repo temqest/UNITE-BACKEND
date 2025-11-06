@@ -5,7 +5,7 @@ import { AuthProvider } from "../contexts/AuthContext";
 import Link from "next/link";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
-import Sidebar from "../components/Sidebar";
+import SidebarClient from "../components/SidebarClient";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,7 +37,7 @@ export default function RootLayout({
           <Header />
 
           <div className="flex flex-1">
-            <Sidebar />
+            <SidebarClient />
             <main className="flex-grow">{children}</main>
           </div>
 
