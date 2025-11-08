@@ -151,8 +151,13 @@ class EventRequestService {
         if (isNaN(endDate.getTime())) {
           return { isValid: false, errors: ['Invalid End_Date'], warnings: [] };
         }
+        // If End_Date is before Start_Date, normalize instead of failing.
+        // This handles cases where End_Date may be a date-only string (parsed as midnight)
+        // or when users omit end time. In such cases treat the event as a single-day event
+        // by setting endDate to startDate. Also emit a warning so callers can surface it.
         if (endDate.getTime() < startDate.getTime()) {
-          return { isValid: false, errors: ['End_Date must be on/after Start_Date'], warnings: [] };
+          endDate = new Date(startDate);
+          validationResults.warnings.push('End_Date was before Start_Date; treating as same day');
         }
       }
 
@@ -196,11 +201,27 @@ class EventRequestService {
 
       // 5. Check double booking (same location, same date)
       if (systemSettings.getSetting('preventDoubleBooking')) {
+        // If caller provided an excludeRequestId (when updating an existing request),
+        // resolve it to the linked Event_ID so checkDoubleBooking can exclude the
+        // current event from the search. Previously we passed a full Event doc
+        // which prevented proper exclusion and could cause false positives.
+        let excludeEventId = null;
+        if (excludeRequestId) {
+          try {
+            const existingReq = await this._findRequest(excludeRequestId);
+            if (existingReq && existingReq.Event_ID) excludeEventId = existingReq.Event_ID;
+          } catch (e) {
+            // ignore resolution failures and proceed without exclusion
+            excludeEventId = null;
+          }
+        }
+
         const isDoubleBooked = await this.checkDoubleBooking(
           startDate,
           eventData.Location,
-          excludeRequestId ? await Event.findOne({ Request_ID: excludeRequestId }) : null
+          excludeEventId
         );
+
         if (isDoubleBooked) {
           validationResults.isValid = false;
           validationResults.errors.push('This location is already booked for this date');
@@ -312,11 +333,15 @@ class EventRequestService {
         });
         await categoryData.save();
       } else if (eventData.categoryType === 'Advocacy') {
+        // Normalize expected audience size from multiple possible input names
+        const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
+        const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
+
         categoryData = new Advocacy({
           Advocacy_ID: eventId,
           Topic: eventData.Topic,
           TargetAudience: eventData.TargetAudience,
-          ExpectedAudienceSize: eventData.ExpectedAudienceSize,
+          ExpectedAudienceSize: expectedSize,
           PartnerOrganization: eventData.PartnerOrganization
         });
         await categoryData.save();
@@ -336,6 +361,8 @@ class EventRequestService {
         Event_ID: eventId,
         Event_Title: eventData.Event_Title,
         Location: eventData.Location,
+        // Persist description when provided (accept multiple possible input names)
+        Event_Description: eventData.Event_Description || eventData.eventDescription || eventData.Description || undefined,
         Start_Date: new Date(eventData.Start_Date),
         End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
         MadeByCoordinatorID: coordinatorId,
@@ -343,6 +370,8 @@ class EventRequestService {
         MadeByStakeholderID: eventData.MadeByStakeholderID || undefined,
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
+        // Persist category type so frontend can display the event type
+        Category: eventData.categoryType || eventData.Category || undefined,
         Status: 'Pending'
       });
       await event.save();
@@ -354,6 +383,8 @@ class EventRequestService {
         Coordinator_ID: coordinatorId,
         // Keep trace of which stakeholder created the request (if any)
         MadeByStakeholderID: eventData.MadeByStakeholderID || undefined,
+        // Persist event category/type on the request to aid UI and audits
+        Category: eventData.categoryType || eventData.Category || undefined,
         Status: 'Pending_Admin_Review'
       });
       await request.save();
@@ -437,11 +468,14 @@ class EventRequestService {
         });
         await categoryData.save();
       } else if (eventData.categoryType === 'Advocacy') {
+        const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
+        const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
+
         categoryData = new Advocacy({
           Advocacy_ID: eventId,
           Topic: eventData.Topic,
           TargetAudience: eventData.TargetAudience,
-          ExpectedAudienceSize: eventData.ExpectedAudienceSize,
+          ExpectedAudienceSize: expectedSize,
           PartnerOrganization: eventData.PartnerOrganization
         });
         await categoryData.save();
@@ -461,19 +495,100 @@ class EventRequestService {
         Event_ID: eventId,
         Event_Title: eventData.Event_Title,
         Location: eventData.Location,
+        // Persist description when provided (accept multiple possible input names)
+        Event_Description: eventData.Event_Description || eventData.eventDescription || eventData.Description || undefined,
         Start_Date: new Date(eventData.Start_Date),
         End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
         MadeByCoordinatorID: coordinatorId || undefined,
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
         ApprovedByAdminID: creatorRole === 'Admin' ? creatorId : undefined,
+        // Persist category so frontend can read the event type
+        Category: eventData.categoryType || eventData.Category || undefined,
         Status: 'Approved'
       });
       await event.save();
 
+      // Also create an EventRequest record for audit/history and notifications
+      // Even though the event is auto-published, keep a request trail and mark it as auto-approved.
+      const requestId = this.generateRequestID();
+
+      // Determine coordinator id to attach to the request. Prefer explicit coordinatorId (if creator is Coordinator),
+      // then any MadeByCoordinatorID in payload, otherwise fall back to the creatorId (best-effort).
+      const requestCoordinatorId = coordinatorId || eventData.MadeByCoordinatorID || creatorId;
+
+      const request = new EventRequest({
+        Request_ID: requestId,
+        Event_ID: eventId,
+        Coordinator_ID: requestCoordinatorId,
+        MadeByStakeholderID: eventData.MadeByStakeholderID || undefined,
+        Admin_ID: creatorRole === 'Admin' ? creatorId : undefined,
+        // Persist category on auto-approved requests as well
+        Category: eventData.categoryType || eventData.Category || undefined,
+        AdminAction: 'Accepted',
+        AdminNote: null,
+        AdminActionDate: new Date(),
+        // Mark coordinator final action as approved so the request moves to Completed
+        CoordinatorFinalAction: 'Approved',
+        CoordinatorFinalActionDate: new Date(),
+        Status: 'Completed'
+      });
+
+      await request.save();
+
+      // Create history entries: admin action + coordinator approval (auto)
+      try {
+        // Admin history (actor = Admin)
+        await EventRequestHistory.createAdminActionHistory(
+          requestId,
+          eventId,
+          creatorId,
+          null,
+          'Accepted',
+          null,
+          event.Start_Date
+        );
+
+        // Coordinator approval history (actor = Coordinator)
+        const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: requestCoordinatorId }).catch(() => null);
+        const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+        await EventRequestHistory.createCoordinatorActionHistory(
+          requestId,
+          eventId,
+          requestCoordinatorId,
+          coordinatorName,
+          'Approved',
+          'Accepted_By_Admin'
+        );
+      } catch (e) {
+        // Swallow history creation failures to avoid blocking event creation
+      }
+
+      // Notify coordinator about the auto-approved request (if coordinator id exists)
+      try {
+        if (requestCoordinatorId) {
+          await Notification.createAdminActionNotification(
+            requestCoordinatorId,
+            requestId,
+            eventId,
+            'Accepted',
+            null,
+            null
+          );
+        }
+      } catch (e) {
+        // swallow notification errors
+      }
+
       return {
         success: true,
         message: 'Event created and published successfully',
+        request: {
+          Request_ID: request.Request_ID,
+          Event_ID: event.Event_ID,
+          Status: request.Status,
+          created_at: request.createdAt
+        },
         event,
         category: categoryData,
         warnings: validation.warnings
@@ -490,6 +605,7 @@ class EventRequestService {
    */
   async getEventRequestById(requestId) {
     try {
+      console.log('[Service] getEventRequestById called', { requestId });
       const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Event request not found');
@@ -499,6 +615,8 @@ class EventRequestService {
       if (!event) {
         throw new Error('Event not found');
       }
+
+    // Fetch category documents for this event
 
       // Get category-specific data
       let categoryData = null;
@@ -540,6 +658,8 @@ class EventRequestService {
       };
 
     } catch (error) {
+      // Log full error for easier debugging (stack + message)
+      try { console.error('[Service] getEventRequestById error', { message: error.message, stack: error.stack }); } catch (e) {}
       throw new Error(`Failed to get event request: ${error.message}`);
     }
   }
@@ -551,20 +671,36 @@ class EventRequestService {
    * @param {Object} updateData 
    * @returns {Object} Updated request
    */
-  async updateEventRequest(requestId, coordinatorId, updateData) {
+  async updateEventRequest(requestId, coordinatorId, updateData, actorIsAdmin = false) {
     try {
       const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Event request not found');
       }
 
-      // Only allow updates if request is pending
-      if (request.Status !== 'Pending_Admin_Review') {
+      // Debug log: show what we're attempting to update and current request state
+      try {
+        console.log('[Service] updateEventRequest called', {
+          requestId,
+          coordinatorId,
+          actorIsAdmin,
+          requestStatus: request.Status,
+          requestCoordinatorId: request.Coordinator_ID,
+          updateDataKeys: updateData ? Object.keys(updateData) : null
+        });
+      } catch (e) {
+        // swallow logging errors
+      }
+
+      // Only allow updates if request is pending unless actor is admin
+      if (!actorIsAdmin && request.Status !== 'Pending_Admin_Review') {
+        console.log(`[Service] updateEventRequest rejected: request not pending`, { requestId, status: request.Status });
         throw new Error('Cannot update request. Request is no longer pending.');
       }
 
-      // Verify coordinator owns this request
-      if (request.Coordinator_ID !== coordinatorId) {
+      // Verify coordinator owns this request unless actor is admin
+      if (!actorIsAdmin && request.Coordinator_ID !== coordinatorId) {
+        console.log('[Service] updateEventRequest unauthorized: coordinator mismatch', { requestId, requestCoordinator: request.Coordinator_ID, providedCoordinator: coordinatorId });
         throw new Error('Unauthorized: Coordinator does not own this request');
       }
 
@@ -573,49 +709,112 @@ class EventRequestService {
         throw new Error('Event not found');
       }
 
-      // If date is being updated, revalidate
+      // If date/time is being updated, revalidate and apply
       if (updateData.Start_Date) {
-        const validation = await this.validateSchedulingRules(coordinatorId, updateData, requestId);
+        // Validate scheduling with provided start/end
+        // When an admin is performing the update we must validate against the request's coordinator
+        // (not the adminId). Use the request.Coordinator_ID for scheduling checks when actorIsAdmin.
+        const schedulingCoordinatorId = actorIsAdmin ? request.Coordinator_ID : coordinatorId;
+        const validation = await this.validateSchedulingRules(schedulingCoordinatorId, updateData, requestId);
         if (!validation.isValid) {
           throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
         }
-        event.Start_Date = updateData.Start_Date;
+        // Normalize to Date instances
+        event.Start_Date = new Date(updateData.Start_Date);
+        if (updateData.End_Date) {
+          event.End_Date = new Date(updateData.End_Date);
+        }
+      } else if (updateData.End_Date) {
+        // Allow updating End_Date alone (no scheduling revalidation needed when start unchanged)
+        try {
+          event.End_Date = new Date(updateData.End_Date);
+        } catch (e) {
+          // If parsing fails, let it surface as invalid date in DB or to caller
+          throw new Error('Invalid End_Date');
+        }
       }
 
-      // Update event fields
-      if (updateData.Event_Title) event.Event_Title = updateData.Event_Title;
-      if (updateData.Location) event.Location = updateData.Location;
-      if (updateData.Email) event.Email = updateData.Email;
-      if (updateData.Phone_Number) event.Phone_Number = updateData.Phone_Number;
-      
-      await event.save();
+  // Update event fields (only when provided)
+  if (updateData.Event_Title) event.Event_Title = updateData.Event_Title;
+  if (updateData.Location) event.Location = updateData.Location;
+  if (updateData.Email) event.Email = updateData.Email;
+  if (updateData.Phone_Number) event.Phone_Number = updateData.Phone_Number;
+  // Allow updating event description
+  if (updateData.Event_Description !== undefined) event.Event_Description = updateData.Event_Description;
 
-      // Update category-specific data if provided
-      if (updateData.categoryType === 'BloodDrive' && updateData.Target_Donation) {
-        await BloodDrive.updateOne(
+      await event.save();
+    // Resolve category type for this update: prefer payload, then event, then request
+    const categoryType = updateData && updateData.categoryType ? updateData.categoryType : (event.Category || request.Category);
+    console.log('[Service] resolved categoryType for update', { requestId, categoryType });
+
+    // Remove control/actor fields from updateData copy so we don't accidentally persist them into category docs
+    if (updateData.adminId) delete updateData.adminId;
+    if (updateData.coordinatorId) delete updateData.coordinatorId;
+
+  // Update category-specific data if provided (use resolved categoryType)
+  if (categoryType === 'BloodDrive' && (updateData.Target_Donation !== undefined && updateData.Target_Donation !== null)) {
+        console.log('[Service] updating BloodDrive', { eventId: event.Event_ID, Target_Donation: updateData.Target_Donation, VenueType: updateData.VenueType });
+        const bdRes = await BloodDrive.updateOne(
           { BloodDrive_ID: event.Event_ID },
           { Target_Donation: updateData.Target_Donation, VenueType: updateData.VenueType }
         );
-      } else if (updateData.categoryType === 'Advocacy') {
+        console.log('[Service] BloodDrive.updateOne result', bdRes);
+        const bdDoc = await BloodDrive.findOne({ BloodDrive_ID: event.Event_ID }).catch(() => null);
+        console.log('[Service] BloodDrive after update', bdDoc ? bdDoc.toObject() : null);
+  } else if (categoryType === 'Advocacy') {
         const advocacyData = {};
         if (updateData.Topic) advocacyData.Topic = updateData.Topic;
         if (updateData.TargetAudience) advocacyData.TargetAudience = updateData.TargetAudience;
-        if (updateData.ExpectedAudienceSize) advocacyData.ExpectedAudienceSize = updateData.ExpectedAudienceSize;
+        // accept multiple field names when updating
+        const expectedRaw = updateData.ExpectedAudienceSize || updateData.numberOfParticipants || updateData.Expected_Audience_Size || updateData.expectedAudienceSize;
+        if (expectedRaw !== undefined && expectedRaw !== null && expectedRaw !== '') {
+          advocacyData.ExpectedAudienceSize = parseInt(expectedRaw, 10);
+        }
         if (updateData.PartnerOrganization) advocacyData.PartnerOrganization = updateData.PartnerOrganization;
-        
-        await Advocacy.updateOne({ Advocacy_ID: event.Event_ID }, advocacyData);
-      } else if (updateData.categoryType === 'Training') {
+        console.log('[Service] updating Advocacy', { eventId: event.Event_ID, advocacyData });
+        const advRes = await Advocacy.updateOne({ Advocacy_ID: event.Event_ID }, advocacyData);
+        console.log('[Service] Advocacy.updateOne result', advRes);
+        const advDoc = await Advocacy.findOne({ Advocacy_ID: event.Event_ID }).catch(() => null);
+        console.log('[Service] Advocacy after update', advDoc ? advDoc.toObject() : null);
+  } else if (categoryType === 'Training') {
         const trainingData = {};
         if (updateData.TrainingType) trainingData.TrainingType = updateData.TrainingType;
         if (updateData.MaxParticipants) trainingData.MaxParticipants = updateData.MaxParticipants;
-        
-        await Training.updateOne({ Training_ID: event.Event_ID }, trainingData);
+  console.log('[Service] updating Training', { eventId: event.Event_ID, trainingData });
+  const trRes = await Training.updateOne({ Training_ID: event.Event_ID }, trainingData);
+  console.log('[Service] Training.updateOne result', trRes);
+  const trDoc = await Training.findOne({ Training_ID: event.Event_ID }).catch(() => null);
+  console.log('[Service] Training after update', trDoc ? trDoc.toObject() : null);
       }
+
+      // Re-fetch the up-to-date event and category data to return to caller
+      const freshEvent = await Event.findOne({ Event_ID: request.Event_ID });
+
+      // Resolve category document
+      let categoryData = null;
+      const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: request.Event_ID });
+      if (bloodDrive) {
+        categoryData = { type: 'BloodDrive', ...bloodDrive.toObject() };
+      } else {
+        const advocacy = await Advocacy.findOne({ Advocacy_ID: request.Event_ID });
+        if (advocacy) {
+          categoryData = { type: 'Advocacy', ...advocacy.toObject() };
+        } else {
+          const training = await Training.findOne({ Training_ID: request.Event_ID });
+          if (training) {
+            categoryData = { type: 'Training', ...training.toObject() };
+          }
+        }
+      }
+
+      console.log('[Service] updateEventRequest returning', { requestId, event: freshEvent ? freshEvent.toObject() : null, category: categoryData });
 
       return {
         success: true,
         message: 'Event request updated successfully',
         request: request,
+        event: freshEvent,
+        category: categoryData,
         updatedFields: updateData
       };
 
@@ -638,9 +837,9 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
-      if (request.Status !== 'Pending_Admin_Review') {
-        throw new Error('Request is not pending admin review');
-      }
+      // Note: reschedule actions should be allowed even if the request has
+      // already been processed/approved. Other admin actions (Accepted/Rejected)
+      // should still only be allowed when the request is pending admin review.
 
       // Validate actor: try SystemAdmin first, then Coordinator (coordinators may act as admins)
       let actorRole = 'Admin';
@@ -659,6 +858,11 @@ class EventRequestService {
       const note = adminAction.note || null;
       const rescheduledDate = adminAction.rescheduledDate || null;
 
+      // Only block non-reschedule actions when the request is not pending admin review
+      if (action !== 'Rescheduled' && request.Status !== 'Pending_Admin_Review') {
+        throw new Error('Request is not pending admin review');
+      }
+
       // Update request with admin/coordinator decision
       // Record the acting user in Admin_ID for audit (even if actor is a coordinator)
       request.Admin_ID = adminId;
@@ -669,6 +873,26 @@ class EventRequestService {
 
       if (action === 'Rescheduled' && !rescheduledDate) {
         throw new Error('Rescheduled date is required when rescheduling');
+      }
+
+      // If rescheduling, ensure note is provided and rescheduled date is not in the past
+      if (action === 'Rescheduled') {
+        if (!note || (typeof note === 'string' && note.trim().length === 0)) {
+          throw new Error('Admin Note is required when rescheduling');
+        }
+
+        // Validate rescheduledDate is a valid date and not before today (date-only comparison)
+        const rsDate = new Date(rescheduledDate);
+        if (isNaN(rsDate.getTime())) {
+          throw new Error('Invalid rescheduled date');
+        }
+        const today = new Date();
+        today.setHours(0,0,0,0);
+        const rsDay = new Date(rsDate);
+        rsDay.setHours(0,0,0,0);
+        if (rsDay.getTime() < today.getTime()) {
+          throw new Error('Rescheduled date cannot be before today');
+        }
       }
 
       // NOTE: coordinators are allowed to act like admins, but their action
@@ -685,16 +909,77 @@ class EventRequestService {
         // when an admin/coordinator accepts. Final approval (Approved) must
         // happen only after stakeholder confirmation.
         if (action === 'Rescheduled') {
-          event.Status = 'Rescheduled';
+          // Determine whether this request was created by a stakeholder.
+          const createdByStakeholder = !!request.MadeByStakeholderID;
+
+          // If an Admin or Coordinator performs the reschedule:
+          // - If the request was created by a stakeholder, do NOT auto-approve.
+          //   Leave the request awaiting stakeholder confirmation (keep request.Status
+          //   as-is) and set event to 'Pending' so it's not published yet.
+          // - If the request was NOT created by a stakeholder (i.e., created by
+          //   admin/coordinator), auto-approve the event and complete the request.
+          if (actorRole === 'Admin' || actorRole === 'Coordinator') {
+            if (createdByStakeholder) {
+              event.Status = 'Pending';
+            } else {
+              event.Status = 'Approved';
+            }
+          } else {
+            // Non-admin actors (if allowed) keep previous rescheduled marker
+            event.Status = 'Rescheduled';
+          }
+          // Apply the rescheduled date to the event's Start_Date while preserving the original time (if any).
+          if (rescheduledDate) {
+            try {
+              const rs = new Date(rescheduledDate);
+              const currentStart = event.Start_Date ? new Date(event.Start_Date) : null;
+              if (currentStart) {
+                // Keep hours/minutes from currentStart, but set Y/M/D to rescheduled date
+                currentStart.setFullYear(rs.getFullYear(), rs.getMonth(), rs.getDate());
+                event.Start_Date = currentStart;
+              } else {
+                // No existing start time; set start to rescheduled date at midnight
+                event.Start_Date = new Date(rs);
+              }
+              // Intentionally do NOT modify End_Date here (reschedules shouldn't change End_Date)
+            } catch (e) {
+              // If parsing fails, surface an error by throwing so caller knows
+              throw new Error('Invalid rescheduled date');
+            }
+          }
         } else if (action === 'Rejected') {
           event.Status = 'Rejected';
         } else if (action === 'Accepted') {
           // Admin accepted, awaiting stakeholder confirmation. Keep event
           // in Pending state to avoid publishing prematurely.
           event.Status = 'Pending';
-        }
+  }
         event.ApprovedByAdminID = adminId;
         await event.save();
+
+        // If admin/coordinator rescheduled and we auto-approved above (i.e. the
+        // request was NOT created by a stakeholder), mark the request as completed
+        // so the UI reflects finalization. If the request was created by a
+        // stakeholder, leave it for stakeholder confirmation.
+        if (action === 'Rescheduled' && (actorRole === 'Admin' || actorRole === 'Coordinator')) {
+          try {
+            const createdByStakeholder = !!request.MadeByStakeholderID;
+            if (!createdByStakeholder) {
+              request.Status = 'Completed';
+              // Also mark coordinator final action as approved for audit if not already set
+              if (!request.CoordinatorFinalAction) {
+                request.CoordinatorFinalAction = 'Approved';
+                request.CoordinatorFinalActionDate = new Date();
+              }
+              await request.save();
+            } else {
+              // For stakeholder-created requests, persist the admin action but do not complete.
+              await request.save();
+            }
+          } catch (e) {
+            // swallow to avoid blocking the main flow
+          }
+        }
       }
 
       // Create history entry
@@ -1106,12 +1391,24 @@ class EventRequestService {
         const event = await Event.findOne({ Event_ID: r.Event_ID });
         const coordinator = await Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID });
         const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+        // attempt to resolve district info from coordinator.District_ID
+        let districtInfo = null;
+        try {
+          if (coordinator && coordinator.District_ID) {
+            districtInfo = await require('../../models/index').District.findOne({ District_ID: coordinator.District_ID }).catch(() => null);
+          }
+        } catch (e) {
+          districtInfo = null;
+        }
+
         return {
           ...r.toObject(),
           event: event ? event.toObject() : null,
           coordinator: coordinator ? {
             ...coordinator.toObject(),
-            staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null
+            staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null,
+            District_Name: districtInfo ? districtInfo.District_Name : undefined,
+            District_Number: districtInfo ? districtInfo.District_Number : undefined
           } : null
         };
       }));

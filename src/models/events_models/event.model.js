@@ -57,6 +57,17 @@ const eventSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  Event_Description: {
+    type: String,
+    required: false,
+    trim: true
+  },
+  // Category/type of event (e.g., 'BloodDrive', 'Training', 'Advocacy')
+  Category: {
+    type: String,
+    required: false,
+    trim: true
+  },
   Status: {
     type: String,
     enum: ['Pending', 'Approved', 'Rescheduled', 'Rejected', 'Completed'],

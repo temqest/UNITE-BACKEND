@@ -10,21 +10,17 @@ const advocacySchema = new mongoose.Schema({
   },
   Topic: {
     type: String,
-    required: true,
     trim: true
   },
   TargetAudience: {
     type: String,
-    required: true,
     trim: true
   },
   ExpectedAudienceSize: {
-    type: Number,
-    required: true
+    type: Number
   },
   PartnerOrganization: {
     type: String,
-    required: true,
     trim: true
   }
 }, {

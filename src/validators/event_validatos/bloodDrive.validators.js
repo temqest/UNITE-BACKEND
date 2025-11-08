@@ -24,12 +24,10 @@ const createBloodDriveSchema = Joi.object({
     }),
 
   VenueType: Joi.string()
-    .required()
     .trim()
     .min(3)
     .max(100)
     .messages({
-      'any.required': 'Venue Type is required',
       'string.empty': 'Venue Type cannot be empty',
       'string.min': 'Venue Type must be at least 3 characters long',
       'string.max': 'Venue Type must not exceed 100 characters'

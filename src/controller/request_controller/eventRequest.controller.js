@@ -60,6 +60,7 @@ class EventRequestController {
         success: result.success,
         message: result.message,
         data: {
+          request: result.request || null,
           event: result.event,
           category: result.category
         },
@@ -99,25 +100,50 @@ class EventRequestController {
   async updateEventRequest(req, res) {
     try {
       const { requestId } = req.params;
-      const { coordinatorId } = req.body;
-      const updateData = req.body;
+      // coordinatorId is required when a coordinator performs the update
+      // adminId may be provided when an admin performs the update
+  const { coordinatorId, adminId } = req.body;
+  // Prefer validated data set by the validator middleware when present
+  const updateData = req.validatedData || req.body;
 
-      if (!coordinatorId) {
+      if (!coordinatorId && !adminId) {
         return res.status(400).json({
           success: false,
-          message: 'Coordinator ID is required'
+          message: 'coordinatorId or adminId is required'
         });
       }
 
-      const result = await eventRequestService.updateEventRequest(requestId, coordinatorId, updateData);
+      const actorIsAdmin = !!adminId;
+      const actorId = adminId || coordinatorId;
+
+      // Debug log: capture incoming update attempt
+      console.log('[API] PUT /api/requests/:requestId - updateEventRequest called', {
+        requestId,
+        coordinatorId,
+        adminId,
+        actorIsAdmin,
+        actorId,
+        updateDataKeys: updateData ? Object.keys(updateData) : null
+      });
+
+      const result = await eventRequestService.updateEventRequest(requestId, actorId, updateData, actorIsAdmin);
 
       return res.status(200).json({
         success: result.success,
         message: result.message,
-        data: result.request,
+        data: {
+          request: result.request,
+          event: result.event || null,
+          category: result.category || null
+        },
         updatedFields: result.updatedFields
       });
     } catch (error) {
+      // Log error for debugging update failures
+      console.error('[API] PUT /api/requests/:requestId - updateEventRequest error', {
+        message: error.message,
+        stack: error.stack
+      });
       return res.status(400).json({
         success: false,
         message: error.message || 'Failed to update event request'
@@ -324,9 +350,36 @@ class EventRequestController {
 
       const result = await eventRequestService.getCoordinatorRequests(coordinatorId, filters, page, limit);
 
+      // Enrich each request with its event and coordinator/staff info for frontend convenience
+      const enriched = await Promise.all(result.requests.map(async (r) => {
+        const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+        const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
+        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+        // Fetch district details if coordinator has District_ID
+        let districtInfo = null;
+        try {
+          if (coordinator && coordinator.District_ID) {
+            districtInfo = await require('../../models/index').District.findOne({ District_ID: coordinator.District_ID }).catch(() => null);
+          }
+        } catch (e) {
+          districtInfo = null;
+        }
+
+        return {
+          ...r.toObject(),
+          event: event ? event.toObject() : null,
+          coordinator: coordinator ? {
+            ...coordinator.toObject(),
+            staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null,
+            District_Name: districtInfo ? districtInfo.District_Name : undefined,
+            District_Number: districtInfo ? districtInfo.District_Number : undefined
+          } : null
+        };
+      }));
+
       return res.status(200).json({
         success: result.success,
-        data: result.requests,
+        data: enriched,
         pagination: result.pagination
       });
     } catch (error) {
@@ -402,9 +455,35 @@ class EventRequestController {
 
       const result = await eventRequestService.getAllRequests(page, limit);
 
+      // Enrich requests with event and coordinator/staff info
+      const enriched = await Promise.all(result.requests.map(async (r) => {
+        const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+        const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
+        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+        let districtInfo = null;
+        try {
+          if (coordinator && coordinator.District_ID) {
+            districtInfo = await require('../../models/index').District.findOne({ District_ID: coordinator.District_ID }).catch(() => null);
+          }
+        } catch (e) {
+          districtInfo = null;
+        }
+
+        return {
+          ...r.toObject(),
+          event: event ? event.toObject() : null,
+          coordinator: coordinator ? {
+            ...coordinator.toObject(),
+            staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null,
+            District_Name: districtInfo ? districtInfo.District_Name : undefined,
+            District_Number: districtInfo ? districtInfo.District_Number : undefined
+          } : null
+        };
+      }));
+
       return res.status(200).json({
         success: result.success,
-        data: result.requests,
+        data: enriched,
         pagination: result.pagination
       });
     } catch (error) {

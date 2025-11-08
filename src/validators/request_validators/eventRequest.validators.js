@@ -108,6 +108,38 @@ const createEventRequestSchema = Joi.object({
 
 // Validation schema for updating an existing event request
 const updateEventRequestSchema = Joi.object({
+  // actor identifiers (controller forwards either coordinatorId or adminId)
+  coordinatorId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Coordinator ID cannot be empty if provided' }),
+  adminId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Admin ID cannot be empty if provided' }),
+
+  // Common event fields that can be updated
+  Event_Title: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Event title cannot be empty' }),
+  Event_Description: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Event description cannot be empty' }),
+  Location: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Location cannot be empty' }),
+  Email: Joi.string().email().allow('', null).messages({ 'string.email': 'Email must be a valid email address' }),
+  Phone_Number: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Phone number cannot be empty' }),
+
+  // Date/time updates - frontend should only change times, but backend accepts ISO datetime
+  Start_Date: Joi.date().iso().allow('', null).messages({ 'date.base': 'Start_Date must be a valid ISO date' }),
+  End_Date: Joi.date().iso().allow('', null).messages({ 'date.base': 'End_Date must be a valid ISO date' }),
+
+  // Category hints and specific fields
+  categoryType: Joi.string().trim().allow('', null).messages({ 'string.empty': 'categoryType cannot be empty' }),
+
+  // Training
+  TrainingType: Joi.string().trim().allow('', null),
+  MaxParticipants: Joi.number().integer().allow(null),
+
+  // BloodDrive
+  Target_Donation: Joi.number().integer().allow(null),
+  VenueType: Joi.string().trim().allow('', null),
+
+  // Advocacy
+  Topic: Joi.string().trim().allow('', null),
+  TargetAudience: Joi.string().trim().allow('', null),
+  ExpectedAudienceSize: Joi.number().integer().allow(null),
+  PartnerOrganization: Joi.string().trim().allow('', null),
+
   Request_ID: Joi.string()
     .trim()
     .messages({
@@ -227,7 +259,27 @@ const validateCreateEventRequest = (req, res, next) => {
 };
 
 const validateUpdateEventRequest = (req, res, next) => {
-  const { error, value } = updateEventRequestSchema.validate(req.body, {
+  // If the caller included an adminId or coordinatorId we treat the caller as an actor
+  // and relax the AdminNote requirement for admin actions (Rescheduled/Rejected).
+  const actorPresent = !!(req.body && (req.body.adminId || req.body.coordinatorId));
+
+  let schemaToUse = updateEventRequestSchema;
+  if (actorPresent) {
+    // create a relaxed schema where AdminNote is allowed to be empty for most actor-driven updates
+    // but require AdminNote when the incoming action is explicitly a Rescheduled admin action.
+    const incomingAction = req.body && req.body.AdminAction ? String(req.body.AdminAction) : (req.body && req.body.adminAction ? String(req.body.adminAction) : null);
+    if (incomingAction === 'Rescheduled') {
+      // keep original schema which enforces AdminNote when AdminAction is Rescheduled
+      schemaToUse = updateEventRequestSchema;
+    } else {
+      const relaxedAdminNote = Joi.string().trim().allow('', null).messages({
+        'string.empty': 'Admin Note cannot be empty when provided'
+      });
+      schemaToUse = updateEventRequestSchema.keys({ AdminNote: relaxedAdminNote });
+    }
+  }
+
+  const { error, value } = schemaToUse.validate(req.body, {
     abortEarly: false
   });
 

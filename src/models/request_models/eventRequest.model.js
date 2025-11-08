@@ -25,6 +25,12 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Stakeholder'
   },
+  // Category/type of the event (e.g., 'BloodDrive', 'Training', 'Advocacy')
+  Category: {
+    type: String,
+    required: false,
+    trim: true
+  },
   Admin_ID: {
     type: String,
     trim: true,
