@@ -6,7 +6,8 @@ const {
   Training,
   EventStaff,
   Coordinator,
-  BloodbankStaff
+  BloodbankStaff,
+  District
 } = require('../../models/index');
 
 class CalendarService {
@@ -61,6 +62,30 @@ class CalendarService {
       const enrichedEvents = await Promise.all(
         events.map(async (event) => {
           const category = await this.getEventCategory(event.Event_ID);
+          // resolve coordinator/staff info and district
+          let coordinator = null;
+          try {
+            const coordDoc = await Coordinator.findOne({ Coordinator_ID: event.MadeByCoordinatorID }).catch(() => null);
+            const staff = coordDoc ? await BloodbankStaff.findOne({ ID: event.MadeByCoordinatorID }).catch(() => null) : null;
+            let district = null;
+            try {
+              if (coordDoc && coordDoc.District_ID) {
+                district = await District.findOne({ District_ID: coordDoc.District_ID }).catch(() => null);
+              }
+            } catch (e) {
+              district = null;
+            }
+
+            coordinator = staff ? {
+              id: event.MadeByCoordinatorID,
+              name: `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim(),
+              district_number: district ? district.District_Number : (coordDoc ? coordDoc.District_Number : null),
+              district_name: district ? district.District_Name : (coordDoc ? coordDoc.District_Name : null)
+            } : (coordDoc ? { id: event.MadeByCoordinatorID, name: coordDoc.Name || '', district_number: coordDoc.District_Number, district_name: coordDoc.District_Name } : null);
+          } catch (e) {
+            coordinator = null;
+          }
+
           return {
             Event_ID: event.Event_ID,
             Event_Title: event.Event_Title,
@@ -68,8 +93,9 @@ class CalendarService {
             Start_Date: event.Start_Date,
             Status: event.Status,
             category: category.type,
+            categoryData: category.data || null,
             color: this.getCategoryColor(category.type),
-            coordinator_id: event.MadeByCoordinatorID
+            coordinator: coordinator
           };
         })
       );
@@ -145,21 +171,46 @@ class CalendarService {
 
       const events = await Event.find(query).sort({ Start_Date: 1 });
 
-      const enrichedEvents = await Promise.all(
-        events.map(async (event) => {
-          const category = await this.getEventCategory(event.Event_ID);
-          return {
-            Event_ID: event.Event_ID,
-            Event_Title: event.Event_Title,
-            Location: event.Location,
-            Start_Date: event.Start_Date,
-            Status: event.Status,
-            category: category.type,
-            color: this.getCategoryColor(category.type),
-            coordinator_id: event.MadeByCoordinatorID
-          };
-        })
-      );
+        const enrichedEvents = await Promise.all(
+          events.map(async (event) => {
+            const category = await this.getEventCategory(event.Event_ID);
+            // resolve coordinator/staff info and district
+            let coordinator = null;
+            try {
+              const coordDoc = await Coordinator.findOne({ Coordinator_ID: event.MadeByCoordinatorID }).catch(() => null);
+              const staff = coordDoc ? await BloodbankStaff.findOne({ ID: event.MadeByCoordinatorID }).catch(() => null) : null;
+              let district = null;
+              try {
+                if (coordDoc && coordDoc.District_ID) {
+                  district = await District.findOne({ District_ID: coordDoc.District_ID }).catch(() => null);
+                }
+              } catch (e) {
+                district = null;
+              }
+
+              coordinator = staff ? {
+                id: event.MadeByCoordinatorID,
+                name: `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim(),
+                district_number: district ? district.District_Number : (coordDoc ? coordDoc.District_Number : null),
+                district_name: district ? district.District_Name : (coordDoc ? coordDoc.District_Name : null)
+              } : (coordDoc ? { id: event.MadeByCoordinatorID, name: coordDoc.Name || '', district_number: coordDoc.District_Number, district_name: coordDoc.District_Name } : null);
+            } catch (e) {
+              coordinator = null;
+            }
+
+            return {
+              Event_ID: event.Event_ID,
+              Event_Title: event.Event_Title,
+              Location: event.Location,
+              Start_Date: event.Start_Date,
+              Status: event.Status,
+              category: category.type,
+              categoryData: category.data || null,
+              color: this.getCategoryColor(category.type),
+              coordinator: coordinator
+            };
+          })
+        );
 
       // Group by day of week
       const weekDays = {};

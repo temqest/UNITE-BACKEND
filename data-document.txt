@@ -1,0 +1,78 @@
+an event has this:
+
+{
+  "_id": { "$oid": "6912fd2fa5247cfc044951c9" },
+  "Event_ID": "EVENT_1762624202151_ahnifopau",
+  "Event_Title": "Training Event 1",
+  "Location": "Iriga City",
+  "Start_Date": {
+    "$date": { "$numberLong": "1763769600000" }
+  },
+  "End_Date": {
+    "$date": { "$numberLong": "1763812800000" }
+  },
+  "ApprovedByAdminID": "ADMIN_BOOTSTRAP_001",
+  "MadeByCoordinatorID": "COORD_1762246751437_hwiptms8w",
+  "Email": "pvillamer@gmail.com",
+  "Phone_Number": "09686255210",
+  "Category": "Training",
+  "Status": "Approved",
+  "createdAt": {
+    "$date": { "$numberLong": "1762624202258" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762634442772" }
+  },
+  "__v": { "$numberInt": "0" },
+  "Event_Description": "Test 2",
+  "StaffAssignmentID": "STAFF_1762634442771_e8ahxwbi1"
+}
+
+and also each event is a parent entity of a specefic type of event which contains this:
+
+training:
+
+{
+  "_id": { "$oid": "6912fd6ba5247cfc044951ca" },
+  "Training_ID": "EVENT_1762624202151_ahnifopau",
+  "TrainingType": "How to suck blood 2",
+  "MaxParticipants": { "$numberInt": "150" },
+  "createdAt": {
+    "$date": { "$numberLong": "1762624202166" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762632032816" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+advocacy:
+
+{
+  "_id": { "$oid": "6912fd8ea5247cfc044951cb" },
+  "Advocacy_ID": "EVENT_1762628133544_4o91biuxt",
+  "TargetAudience": "Students",
+  "ExpectedAudienceSize": { "$numberInt": "120" }
+  "createdAt": {
+    "$date": { "$numberLong": "1762628133577" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762632002678" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+blood drive:
+
+{
+  "_id": { "$oid": "6912fda4a5247cfc044951cc" },
+  "BloodDrive_ID": "EVENT_1762623648202_qqxgutqgb",
+  "Target_Donation": { "$numberInt": "25" },
+  "createdAt": {
+    "$date": { "$numberLong": "1762623648210" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762632138866" }
+  },
+  "__v": { "$numberInt": "0" }
+}

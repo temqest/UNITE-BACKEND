@@ -639,6 +639,18 @@ class EventRequestService {
       const coordinator = await Coordinator.findOne({ Coordinator_ID: request.Coordinator_ID });
       const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: request.Coordinator_ID });
 
+      // Also fetch any staff assignments for this event so the frontend can display them
+      let staffAssignments = [];
+      try {
+        const eventStaffDocs = await EventStaff.find({ EventID: event.Event_ID });
+        if (Array.isArray(eventStaffDocs)) {
+          staffAssignments = eventStaffDocs.map((sd) => ({ FullName: sd.Staff_FullName, Role: sd.Role }));
+        }
+      } catch (e) {
+        // swallow errors fetching staff to avoid breaking the whole request retrieval
+        staffAssignments = [];
+      }
+
       return {
         success: true,
         request: {
@@ -653,7 +665,9 @@ class EventRequestService {
               Email: staff.Email,
               Phone_Number: staff.Phone_Number
             } : null
-          }
+          },
+          // include normalized staff assignment list for convenience
+          staff: staffAssignments
         }
       };
 
