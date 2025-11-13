@@ -19,6 +19,37 @@ class StakeholderController {
       }
       const result = await stakeholderService.authenticate(email, password);
   const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.District_ID, coordinator_id: result.stakeholder.Coordinator_ID });
+      // Set a server-side cookie with a sanitized user payload so the
+      // frontend (Next.js app) can read it during SSR and show admin links
+      // without waiting for client-side localStorage. Cookie contains only
+      // non-sensitive profile data (no password). Use HttpOnly false so
+      // client code could still read it if needed; set secure in production.
+      try {
+        const roleStr = String(result.stakeholder.Role || result.stakeholder.role || result.stakeholder.StaffType || '').toLowerCase();
+        const isAdminFlag = !!result.stakeholder.isAdmin || (/sys|system/.test(roleStr) && roleStr.includes('admin')) || roleStr.includes('admin');
+        const cookieValue = JSON.stringify({
+          role: result.stakeholder.Role || result.stakeholder.role || result.stakeholder.StaffType || null,
+          isAdmin: !!isAdminFlag,
+          First_Name: result.stakeholder.First_Name || result.stakeholder.FirstName || null,
+          email: result.stakeholder.Email || result.stakeholder.email || null,
+          id: result.stakeholder.Stakeholder_ID || result.stakeholder.id || null,
+        });
+        if (process.env.NODE_ENV !== 'production') {
+          try { console.log('[auth] setting unite_user cookie (stakeholder login):', cookieValue); } catch (e) {}
+        }
+        const cookieOpts = {
+          httpOnly: false,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'none',
+          maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+          path: '/',
+        };
+        // Do not force domain in development to avoid mismatches
+        res.cookie('unite_user', cookieValue, cookieOpts);
+      } catch (e) {
+        // ignore cookie set errors
+      }
+
       return res.status(200).json({ success: true, data: result.stakeholder, token });
     } catch (error) {
       return res.status(401).json({ success: false, message: error.message });

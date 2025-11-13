@@ -64,12 +64,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const user = (res as any)?.data ?? null;
         const inferredRole: Role = user?.staff_type === 'Coordinator' ? 'coordinator' : 'admin';
         persist({ token: (res as any).token, role: inferredRole, user });
+        // Also store a legacy `unite_user` value expected by the main UNITE app
+        try {
+          const legacy = {
+            role: user?.staff_type || user?.role || null,
+            isAdmin: !!user?.isAdmin || (String(user?.staff_type || '').toLowerCase().includes('admin')) || false,
+            First_Name: user?.First_Name || user?.first_name || null,
+            email: user?.Email || user?.email || user?.emailAddress || null,
+            id: user?.id || user?.ID || null,
+          };
+          if (typeof window !== 'undefined') localStorage.setItem('unite_user', JSON.stringify(legacy));
+        } catch (e) {}
       },
       loginStakeholder: async (email, password) => {
         const res = await AuthAPI.loginStakeholder(email, password);
         // Backend returns { success: true, data: stakeholder, token }
         const userPayload = (res as any)?.data ?? (res as any)?.stakeholder ?? (res as any)?.user ?? null;
         persist({ token: (res as any).token, role: "stakeholder", user: userPayload });
+        // Also write legacy unite_user for compatibility with UNITE app client-side reads
+        try {
+          const legacy = {
+            role: userPayload?.role || userPayload?.staff_type || null,
+            isAdmin: !!userPayload?.isAdmin || false,
+            First_Name: userPayload?.First_Name || userPayload?.first_name || null,
+            email: userPayload?.Email || userPayload?.email || null,
+            id: userPayload?.id || userPayload?.Stakeholder_ID || null,
+          };
+          if (typeof window !== 'undefined') localStorage.setItem('unite_user', JSON.stringify(legacy));
+        } catch (e) {}
       },
       logout: clear,
     }),

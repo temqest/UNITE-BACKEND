@@ -27,6 +27,37 @@ class BloodbankStaffController {
 
       const token = signToken({ id: result.user.id, role: result.user.staff_type, district_id: result.user.role_data?.district_id || null });
 
+      // Set a server-side cookie so the Next.js frontend can read user info
+      // during SSR and show admin/coordinator links immediately.
+      try {
+        const staffTypeStr = String(result.user.staff_type || '').toLowerCase();
+        const isAdminFlag = !!result.user.isAdmin || /sys|system/.test(staffTypeStr) || staffTypeStr.includes('admin');
+        const cookieValue = JSON.stringify({
+          role: result.user.staff_type || null,
+          isAdmin: !!isAdminFlag,
+          First_Name: result.user.First_Name || result.user.FirstName || null,
+          email: result.user.Email || result.user.email || null,
+          id: result.user.id || null,
+        });
+        if (process.env.NODE_ENV !== 'production') {
+          try { console.log('[auth] setting unite_user cookie (staff login):', cookieValue); } catch (e) {}
+        }
+        const cookieOpts = {
+          httpOnly: false,
+          secure: process.env.NODE_ENV === 'production',
+          // Use 'none' to allow cookies across ports/origins during local dev when
+          // requests are made with credentials: 'include'. In production keep
+          // defaults secure.
+          sameSite: 'none',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+          path: '/',
+        };
+        // Do not force domain in case different local hosts (127.0.0.1 vs localhost)
+        res.cookie('unite_user', cookieValue, cookieOpts);
+      } catch (e) {
+        // ignore cookie set errors
+      }
+
       return res.status(200).json({
         success: result.success,
         message: result.message,
