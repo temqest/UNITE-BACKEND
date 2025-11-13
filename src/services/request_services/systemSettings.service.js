@@ -7,40 +7,55 @@
  * For now, these are defined here as defaults and can be easily moved to a Settings model.
  */
 
+const SystemSettingsModel = require('../../models/utility_models/systemSettings.model');
+
+// Default settings used as fallback and to initialize DB document
+const DEFAULTS = {
+  notificationsEnabled: true,
+  maxEventsPerDay: 3,
+  maxBloodBagsPerDay: 200,
+  allowWeekendEvents: false,
+  advanceBookingDays: 30,
+  maxPendingRequests: 1,
+  pendingFollowUpDays: 3,
+  preventOverlappingRequests: true,
+  preventDoubleBooking: true,
+  allowCoordinatorStaffAssignment: false,
+  requireStaffAssignment: false,
+  blockedWeekdays: [],
+  blockedDates: []
+};
+
+let cachedSettings = Object.assign({}, DEFAULTS);
+
+// Load persisted settings into cache (best-effort). This runs once on module load.
+(async function initCache() {
+  try {
+    const doc = await SystemSettingsModel.findOne({}).lean().exec();
+    if (doc) {
+      cachedSettings = Object.assign({}, DEFAULTS, doc);
+    } else {
+      // create default document
+      const created = await SystemSettingsModel.findOneAndUpdate({}, DEFAULTS, { upsert: true, new: true, setDefaultsOnInsert: true }).lean().exec();
+      if (created) cachedSettings = Object.assign({}, DEFAULTS, created);
+    }
+    // strip mongoose internal fields if present
+    delete cachedSettings._id;
+    delete cachedSettings.__v;
+  } catch (e) {
+    // If DB isn't ready or an error occurs, keep using in-memory defaults
+    try { console.warn('[SystemSettingsService] failed to load settings from DB, using defaults', e.message); } catch (e2) {}
+  }
+})();
+
 class SystemSettingsService {
   /**
    * Get all system settings
    * @returns {Object} All system settings
    */
   getSettings() {
-    return {
-      // Scheduling Rules
-      maxEventsPerDay: 3,
-      maxBloodBagsPerDay: 200,
-      allowWeekendEvents: false, // By default, weekends are not allowed
-
-      // Coordinator Restrictions
-      advanceBookingDays: 30, // Days in advance coordinator can book
-      maxPendingRequests: 1, // Maximum pending requests per coordinator
-      
-      // Auto-Follow-up
-      pendingFollowUpDays: 3, // Days before auto-follow-up notification
-
-      // Event Restrictions
-      preventOverlappingRequests: true,
-      preventDoubleBooking: true,
-      
-      // Staff Assignment
-      allowCoordinatorStaffAssignment: false, // Only admin can assign staff
-      requireStaffAssignment: false // Staff assignment is optional or required
-
-      // Future settings can be added here:
-      // - Email notifications enabled
-      // - SMS notifications enabled
-      // - Auto-approve option
-      // - Event duration limits
-      // - etc.
-    };
+    // Return a shallow copy of cached settings so callers don't mutate the cache accidentally
+    return Object.assign({}, cachedSettings);
   }
 
   /**
@@ -54,12 +69,31 @@ class SystemSettingsService {
   }
 
   /**
+   * Update persistent settings and refresh in-memory cache
+   * @param {Object} newSettings
+   * @returns {Object} updated settings
+   */
+  async updateSettings(newSettings) {
+    try {
+      const updated = await SystemSettingsModel.findOneAndUpdate({}, { $set: newSettings }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean().exec();
+      if (updated) {
+        cachedSettings = Object.assign({}, DEFAULTS, updated);
+        delete cachedSettings._id;
+        delete cachedSettings.__v;
+      }
+      return Object.assign({}, cachedSettings);
+    } catch (e) {
+      throw new Error(`Failed to persist settings: ${e.message}`);
+    }
+  }
+
+  /**
    * Check if a date is allowed based on advance booking rules
    * @param {Date} eventDate 
    * @returns {Object} Validation result
    */
   validateAdvanceBooking(eventDate) {
-    const advanceDays = this.getSetting('advanceBookingDays');
+    const advanceDays = this.getSetting('advanceBookingDays') || this.getSetting('advanceBookingDays') === 0 ? this.getSetting('advanceBookingDays') : DEFAULTS.advanceBookingDays;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -133,7 +167,7 @@ class SystemSettingsService {
    * @returns {Date} Maximum allowed date
    */
   getMaxBookingDate() {
-    const advanceDays = this.getSetting('advanceBookingDays');
+    const advanceDays = this.getSetting('advanceBookingDays') || DEFAULTS.advanceBookingDays;
     const maxDate = new Date();
     maxDate.setDate(maxDate.getDate() + advanceDays);
     return maxDate;
@@ -144,7 +178,7 @@ class SystemSettingsService {
    * @returns {boolean} True if required
    */
   isStaffAssignmentRequired() {
-    return this.getSetting('requireStaffAssignment');
+    return !!this.getSetting('requireStaffAssignment');
   }
 
   /**
@@ -152,7 +186,7 @@ class SystemSettingsService {
    * @returns {boolean} True if allowed
    */
   canCoordinatorAssignStaff() {
-    return this.getSetting('allowCoordinatorStaffAssignment');
+    return !!this.getSetting('allowCoordinatorStaffAssignment');
   }
 
   /**

@@ -29,6 +29,7 @@ const EventRequestHistory = require('./request_models/eventRequestHistory.model'
 const District = require('./utility_models/distric.model');
 const Notification = require('./utility_models/notifications.model');
 const RegistrationCode = require('./utility_models/registrationCode.model');
+const SystemSettings = require('./utility_models/systemSettings.model');
 
 // ============================================
 // MODEL RELATIONSHIPS & CONSTRAINTS
@@ -175,6 +176,7 @@ module.exports = {
   District,
   Notification,
   RegistrationCode,
+  SystemSettings,
   
   // Validation Helpers
   validateCoordinator,

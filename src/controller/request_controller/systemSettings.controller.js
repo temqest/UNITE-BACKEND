@@ -13,10 +13,7 @@ class SystemSettingsController {
     try {
       const settings = systemSettingsService.getSettings();
 
-      return res.status(200).json({
-        success: true,
-        data: settings
-      });
+      return res.status(200).json({ success: true, data: settings });
     } catch (error) {
       return res.status(500).json({
         success: false,
@@ -70,7 +67,7 @@ class SystemSettingsController {
         });
       }
 
-      const validation = systemSettingsService.validateAdvanceBooking(new Date(eventDate));
+  const validation = systemSettingsService.validateAdvanceBooking(new Date(eventDate));
 
       return res.status(200).json({
         success: true,
@@ -99,7 +96,7 @@ class SystemSettingsController {
         });
       }
 
-      const validation = systemSettingsService.validateWeekendRestriction(new Date(eventDate));
+  const validation = systemSettingsService.validateWeekendRestriction(new Date(eventDate));
 
       return res.status(200).json({
         success: true,
@@ -128,7 +125,7 @@ class SystemSettingsController {
         });
       }
 
-      const validation = systemSettingsService.validatePendingRequestsLimit(parseInt(pendingCount));
+  const validation = systemSettingsService.validatePendingRequestsLimit(parseInt(pendingCount));
 
       return res.status(200).json({
         success: true,
@@ -149,11 +146,7 @@ class SystemSettingsController {
   async getMinBookingDate(req, res) {
     try {
       const minDate = systemSettingsService.getMinBookingDate();
-
-      return res.status(200).json({
-        success: true,
-        minDate
-      });
+      return res.status(200).json({ success: true, minDate });
     } catch (error) {
       return res.status(500).json({
         success: false,
@@ -169,11 +162,7 @@ class SystemSettingsController {
   async getMaxBookingDate(req, res) {
     try {
       const maxDate = systemSettingsService.getMaxBookingDate();
-
-      return res.status(200).json({
-        success: true,
-        maxDate
-      });
+      return res.status(200).json({ success: true, maxDate });
     } catch (error) {
       return res.status(500).json({
         success: false,
@@ -209,11 +198,7 @@ class SystemSettingsController {
   async canCoordinatorAssignStaff(req, res) {
     try {
       const canAssign = systemSettingsService.canCoordinatorAssignStaff();
-
-      return res.status(200).json({
-        success: true,
-        canAssign
-      });
+      return res.status(200).json({ success: true, canAssign });
     } catch (error) {
       return res.status(500).json({
         success: false,
@@ -239,15 +224,48 @@ class SystemSettingsController {
 
       const validation = systemSettingsService.validateAllRules(eventData);
 
-      return res.status(200).json({
-        success: true,
-        validation
-      });
+      return res.status(200).json({ success: true, validation });
     } catch (error) {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to validate rules'
       });
+    }
+  }
+
+  /**
+   * Update and persist system settings
+   * POST /api/settings
+   */
+  async updateSettings(req, res) {
+    try {
+      const payload = req.body || {};
+      // Only allow specific keys to be updated
+      const allowedKeys = [
+        'notificationsEnabled',
+        'maxBloodBagsPerDay',
+        'maxEventsPerDay',
+        'allowWeekendEvents',
+        'advanceBookingDays',
+        'maxPendingRequests',
+        'preventOverlappingRequests',
+        'preventDoubleBooking',
+        'allowCoordinatorStaffAssignment',
+        'requireStaffAssignment',
+        'blockedWeekdays',
+        'blockedDates'
+      ];
+
+      const updateObj = {};
+      for (const k of allowedKeys) {
+        if (Object.prototype.hasOwnProperty.call(payload, k)) updateObj[k] = payload[k];
+      }
+
+      const updated = await systemSettingsService.updateSettings(updateObj);
+
+      return res.status(200).json({ success: true, data: updated });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to update settings' });
     }
   }
 }

@@ -314,6 +314,29 @@ class BloodbankStaffController {
   }
 
   /**
+   * Logout endpoint - clears cookies and server session if present
+   * POST /api/auth/logout
+   */
+  async logout(req, res) {
+    try {
+      try {
+        res.clearCookie('unite_user', { path: '/' });
+        res.clearCookie('connect.sid', { path: '/' });
+      } catch (e) {}
+
+      try {
+        if (req.session && typeof req.session.destroy === 'function') {
+          req.session.destroy(() => {});
+        }
+      } catch (e) {}
+
+      return res.status(200).json({ success: true, message: 'Logged out' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to logout' });
+    }
+  }
+
+  /**
    * List users for admin or coordinator
    * Admin: return all coordinators and stakeholders (exclude the requesting admin)
    * Coordinator: return stakeholders in their district

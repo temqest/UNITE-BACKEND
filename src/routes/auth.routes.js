@@ -25,6 +25,34 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
+/**
+ * @route POST /api/auth/logout
+ * @desc  Logout user by clearing auth cookies
+ * @access Public (works with cookie-based sessions)
+ */
+router.post('/logout', async (req, res, next) => {
+  try {
+    // If session or cookies are used, clear them.
+    try {
+      res.clearCookie('unite_user', { path: '/' });
+      res.clearCookie('connect.sid', { path: '/' });
+    } catch (e) {
+      // ignore cookie clear errors
+    }
+
+    // If you have server-side sessions, destroy them here
+    try {
+      if (req.session && typeof req.session.destroy === 'function') {
+        req.session.destroy(() => {});
+      }
+    } catch (e) {}
+
+    return res.status(200).json({ success: true, message: 'Logged out' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
 
 /**

@@ -6,6 +6,7 @@ const {
 } = require('../controller/request_controller');
 
 const authenticate = require('../middleware/authenticate');
+const { requireAdmin } = require('../middleware/requireRoles');
 
 const {
   validateCreateEventRequest,
@@ -265,9 +266,22 @@ router.delete('/requests/:requestId', async (req, res, next) => {
  * @desc    Get all system settings
  * @access  Private
  */
-router.get('/settings', async (req, res, next) => {
+router.get('/settings', authenticate, async (req, res, next) => {
   try {
     await systemSettingsController.getSettings(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/settings
+ * @desc    Update system settings (admin only)
+ * @access  Private (Admin)
+ */
+router.post('/settings', authenticate, requireAdmin, async (req, res, next) => {
+  try {
+    await systemSettingsController.updateSettings(req, res);
   } catch (error) {
     next(error);
   }

@@ -175,6 +175,28 @@ class EventRequestService {
         validationResults.warnings.push(weekendCheck.message);
       }
 
+      // 2b. Check permanently blocked weekdays and specific blocked dates
+      try {
+        const blockedWeekdays = systemSettings.getSetting('blockedWeekdays') || [];
+        if (Array.isArray(blockedWeekdays) && blockedWeekdays.includes(startDate.getDay())) {
+          validationResults.isValid = false;
+          validationResults.errors.push('Selected weekday is blocked and not available for events');
+        }
+
+        const blockedDates = systemSettings.getSetting('blockedDates') || [];
+        if (Array.isArray(blockedDates) && blockedDates.length > 0) {
+          const iso = new Date(startDate);
+          iso.setHours(0,0,0,0);
+          const isoStr = iso.toISOString().slice(0,10);
+          if (blockedDates.map(String).includes(isoStr)) {
+            validationResults.isValid = false;
+            validationResults.errors.push('Selected date is blocked and not available for events');
+          }
+        }
+      } catch (e) {
+        // ignore block-list check errors
+      }
+
       // 3. Check coordinator has pending request limit
       // Optionally skip this check for admin/coordinator actors who auto-approve
       // their own actions (they shouldn't be limited by pending stakeholder requests).

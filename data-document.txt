@@ -94,3 +94,62 @@ district:
     "$date": { "$numberLong": "1735689600000" }
   }
 }
+
+notification:
+
+{
+  "_id": { "$oid": "6915f478c48966af331f9c6a" },
+  "Notification_ID": "NOTIF_1763030244991_6xp1hwlwh",
+  "Recipient_ID": "COORD_1762246751437_hwiptms8w",
+  "RecipientType": "Coordinator",
+  "Request_ID": "REQ_1762624202335_3ra783xcd",
+  "Event_ID": "EVENT_1762624202151_ahnifopau",
+  "Title": "Event Request Rescheduled",
+  "Message": "Your event request has been rescheduled by the admin. Note: ok",
+  "NotificationType": "AdminRescheduled",
+  "IsRead": false,
+  "ActionTaken": "Rescheduled",
+  "ActionNote": "ok",
+  "RescheduledDate": {
+    "$date": { "$numberLong": "1763769600000" }
+  },
+  "createdAt": {
+    "$date": { "$numberLong": "1763030244992" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1763030244992" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+request:
+
+{
+  "_id": { "$oid": "6915f4dbc48966af331f9c6b" },
+  "Request_ID": "REQ_1762623648375_naiuv5yym",
+  "Event_ID": "EVENT_1762623648202_qqxgutqgb",
+  "Coordinator_ID": "COORD_1762246751437_hwiptms8w",
+  "Category": "BloodDrive",
+  "Admin_ID": "ADMIN_BOOTSTRAP_001",
+  "AdminAction": "Accepted",
+  "AdminNote": "m",
+  "AdminActionDate": {
+    "$date": { "$numberLong": "1763030974105" }
+  },
+  "CoordinatorFinalAction": "Approved",
+  "CoordinatorFinalActionDate": {
+    "$date": { "$numberLong": "1762623648375" }
+  },
+  "StakeholderFinalAction": null,
+  "Status": "Completed",
+  "createdAt": {
+    "$date": { "$numberLong": "1762623648376" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1763030974106" }
+  },
+  "__v": { "$numberInt": "0" },
+  "RescheduledDate": {
+    "$date": { "$numberLong": "1763424000000" }
+  }
+}
