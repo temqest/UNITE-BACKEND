@@ -8,7 +8,7 @@ const {
 } = require('../controller/users_controller');
 
 const authenticate = require('../middleware/authenticate');
-const { requireAdmin, requireCoordinator } = require('../middleware/requireRoles');
+const { requireAdmin, requireCoordinator, requireAdminOrCoordinator } = require('../middleware/requireRoles');
 
 const {
   validateCreateBloodbankStaff,
@@ -322,9 +322,9 @@ router.get('/coordinators', authenticate, async (req, res, next) => {
 /**
  * @route   PUT /api/coordinators/:coordinatorId
  * @desc    Update coordinator information
- * @access  Private (Admin or Coordinator)
+ * @access  Private (Admin only)
  */
-router.put('/coordinators/:coordinatorId', authenticate, requireCoordinator, validateUpdateCoordinator, async (req, res, next) => {
+router.put('/coordinators/:coordinatorId', authenticate, requireAdmin, validateUpdateCoordinator, async (req, res, next) => {
   try {
     await coordinatorController.updateCoordinator(req, res);
   } catch (error) {
@@ -371,8 +371,8 @@ router.get('/coordinators/:coordinatorId/events/history', authenticate, requireC
   }
 });
 
-// Registration code management (Coordinator only)
-router.post('/coordinators/:coordinatorId/registration-codes', authenticate, requireCoordinator, async (req, res, next) => {
+// Registration code management (Coordinator or Admin)
+router.post('/coordinators/:coordinatorId/registration-codes', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
   try {
     await coordinatorController.createRegistrationCode(req, res);
   } catch (error) {
@@ -380,7 +380,7 @@ router.post('/coordinators/:coordinatorId/registration-codes', authenticate, req
   }
 });
 
-router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requireCoordinator, async (req, res, next) => {
+router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
   try {
     await coordinatorController.listRegistrationCodes(req, res);
   } catch (error) {
@@ -411,6 +411,45 @@ router.post('/stakeholders/register', async (req, res, next) => {
 router.get('/stakeholders', authenticate, async (req, res, next) => {
   try {
     await stakeholderController.list(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/stakeholders/:stakeholderId
+ * @desc    Get stakeholder by ID
+ * @access  Private
+ */
+router.get('/stakeholders/:stakeholderId', authenticate, async (req, res, next) => {
+  try {
+    await stakeholderController.getById(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/stakeholders/:stakeholderId
+ * @desc    Update stakeholder by ID
+ * @access  Private
+ */
+router.put('/stakeholders/:stakeholderId', authenticate, async (req, res, next) => {
+  try {
+    await stakeholderController.update(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/stakeholders/:stakeholderId
+ * @desc    Delete stakeholder by ID
+ * @access  Private
+ */
+router.delete('/stakeholders/:stakeholderId', authenticate, async (req, res, next) => {
+  try {
+    await stakeholderController.remove(req, res);
   } catch (error) {
     next(error);
   }

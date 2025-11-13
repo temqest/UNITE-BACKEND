@@ -76,3 +76,21 @@ blood drive:
   },
   "__v": { "$numberInt": "0" }
 }
+
+district:
+
+{
+  "_id": { "$oid": "69143d6f0d01d31692208a56" },
+  "District_ID": "CSUR-001",
+  "Province_Name": "Camarines Sur",
+  "District_Name": "1st District",
+  "District_City": "Iriga City",
+  "District_Number": "1",
+  "Region": "Region V (Bicol)",
+  "createdAt": {
+    "$date": { "$numberLong": "1735689600000" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1735689600000" }
+  }
+}

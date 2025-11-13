@@ -39,6 +39,101 @@ class StakeholderController {
       return res.status(500).json({ success: false, message: error.message });
     }
   }
+
+  async getById(req, res) {
+    try {
+      const id = req.params.stakeholderId;
+      // Authorization: only system admins or coordinators from the same district may view
+      const actor = req.user || {};
+      const role = String(actor.role || '').toLowerCase();
+      const isAdmin = (role && role.includes('admin')) || !!actor.isAdmin;
+
+      const result = await stakeholderService.getById(id);
+      const stakeholder = result.data;
+
+      if (!isAdmin) {
+        // Allow coordinators only for stakeholders in their district
+        const isCoordinator = role && role.includes('coordinator');
+        const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
+        if (!isCoordinator) {
+          return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+        }
+        if (!actorDistrict || String(actorDistrict) !== String(stakeholder.District_ID)) {
+          return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only access stakeholders in their district' });
+        }
+      }
+
+      return res.status(200).json({ success: true, data: stakeholder });
+    } catch (error) {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+  }
+
+  async update(req, res) {
+    try {
+      const id = req.params.stakeholderId;
+      const payload = req.body || {};
+
+      // Authorization checks
+      const actor = req.user || {};
+      const role = String(actor.role || '').toLowerCase();
+      const isAdmin = (role && role.includes('admin')) || !!actor.isAdmin;
+      const isCoordinator = role && role.includes('coordinator');
+
+      // Fetch existing stakeholder to validate district ownership
+      const existingRes = await stakeholderService.getById(id);
+      const existing = existingRes.data;
+      if (!existing) return res.status(404).json({ success: false, message: 'Stakeholder not found' });
+
+      if (!isAdmin) {
+        if (!isCoordinator) {
+          return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+        }
+        const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
+        if (!actorDistrict || String(actorDistrict) !== String(existing.District_ID)) {
+          return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only update stakeholders in their district' });
+        }
+
+        // Coordinators are not allowed to change District_ID — enforce by removing it from payload
+        if ('District_ID' in payload) delete payload.District_ID;
+      }
+
+      const result = await stakeholderService.update(id, payload);
+      return res.status(200).json({ success: true, data: result.stakeholder });
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message, errors: error.errors || null });
+    }
+  }
+
+  async remove(req, res) {
+    try {
+      const id = req.params.stakeholderId;
+      // Authorization: only admins or coordinators in same district
+      const actor = req.user || {};
+      const role = String(actor.role || '').toLowerCase();
+      const isAdmin = (role && role.includes('admin')) || !!actor.isAdmin;
+      const isCoordinator = role && role.includes('coordinator');
+
+      const existingRes = await stakeholderService.getById(id);
+      const existing = existingRes.data;
+      if (!existing) return res.status(404).json({ success: false, message: 'Stakeholder not found' });
+
+      if (!isAdmin) {
+        if (!isCoordinator) {
+          return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+        }
+        const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
+        if (!actorDistrict || String(actorDistrict) !== String(existing.District_ID)) {
+          return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only delete stakeholders in their district' });
+        }
+      }
+
+      await stakeholderService.remove(id);
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+  }
 }
 
 module.exports = new StakeholderController();

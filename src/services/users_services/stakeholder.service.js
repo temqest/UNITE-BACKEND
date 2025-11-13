@@ -94,6 +94,70 @@ class StakeholderService {
     };
   }
 
+  async getById(stakeholderId) {
+    const s = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId });
+    if (!s) throw new Error('Stakeholder not found');
+    return {
+      success: true,
+      data: {
+        Stakeholder_ID: s.Stakeholder_ID,
+        First_Name: s.First_Name,
+        Middle_Name: s.Middle_Name,
+        Last_Name: s.Last_Name,
+        Email: s.Email,
+        Phone_Number: s.Phone_Number,
+        District_ID: s.District_ID,
+        Province_Name: s.Province_Name,
+        City_Municipality: s.City_Municipality,
+        Organization_Institution: s.Organization_Institution,
+        Coordinator_ID: s.Coordinator_ID,
+        created_at: s.createdAt
+      }
+    };
+  }
+
+  async update(stakeholderId, updateData) {
+    const s = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId });
+    if (!s) throw new Error('Stakeholder not found');
+
+    // Prevent email collisions
+    if (updateData.Email && String(updateData.Email).toLowerCase() !== String(s.Email).toLowerCase()) {
+      const exist = await Stakeholder.findOne({ Email: String(updateData.Email).toLowerCase() });
+      if (exist) throw new Error('Email already exists');
+    }
+
+    // Only allow updating safe fields here
+    const allowed = ['First_Name','Middle_Name','Last_Name','Email','Phone_Number','District_ID','Province_Name','City_Municipality','Organization_Institution','Coordinator_ID'];
+    for (const k of Object.keys(updateData || {})) {
+      if (allowed.includes(k)) s[k] = updateData[k]
+    }
+
+    const saved = await s.save();
+    return {
+      success: true,
+      stakeholder: {
+        Stakeholder_ID: saved.Stakeholder_ID,
+        First_Name: saved.First_Name,
+        Middle_Name: saved.Middle_Name,
+        Last_Name: saved.Last_Name,
+        Email: saved.Email,
+        Phone_Number: saved.Phone_Number,
+        District_ID: saved.District_ID,
+        Province_Name: saved.Province_Name,
+        City_Municipality: saved.City_Municipality,
+        Organization_Institution: saved.Organization_Institution,
+        Coordinator_ID: saved.Coordinator_ID
+      }
+    }
+  }
+
+  async remove(stakeholderId) {
+    const s = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId });
+    if (!s) throw new Error('Stakeholder not found');
+    await Stakeholder.deleteOne({ Stakeholder_ID: stakeholderId });
+    return { success: true }
+  }
+
   async list(filters = {}, page = 1, limit = 20) {
     const query = {};
     if (filters.district_id) query.District_ID = filters.district_id;
@@ -113,6 +177,9 @@ class StakeholderService {
         Email: s.Email,
         Phone_Number: s.Phone_Number,
         District_ID: s.District_ID,
+        Province_Name: s.Province_Name,
+        City_Municipality: s.City_Municipality,
+        Organization_Institution: s.Organization_Institution,
         created_at: s.createdAt
       })),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) }

@@ -192,9 +192,31 @@ module.exports = new CoordinatorController();
 // Registration code endpoints
 module.exports.createRegistrationCode = async (req, res) => {
   try {
-    const { coordinatorId } = req.params;
-    const { districtId, maxUses, expiresAt } = req.body || {};
-    const result = await registrationCodeService.createCode(coordinatorId, { districtId, maxUses, expiresAt });
+    // Determine acting user role and target coordinator
+    const actingRole = req.user?.role || '';
+    // coordinatorId may be supplied via params (when coordinator route used) or in body (when admin calls)
+    let targetCoordinatorId = req.params?.coordinatorId || req.body?.coordinatorId;
+    let { districtId, maxUses, expiresAt } = req.body || {};
+
+    if (actingRole === 'Coordinator') {
+      // Coordinator may only generate codes for themselves and for their district
+      const userCoordId = req.user?.id || req.user?.Coordinator_ID || req.user?.coordinator_id || null;
+      if (!userCoordId) return res.status(403).json({ success: false, message: 'Coordinator identity not found' });
+      // If a different coordinatorId was provided, deny
+      if (targetCoordinatorId && String(targetCoordinatorId) !== String(userCoordId)) {
+        return res.status(403).json({ success: false, message: 'Coordinators may only create codes for their own account' });
+      }
+      targetCoordinatorId = userCoordId;
+      // Force district to the coordinator's district if available in token
+      districtId = req.user?.role_data?.district_id || req.user?.District_ID || req.user?.districtId || districtId;
+    } else if (actingRole === 'Admin') {
+      // Admin must supply a targetCoordinatorId in either params or body
+      if (!targetCoordinatorId) return res.status(400).json({ success: false, message: 'Coordinator ID is required when creating registration codes as admin' });
+    } else {
+      return res.status(403).json({ success: false, message: 'Only system administrators or coordinators may generate registration codes' });
+    }
+
+    const result = await registrationCodeService.createCode(targetCoordinatorId, { districtId, maxUses, expiresAt });
     return res.status(201).json({ success: true, data: result.code });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
@@ -203,7 +225,16 @@ module.exports.createRegistrationCode = async (req, res) => {
 
 module.exports.listRegistrationCodes = async (req, res) => {
   try {
-    const { coordinatorId } = req.params;
+    let { coordinatorId } = req.params;
+    const actingRole = req.user?.role || '';
+    if (actingRole === 'Coordinator') {
+      const userCoordId = req.user?.id || req.user?.Coordinator_ID || req.user?.coordinator_id || null;
+      if (!userCoordId) return res.status(403).json({ success: false, message: 'Coordinator identity not found' });
+      if (coordinatorId && String(coordinatorId) !== String(userCoordId)) {
+        return res.status(403).json({ success: false, message: 'Coordinators may only list their own registration codes' });
+      }
+      coordinatorId = userCoordId;
+    }
     const result = await registrationCodeService.listCodes(coordinatorId);
     return res.status(200).json({ success: true, data: result.codes });
   } catch (error) {

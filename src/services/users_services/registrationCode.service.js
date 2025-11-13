@@ -2,7 +2,20 @@ const { RegistrationCode, Coordinator, District } = require('../../models/index'
 
 class RegistrationCodeService {
   generateCode() {
-    return Math.random().toString(36).slice(2, 8).toUpperCase();
+    // Generate a 6-character alphanumeric code that contains at least one letter and one number
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    const digits = '0123456789'
+    const all = letters + digits
+    let code = ''
+    // ensure at least one letter and one digit
+    code += letters.charAt(Math.floor(Math.random() * letters.length))
+    code += digits.charAt(Math.floor(Math.random() * digits.length))
+    for (let i = 2; i < 6; i++) {
+      code += all.charAt(Math.floor(Math.random() * all.length))
+    }
+    // shuffle the characters so letter/digit are not predictable at start
+    code = code.split('').sort(() => 0.5 - Math.random()).join('')
+    return code
   }
 
   async createCode(coordinatorId, { districtId, maxUses = 1, expiresAt = null }) {

@@ -51,6 +51,14 @@ const updateCoordinatorSchema = Joi.object({
       'string.min': 'Province Name must be at least 2 characters long',
       'string.max': 'Province Name must not exceed 100 characters'
     })
+,
+  // Allow updating staff fields as part of coordinator update
+  First_Name: Joi.string().trim().min(1).max(100).messages({ 'string.empty': 'First name cannot be empty' }),
+  Middle_Name: Joi.string().allow(null, '').trim().max(100),
+  Last_Name: Joi.string().trim().min(1).max(100).messages({ 'string.empty': 'Last name cannot be empty' }),
+  Email: Joi.string().email().trim().messages({ 'string.email': 'Email must be a valid email address' }),
+  Phone_Number: Joi.string().trim().min(5).max(30).messages({ 'string.empty': 'Phone number cannot be empty' }),
+  Password: Joi.string().min(6).max(128).messages({ 'string.min': 'Password must be at least 6 characters long' })
 }).min(1).messages({
   'object.min': 'At least one field must be provided for update'
 });
