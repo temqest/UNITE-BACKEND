@@ -43,15 +43,24 @@ class BloodbankStaffController {
           try { console.log('[auth] setting unite_user cookie (staff login):', cookieValue); } catch (e) {}
         }
         const cookieOpts = {
-          httpOnly: false,
+          // Make cookie HttpOnly so it's only sent to the server and cannot be read by JS.
+          httpOnly: true,
+          // Secure cookies are required in production when SameSite='none'. During
+          // local development we avoid setting secure so the cookie can be stored
+          // on localhost without HTTPS. Use SameSite='lax' in development to avoid
+          // browsers rejecting the cookie when Secure is false.
           secure: process.env.NODE_ENV === 'production',
-          // Use 'none' to allow cookies across ports/origins during local dev when
-          // requests are made with credentials: 'include'. In production keep
-          // defaults secure.
-          sameSite: 'none',
+          sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
           maxAge: 7 * 24 * 60 * 60 * 1000,
           path: '/',
         };
+        // Ensure any previous cookie (possibly set without HttpOnly) is removed
+        // before setting the new one. This prevents stale cookie values when
+        // switching accounts in the same browser session.
+        try {
+          res.clearCookie('unite_user', { path: '/' });
+        } catch (e) {}
+
         // Do not force domain in case different local hosts (127.0.0.1 vs localhost)
         res.cookie('unite_user', cookieValue, cookieOpts);
       } catch (e) {

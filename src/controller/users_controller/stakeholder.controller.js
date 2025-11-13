@@ -38,12 +38,21 @@ class StakeholderController {
           try { console.log('[auth] setting unite_user cookie (stakeholder login):', cookieValue); } catch (e) {}
         }
         const cookieOpts = {
-          httpOnly: false,
+          // HttpOnly so the cookie is only used by the server on subsequent requests
+          httpOnly: true,
+          // Use secure + SameSite='none' in production for cross-site compatibility.
+          // During local development, avoid Secure and use SameSite='lax' so
+          // the cookie is not rejected by browsers that require Secure for
+          // SameSite=None.
           secure: process.env.NODE_ENV === 'production',
-          sameSite: 'none',
+          sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
           maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
           path: '/',
         };
+        // Ensure any previous cookie is cleared first to avoid stale values
+        try {
+          res.clearCookie('unite_user', { path: '/' });
+        } catch (e) {}
         // Do not force domain in development to avoid mismatches
         res.cookie('unite_user', cookieValue, cookieOpts);
       } catch (e) {
