@@ -247,6 +247,57 @@ class EventOverviewService {
   }
 
   /**
+   * Get public events (Approved/Completed) for calendar/public listing
+   * @param {Object} filters - date_from/date_to/category
+   * @param {Object} options - page/limit
+   */
+  async getPublicEvents(filters = {}, options = {}) {
+    try {
+      const { page = 1, limit = 200 } = options;
+      const skip = (page - 1) * limit;
+
+      const query = {
+        Status: { $in: ['Approved', 'Completed'] }
+      };
+
+      if (filters.date_from || filters.date_to) {
+        query.Start_Date = {};
+        if (filters.date_from) query.Start_Date.$gte = new Date(filters.date_from);
+        if (filters.date_to) query.Start_Date.$lte = new Date(filters.date_to);
+      }
+
+      if (filters.category) {
+        query.Category = filters.category;
+      }
+
+      const events = await Event.find(query)
+        .skip(skip)
+        .limit(limit)
+        .sort({ Start_Date: 1 })
+        .select('Event_ID Event_Title Start_Date End_Date Category');
+
+      const total = await Event.countDocuments(query);
+
+      // map minimal fields for calendar
+      const mapped = events.map(e => ({
+        Event_ID: e.Event_ID,
+        Title: e.Event_Title,
+        Start_Date: e.Start_Date,
+        End_Date: e.End_Date,
+        Category: e.Category
+      }));
+
+      return {
+        success: true,
+        events: mapped,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+      };
+    } catch (error) {
+      throw new Error(`Failed to get public events: ${error.message}`);
+    }
+  }
+
+  /**
    * Get recent events
    * @param {number} limit 
    * @param {Object} filters 

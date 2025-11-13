@@ -5,6 +5,8 @@ const {
   systemSettingsController
 } = require('../controller/request_controller');
 
+const authenticate = require('../middleware/authenticate');
+
 const {
   validateCreateEventRequest,
   validateUpdateEventRequest
@@ -46,6 +48,19 @@ router.post('/events/direct', async (req, res, next) => {
 router.get('/requests/pending', async (req, res, next) => {
   try {
     await eventRequestController.getPendingRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/me
+ * @desc    Get requests for the authenticated user (role-aware)
+ * @access  Private
+ */
+router.get('/requests/me', authenticate, async (req, res, next) => {
+  try {
+    await eventRequestController.getMyRequests(req, res);
   } catch (error) {
     next(error);
   }
@@ -181,7 +196,7 @@ router.get('/requests/:requestId', async (req, res, next) => {
  * @desc    Update pending event request
  * @access  Private (Coordinator)
  */
-router.put('/requests/:requestId', validateUpdateEventRequest, async (req, res, next) => {
+router.put('/requests/:requestId', authenticate, validateUpdateEventRequest, async (req, res, next) => {
   try {
     await eventRequestController.updateEventRequest(req, res);
   } catch (error) {
@@ -194,7 +209,7 @@ router.put('/requests/:requestId', validateUpdateEventRequest, async (req, res, 
  * @desc    Admin accepts/rejects/reschedules the request
  * @access  Private (Admin only)
  */
-router.post('/requests/:requestId/admin-action', async (req, res, next) => {
+router.post('/requests/:requestId/admin-action', authenticate, async (req, res, next) => {
   try {
     await eventRequestController.adminAcceptRequest(req, res);
   } catch (error) {

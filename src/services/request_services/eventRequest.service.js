@@ -132,7 +132,7 @@ class EventRequestService {
    * @param {Object} eventData 
    * @returns {Object} Validation results
    */
-  async validateSchedulingRules(coordinatorId, eventData, excludeRequestId = null) {
+  async validateSchedulingRules(coordinatorId, eventData, excludeRequestId = null, options = {}) {
     const validationResults = {
       isValid: true,
       errors: [],
@@ -176,14 +176,18 @@ class EventRequestService {
       }
 
       // 3. Check coordinator has pending request limit
-      const pendingCount = await EventRequest.countDocuments({
-        Coordinator_ID: coordinatorId,
-        Status: 'Pending_Admin_Review'
-      });
-      const pendingCheck = systemSettings.validatePendingRequestsLimit(pendingCount);
-      if (!pendingCheck.isValid) {
-        validationResults.isValid = false;
-        validationResults.errors.push(pendingCheck.message);
+      // Optionally skip this check for admin/coordinator actors who auto-approve
+      // their own actions (they shouldn't be limited by pending stakeholder requests).
+      if (!options.skipPendingLimit) {
+        const pendingCount = await EventRequest.countDocuments({
+          Coordinator_ID: coordinatorId,
+          Status: 'Pending_Admin_Review'
+        });
+        const pendingCheck = systemSettings.validatePendingRequestsLimit(pendingCount);
+        if (!pendingCheck.isValid) {
+          validationResults.isValid = false;
+          validationResults.errors.push(pendingCheck.message);
+        }
       }
 
       // 4. Check for overlapping requests (same coordinator, same date)
@@ -313,8 +317,11 @@ class EventRequestService {
         throw new Error('Coordinator not found');
       }
 
-      // Validate all scheduling rules
-      const validation = await this.validateSchedulingRules(coordinatorId, eventData);
+  // Validate all scheduling rules. Allow callers to pass an optional excludeRequestId
+  // when creating a change request for an existing request so validation can ignore
+  // the original request/event (avoids false-positive overlaps/double-booking).
+  const excludeRequestId = eventData && (eventData.excludeRequestId || eventData.exclude_request_id || null);
+  const validation = await this.validateSchedulingRules(coordinatorId, eventData, excludeRequestId);
       if (!validation.isValid) {
         throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
       }
@@ -323,16 +330,31 @@ class EventRequestService {
       const eventId = this.generateEventID();
       const requestId = this.generateRequestID();
 
+      // Determine category type. If not provided (change-request case) try to infer
+      // from the existing request/event referenced by excludeRequestId.
+      let categoryType = eventData.categoryType || eventData.Category || null;
+      if (!categoryType && excludeRequestId) {
+        try {
+          const existingReq = await this._findRequest(excludeRequestId);
+          if (existingReq && existingReq.Event_ID) {
+            const existingEvent = await Event.findOne({ Event_ID: existingReq.Event_ID }).catch(() => null);
+            categoryType = existingEvent?.Category || existingReq.Category || categoryType;
+          }
+        } catch (e) {
+          // ignore inference failures
+        }
+      }
+
       // Create event category-specific data
       let categoryData = null;
-      if (eventData.categoryType === 'BloodDrive') {
+      if (categoryType === 'BloodDrive' || eventData.categoryType === 'BloodDrive') {
         categoryData = new BloodDrive({
           BloodDrive_ID: eventId,
           Target_Donation: eventData.Target_Donation,
           VenueType: eventData.VenueType
         });
         await categoryData.save();
-      } else if (eventData.categoryType === 'Advocacy') {
+      } else if (categoryType === 'Advocacy' || eventData.categoryType === 'Advocacy') {
         // Normalize expected audience size from multiple possible input names
         const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
         const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
@@ -345,7 +367,7 @@ class EventRequestService {
           PartnerOrganization: eventData.PartnerOrganization
         });
         await categoryData.save();
-      } else if (eventData.categoryType === 'Training') {
+      } else if (categoryType === 'Training' || eventData.categoryType === 'Training') {
         categoryData = new Training({
           Training_ID: eventId,
           TrainingType: eventData.TrainingType,
@@ -371,7 +393,7 @@ class EventRequestService {
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
         // Persist category type so frontend can display the event type
-        Category: eventData.categoryType || eventData.Category || undefined,
+        Category: categoryType || eventData.categoryType || eventData.Category || undefined,
         Status: 'Pending'
       });
       await event.save();
@@ -384,7 +406,7 @@ class EventRequestService {
         // Keep trace of which stakeholder created the request (if any)
         MadeByStakeholderID: eventData.MadeByStakeholderID || undefined,
         // Persist event category/type on the request to aid UI and audits
-        Category: eventData.categoryType || eventData.Category || undefined,
+        Category: categoryType || eventData.categoryType || eventData.Category || undefined,
         Status: 'Pending_Admin_Review'
       });
       await request.save();
@@ -685,7 +707,7 @@ class EventRequestService {
    * @param {Object} updateData 
    * @returns {Object} Updated request
    */
-  async updateEventRequest(requestId, coordinatorId, updateData, actorIsAdmin = false) {
+  async updateEventRequest(requestId, actorId, updateData, actorIsAdmin = false, actorIsCoordinator = false, actorIsStakeholder = false) {
     try {
       const request = await this._findRequest(requestId);
       if (!request) {
@@ -706,16 +728,57 @@ class EventRequestService {
         // swallow logging errors
       }
 
-      // Only allow updates if request is pending unless actor is admin
-      if (!actorIsAdmin && request.Status !== 'Pending_Admin_Review') {
-        console.log(`[Service] updateEventRequest rejected: request not pending`, { requestId, status: request.Status });
-        throw new Error('Cannot update request. Request is no longer pending.');
+      // Authorization rules:
+      // - Admins may update any request
+      // - Coordinators may update requests they own (Coordinator_ID)
+      // - Stakeholders may update requests they created (MadeByStakeholderID)
+      if (!actorIsAdmin && !actorIsCoordinator && !actorIsStakeholder) {
+        throw new Error('Unauthorized: invalid actor');
       }
 
-      // Verify coordinator owns this request unless actor is admin
-      if (!actorIsAdmin && request.Coordinator_ID !== coordinatorId) {
-        console.log('[Service] updateEventRequest unauthorized: coordinator mismatch', { requestId, requestCoordinator: request.Coordinator_ID, providedCoordinator: coordinatorId });
-        throw new Error('Unauthorized: Coordinator does not own this request');
+      // If actor is stakeholder, allow submitting change requests while the
+      // request is pending admin review. Historically we required the
+      // stakeholder to be the original creator (MadeByStakeholderID), but in
+      // this system requests may be created by any actor and stakeholders
+      // should still be able to propose edits. Therefore we no longer block
+      // by strict ownership; we only enforce that the request is still
+      // pending admin review.
+      if (actorIsStakeholder) {
+        // Allow stakeholder updates. If the request was already processed (e.g., Completed)
+        // then convert it back to Pending_Admin_Review so the stakeholder's changes
+        // will be re-evaluated by admins/coordinators. Clear previous admin/coordinator
+        // approvals so the flow requires fresh review.
+        if (request.Status !== 'Pending_Admin_Review') {
+          request.AdminAction = null;
+          request.AdminNote = null;
+          request.RescheduledDate = null;
+          request.AdminActionDate = null;
+          request.CoordinatorFinalAction = null;
+          request.CoordinatorFinalActionDate = null;
+          request.StakeholderFinalAction = null;
+          request.StakeholderFinalActionDate = null;
+          request.Status = 'Pending_Admin_Review';
+        }
+
+        // Record stakeholder as proposer if missing (audit)
+        if (!request.MadeByStakeholderID) {
+          request.MadeByStakeholderID = actorId;
+        }
+
+        // Persist the status/ownership changes before proceeding with event updates
+        try {
+          await request.save();
+        } catch (e) {
+          // don't block user with DB save quirks; we'll attempt to continue
+        }
+      }
+
+      // If actor is coordinator, verify ownership
+      if (actorIsCoordinator) {
+        if (request.Coordinator_ID !== actorId) {
+          throw new Error('Unauthorized: Coordinator does not own this request');
+        }
+        // Coordinators may update pending requests or act like admins; allow update even if not pending
       }
 
       const event = await Event.findOne({ Event_ID: request.Event_ID });
@@ -728,8 +791,9 @@ class EventRequestService {
         // Validate scheduling with provided start/end
         // When an admin is performing the update we must validate against the request's coordinator
         // (not the adminId). Use the request.Coordinator_ID for scheduling checks when actorIsAdmin.
-        const schedulingCoordinatorId = actorIsAdmin ? request.Coordinator_ID : coordinatorId;
-        const validation = await this.validateSchedulingRules(schedulingCoordinatorId, updateData, requestId);
+  const schedulingCoordinatorId = request.Coordinator_ID;
+  const skipPending = actorIsAdmin || actorIsCoordinator;
+  const validation = await this.validateSchedulingRules(schedulingCoordinatorId, updateData, requestId, { skipPendingLimit: skipPending });
         if (!validation.isValid) {
           throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
         }
@@ -756,7 +820,7 @@ class EventRequestService {
   // Allow updating event description
   if (updateData.Event_Description !== undefined) event.Event_Description = updateData.Event_Description;
 
-      await event.save();
+  await event.save();
     // Resolve category type for this update: prefer payload, then event, then request
     const categoryType = updateData && updateData.categoryType ? updateData.categoryType : (event.Category || request.Category);
     console.log('[Service] resolved categoryType for update', { requestId, categoryType });
@@ -823,6 +887,28 @@ class EventRequestService {
 
       console.log('[Service] updateEventRequest returning', { requestId, event: freshEvent ? freshEvent.toObject() : null, category: categoryData });
 
+      // If the actor is admin or coordinator, auto-approve the updated request/event
+      if (actorIsAdmin || actorIsCoordinator) {
+        try {
+          const approverId = actorId;
+          if (freshEvent) {
+            freshEvent.Status = 'Approved';
+            freshEvent.ApprovedByAdminID = approverId;
+            await freshEvent.save();
+          }
+          // mark request as completed
+          request.Status = 'Completed';
+          if (!request.CoordinatorFinalAction) {
+            request.CoordinatorFinalAction = 'Approved';
+            request.CoordinatorFinalActionDate = new Date();
+          }
+          request.Admin_ID = approverId;
+          await request.save();
+        } catch (e) {
+          // swallow approval errors to avoid blocking update
+        }
+      }
+
       return {
         success: true,
         message: 'Event request updated successfully',
@@ -880,7 +966,14 @@ class EventRequestService {
       // Update request with admin/coordinator decision
       // Record the acting user in Admin_ID for audit (even if actor is a coordinator)
       request.Admin_ID = adminId;
+      // For audit we still keep the original action in history, but when a
+      // System Admin or Coordinator performs a reschedule we treat that as an
+      // approved action in the request record (AdminAction='Accepted') because
+      // their decisions are final and do not require additional approvals.
       request.AdminAction = action;
+      if ((action === 'Rescheduled' || action === 'Accepted') && (actorRole === 'Admin' || actorRole === 'Coordinator')) {
+        request.AdminAction = 'Accepted';
+      }
       request.AdminNote = note;
       request.RescheduledDate = rescheduledDate;
       request.AdminActionDate = new Date();
@@ -933,34 +1026,44 @@ class EventRequestService {
           // - If the request was NOT created by a stakeholder (i.e., created by
           //   admin/coordinator), auto-approve the event and complete the request.
           if (actorRole === 'Admin' || actorRole === 'Coordinator') {
-            if (createdByStakeholder) {
-              event.Status = 'Pending';
-            } else {
-              event.Status = 'Approved';
-            }
+            // Admins and coordinators' actions are treated as final approvals in this system.
+            // Always mark the event as Approved when they reschedule (they don't need further stakeholder confirmation).
+            event.Status = 'Approved';
           } else {
             // Non-admin actors (if allowed) keep previous rescheduled marker
             event.Status = 'Rescheduled';
           }
-          // Apply the rescheduled date to the event's Start_Date while preserving the original time (if any).
-          if (rescheduledDate) {
-            try {
-              const rs = new Date(rescheduledDate);
-              const currentStart = event.Start_Date ? new Date(event.Start_Date) : null;
-              if (currentStart) {
-                // Keep hours/minutes from currentStart, but set Y/M/D to rescheduled date
-                currentStart.setFullYear(rs.getFullYear(), rs.getMonth(), rs.getDate());
-                event.Start_Date = currentStart;
-              } else {
-                // No existing start time; set start to rescheduled date at midnight
-                event.Start_Date = new Date(rs);
+              // Apply the rescheduled date to the event's Start_Date while preserving the original time (if any).
+              // Also update End_Date to the same new day preserving its original time portion so the
+              // full event range moves together when rescheduling.
+              if (rescheduledDate) {
+                try {
+                  const rs = new Date(rescheduledDate);
+                  const currentStart = event.Start_Date ? new Date(event.Start_Date) : null;
+                  if (currentStart) {
+                    // Keep hours/minutes/seconds from currentStart, but set Y/M/D to rescheduled date
+                    currentStart.setFullYear(rs.getFullYear(), rs.getMonth(), rs.getDate());
+                    event.Start_Date = currentStart;
+                  } else {
+                    // No existing start time; set start to rescheduled date at midnight
+                    event.Start_Date = new Date(rs);
+                  }
+
+                  // If End_Date exists, shift its Y/M/D to the rescheduled date preserving the time
+                  if (event.End_Date) {
+                    try {
+                      const currentEnd = new Date(event.End_Date);
+                      currentEnd.setFullYear(rs.getFullYear(), rs.getMonth(), rs.getDate());
+                      event.End_Date = currentEnd;
+                    } catch (e) {
+                      // If End_Date parse fails, fallback to leaving it unchanged
+                    }
+                  }
+                } catch (e) {
+                  // If parsing fails, surface an error by throwing so caller knows
+                  throw new Error('Invalid rescheduled date');
+                }
               }
-              // Intentionally do NOT modify End_Date here (reschedules shouldn't change End_Date)
-            } catch (e) {
-              // If parsing fails, surface an error by throwing so caller knows
-              throw new Error('Invalid rescheduled date');
-            }
-          }
         } else if (action === 'Rejected') {
           event.Status = 'Rejected';
         } else if (action === 'Accepted') {
@@ -971,28 +1074,27 @@ class EventRequestService {
         event.ApprovedByAdminID = adminId;
         await event.save();
 
-        // If admin/coordinator rescheduled and we auto-approved above (i.e. the
-        // request was NOT created by a stakeholder), mark the request as completed
-        // so the UI reflects finalization. If the request was created by a
-        // stakeholder, leave it for stakeholder confirmation.
-        if (action === 'Rescheduled' && (actorRole === 'Admin' || actorRole === 'Coordinator')) {
+        // For admin/coordinator actions, treat their decision as final and complete the request.
+        if (actorRole === 'Admin' || actorRole === 'Coordinator') {
           try {
-            const createdByStakeholder = !!request.MadeByStakeholderID;
-            if (!createdByStakeholder) {
-              request.Status = 'Completed';
-              // Also mark coordinator final action as approved for audit if not already set
-              if (!request.CoordinatorFinalAction) {
+            // Mark request completed and set coordinator final action based on the admin action
+            request.Status = 'Completed';
+            if (!request.CoordinatorFinalAction) {
+              if (action === 'Rejected') {
+                request.CoordinatorFinalAction = 'Rejected';
+              } else {
+                // Accepted or Rescheduled -> treat as approved by coordinator for audit
                 request.CoordinatorFinalAction = 'Approved';
-                request.CoordinatorFinalActionDate = new Date();
               }
-              await request.save();
-            } else {
-              // For stakeholder-created requests, persist the admin action but do not complete.
-              await request.save();
+              request.CoordinatorFinalActionDate = new Date();
             }
+            await request.save();
           } catch (e) {
             // swallow to avoid blocking the main flow
           }
+        } else {
+          // Non-admin actors: just persist admin action without completing the request
+          await request.save();
         }
       }
 
@@ -1481,6 +1583,67 @@ class EventRequestService {
 
     } catch (error) {
       throw new Error(`Failed to get pending requests: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get filtered requests for admin/global view
+   * Supports filtering by status, date range, coordinator and simple search
+   * @param {Object} filters
+   * @param {number} page
+   * @param {number} limit
+   */
+  async getFilteredRequests(filters = {}, page = 1, limit = 50) {
+    try {
+      const skip = (page - 1) * limit;
+
+      const query = {};
+
+      if (filters.status) {
+        query.Status = filters.status;
+      }
+
+      if (filters.coordinator) {
+        query.Coordinator_ID = filters.coordinator;
+      }
+
+      if (filters.date_from || filters.date_to) {
+        query.createdAt = {};
+        if (filters.date_from) query.createdAt.$gte = new Date(filters.date_from);
+        if (filters.date_to) query.createdAt.$lte = new Date(filters.date_to);
+      }
+
+      // Simple search: try to match request id or event title
+      let eventIdMatches = null;
+      if (filters.search) {
+        const regex = new RegExp(String(filters.search), 'i');
+        // Find events with matching title
+        const matchedEvents = await Event.find({ Event_Title: { $regex: regex } }).select('Event_ID');
+        eventIdMatches = Array.isArray(matchedEvents) ? matchedEvents.map(e => e.Event_ID) : [];
+        // Build $or condition to match Request_ID or linked Event title
+        query.$or = [{ Request_ID: { $regex: regex } }];
+        if (eventIdMatches.length > 0) query.$or.push({ Event_ID: { $in: eventIdMatches } });
+      }
+
+      const requests = await EventRequest.find(query)
+        .skip(skip)
+        .limit(limit)
+        .sort({ createdAt: -1 });
+
+      const total = await EventRequest.countDocuments(query);
+
+      return {
+        success: true,
+        requests,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      };
+    } catch (error) {
+      throw new Error(`Failed to get filtered requests: ${error.message}`);
     }
   }
 

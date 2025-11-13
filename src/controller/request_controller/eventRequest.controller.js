@@ -100,33 +100,30 @@ class EventRequestController {
   async updateEventRequest(req, res) {
     try {
       const { requestId } = req.params;
-      // coordinatorId is required when a coordinator performs the update
-      // adminId may be provided when an admin performs the update
-  const { coordinatorId, adminId } = req.body;
-  // Prefer validated data set by the validator middleware when present
-  const updateData = req.validatedData || req.body;
-
-      if (!coordinatorId && !adminId) {
-        return res.status(400).json({
-          success: false,
-          message: 'coordinatorId or adminId is required'
-        });
+      // Derive actor exclusively from the authenticated token. Do NOT accept
+      // body-provided actor ids for security. The route is protected by the
+      // `authenticate` middleware so req.user should be populated.
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
       }
 
-      const actorIsAdmin = !!adminId;
-      const actorId = adminId || coordinatorId;
+      // Prefer validated data set by the validator middleware when present
+      const updateData = req.validatedData || req.body;
 
-      // Debug log: capture incoming update attempt
-      console.log('[API] PUT /api/requests/:requestId - updateEventRequest called', {
-        requestId,
-        coordinatorId,
-        adminId,
-        actorIsAdmin,
-        actorId,
-        updateDataKeys: updateData ? Object.keys(updateData) : null
-      });
+      // Determine actor roles from token
+      const actorIsAdmin = !!(user.role === 'Admin' || user.staff_type === 'Admin');
+      const actorIsCoordinator = !!(user.role === 'Coordinator' || user.staff_type === 'Coordinator');
+      const actorIsStakeholder = !!(user.role === 'Stakeholder' || user.staff_type === 'Stakeholder');
+      const actorId = user.Admin_ID || user.Coordinator_ID || user.Stakeholder_ID || user.id || null;
 
-      const result = await eventRequestService.updateEventRequest(requestId, actorId, updateData, actorIsAdmin);
+      if (!actorIsAdmin && !actorIsCoordinator && !actorIsStakeholder) {
+        return res.status(403).json({ success: false, message: 'Unable to determine actor role from authentication token' });
+      }
+
+      // (debug logs removed)
+
+  const result = await eventRequestService.updateEventRequest(requestId, actorId, updateData, actorIsAdmin, actorIsCoordinator, actorIsStakeholder);
 
       return res.status(200).json({
         success: result.success,
@@ -158,15 +155,15 @@ class EventRequestController {
   async adminAcceptRequest(req, res) {
     try {
       const { requestId } = req.params;
-      const { adminId, action, note, rescheduledDate } = req.body;
-
-      if (!adminId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Admin ID is required'
-        });
+      // Derive admin id from authenticated token only
+      const user = req.user;
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required' });
+      if (!(user.role === 'Admin' || user.staff_type === 'Admin' || user.role === 'Coordinator' || user.staff_type === 'Coordinator')) {
+        return res.status(403).json({ success: false, message: 'Only admins or coordinators may perform this action' });
       }
 
+      const adminId = user.Admin_ID || user.Coordinator_ID || user.id || null;
+      const { action, note, rescheduledDate } = req.body;
       const adminAction = {
         action,
         note,
@@ -387,6 +384,107 @@ class EventRequestController {
         success: false,
         message: error.message || 'Failed to retrieve coordinator requests'
       });
+    }
+  }
+
+  /**
+   * Get requests for the authenticated user (role-aware)
+   * GET /api/requests/me
+   */
+  async getMyRequests(req, res) {
+    try {
+      const user = req.user || {};
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const filters = {
+        status: req.query.status,
+        date_from: req.query.date_from,
+        date_to: req.query.date_to,
+        search: req.query.search
+      };
+      Object.keys(filters).forEach(k => filters[k] === undefined && delete filters[k]);
+
+      // Admin
+      if (user.staff_type === 'Admin' || user.role === 'Admin') {
+        // If admin applied a status filter for pending requests, use getPendingRequests
+        // Otherwise use a filtered query so status/coordinator/date/search filters are honored
+        let result;
+        if (filters.status === 'Pending_Admin_Review') {
+          result = await eventRequestService.getPendingRequests(filters, page, limit);
+        } else if (Object.keys(filters).length > 0) {
+          // Use filtered method (honors status, coordinator, date range, search)
+          result = await eventRequestService.getFilteredRequests(filters, page, limit);
+        } else {
+          result = await eventRequestService.getAllRequests(page, limit);
+        }
+        // Enrich similar to getAllRequests controller behavior
+        const enriched = await Promise.all(result.requests.map(async (r) => {
+          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+          const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
+          const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+          let districtInfo = null;
+          try {
+            if (coordinator && coordinator.District_ID) {
+              districtInfo = await require('../../models/index').District.findOne({ District_ID: coordinator.District_ID }).catch(() => null);
+            }
+          } catch (e) { districtInfo = null; }
+
+          return {
+            ...r.toObject(),
+            event: event ? event.toObject() : null,
+            coordinator: coordinator ? {
+              ...coordinator.toObject(),
+              staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null,
+              District_Name: districtInfo ? districtInfo.District_Name : undefined,
+              District_Number: districtInfo ? districtInfo.District_Number : undefined
+            } : null
+          };
+        }));
+
+        return res.status(200).json({ success: true, data: enriched, pagination: result.pagination });
+      }
+
+      // Coordinator
+      if (user.staff_type === 'Coordinator' || user.role === 'Coordinator') {
+        const coordinatorId = user.Coordinator_ID || user.id || user.CoordinatorId || user.CoordinatorId;
+        const result = await eventRequestService.getCoordinatorRequests(coordinatorId, filters, page, limit);
+        // Enrich each request similar to getCoordinatorRequests
+        const enriched = await Promise.all(result.requests.map(async (r) => {
+          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+          const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
+          const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+          let districtInfo = null;
+          try {
+            if (coordinator && coordinator.District_ID) {
+              districtInfo = await require('../../models/index').District.findOne({ District_ID: coordinator.District_ID }).catch(() => null);
+            }
+          } catch (e) { districtInfo = null; }
+
+          return {
+            ...r.toObject(),
+            event: event ? event.toObject() : null,
+            coordinator: coordinator ? {
+              ...coordinator.toObject(),
+              staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null,
+              District_Name: districtInfo ? districtInfo.District_Name : undefined,
+              District_Number: districtInfo ? districtInfo.District_Number : undefined
+            } : null
+          };
+        }));
+
+        return res.status(200).json({ success: true, data: enriched, pagination: result.pagination });
+      }
+
+      // Stakeholder
+      const stakeholderId = user.Stakeholder_ID || user.StakeholderId || user.id || user.StakeholderId;
+      if (stakeholderId) {
+        const result = await eventRequestService.getRequestsByStakeholder(stakeholderId, page, limit);
+        return res.status(200).json({ success: true, data: result.requests, pagination: result.pagination });
+      }
+
+      return res.status(403).json({ success: false, message: 'Unable to determine user role or id' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to retrieve user requests' });
     }
   }
 

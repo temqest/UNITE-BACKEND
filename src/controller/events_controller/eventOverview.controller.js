@@ -107,6 +107,37 @@ class EventOverviewController {
   }
 
   /**
+   * Public events for calendar
+   * GET /api/public/events
+   */
+  async getPublicEvents(req, res) {
+    try {
+      const filters = {
+        date_from: req.query.date_from,
+        date_to: req.query.date_to,
+        category: req.query.category
+      };
+
+      Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+
+      const options = {
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 200
+      };
+
+      const result = await eventOverviewService.getPublicEvents(filters, options);
+
+      return res.status(200).json({
+        success: true,
+        data: result.events,
+        pagination: result.pagination
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to retrieve public events' });
+    }
+  }
+
+  /**
    * Get recent events
    * GET /api/events/recent
    */
