@@ -47,8 +47,21 @@ class EventRequestController {
    */
   async createImmediateEvent(req, res) {
     try {
-      const { creatorId, creatorRole } = req.body;
-      const eventData = req.body;
+      // Prefer deriving creator identity from authenticated token if present.
+      // For legacy clients (no token) we still accept creatorId/creatorRole in the body.
+      const user = req.user || null;
+      const body = req.body || {};
+      let creatorId = body.creatorId || null;
+      let creatorRole = body.creatorRole || null;
+      const eventData = body;
+
+      if (user) {
+        // Determine role and id from token
+        const inferredRole = user.staff_type || user.role || null;
+        const inferredId = user.Admin_ID || user.Coordinator_ID || user.id || user.Stakeholder_ID || null;
+        if (inferredRole) creatorRole = creatorRole || inferredRole;
+        if (inferredId) creatorId = creatorId || inferredId;
+      }
 
       if (!creatorId || !creatorRole) {
         return res.status(400).json({ success: false, message: 'creatorId and creatorRole are required' });
@@ -192,7 +205,19 @@ class EventRequestController {
   async assignStaffToEvent(req, res) {
     try {
       const { requestId } = req.params;
-      const { adminId, eventId, staffMembers } = req.body;
+      // Prefer deriving adminId from authenticated token when available.
+      // For legacy clients (no token) we still accept adminId in the body.
+      const user = req.user;
+      let adminId = null;
+      if (user) {
+        if (user.Admin_ID) adminId = user.Admin_ID;
+        else if (user.Coordinator_ID) adminId = user.Coordinator_ID;
+        else if (user.id) adminId = user.id;
+      }
+      const { eventId, staffMembers } = req.body;
+
+      // If adminId is still missing, accept adminId from body for backwards compatibility
+      if (!adminId && req.body && req.body.adminId) adminId = req.body.adminId;
 
       if (!adminId) {
         return res.status(400).json({

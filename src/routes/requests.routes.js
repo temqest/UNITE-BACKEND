@@ -32,7 +32,8 @@ router.post('/requests', async (req, res, next) => {
  * @desc    Create and publish event immediately (Admin or Coordinator)
  * @access  Private
  */
-router.post('/events/direct', async (req, res, next) => {
+// Require authentication so the server can derive creator identity from token
+router.post('/events/direct', authenticate, async (req, res, next) => {
   try {
     await eventRequestController.createImmediateEvent(req, res);
   } catch (error) {
@@ -222,7 +223,8 @@ router.post('/requests/:requestId/admin-action', authenticate, async (req, res, 
  * @desc    Assign staff to event (Admin only)
  * @access  Private (Admin only)
  */
-router.post('/requests/:requestId/staff', async (req, res, next) => {
+// Protect staff assignment with authentication so server can derive admin from token
+router.post('/requests/:requestId/staff', authenticate, async (req, res, next) => {
   try {
     await eventRequestController.assignStaffToEvent(req, res);
   } catch (error) {
