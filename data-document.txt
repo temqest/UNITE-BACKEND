@@ -153,3 +153,24 @@ request:
     "$date": { "$numberLong": "1763424000000" }
   }
 }
+
+registration code
+{
+  "_id": { "$oid": "6916eb3436182f760ae567bd" },
+  "Code": "35HJ3X",
+  "Coordinator_ID": "COORD_1762246751437_hwiptms8w",
+  "District_ID": "CSUR-001",
+  "Max_Uses": { "$numberInt": "10" },
+  "Uses": { "$numberInt": "2" },
+  "Expires_At": {
+    "$date": { "$numberLong": "1763473998320" }
+  },
+  "IsActive": true,
+  "createdAt": {
+    "$date": { "$numberLong": "1762264398506" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762277985042" }
+  },
+  "__v": { "$numberInt": "0" }
+}

@@ -7,6 +7,9 @@ const {
   stakeholderController
 } = require('../controller/users_controller');
 
+const registrationCodeService = require('../services/users_services/registrationCode.service');
+const { District } = require('../models/index');
+
 const authenticate = require('../middleware/authenticate');
 const { requireAdmin, requireCoordinator, requireAdminOrCoordinator } = require('../middleware/requireRoles');
 
@@ -385,6 +388,30 @@ router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requ
     await coordinatorController.listRegistrationCodes(req, res);
   } catch (error) {
     next(error);
+  }
+});
+
+// Public validation endpoint for registration codes (used by signup flow)
+router.get('/registration-codes/validate', async (req, res, next) => {
+  try {
+    const { code } = req.query || {};
+    if (!code) return res.status(400).json({ success: false, message: 'Code query param is required' });
+
+    const result = await registrationCodeService.validate(String(code));
+    const reg = result.code;
+    const district = await District.findOne({ District_ID: reg.District_ID });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        Code: reg.Code,
+        Coordinator_ID: reg.Coordinator_ID,
+        District_ID: reg.District_ID,
+        Province_Name: district?.Province_Name || null
+      }
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message || 'Invalid or expired code' });
   }
 });
 
