@@ -67,10 +67,32 @@ class StakeholderController {
 
   async list(req, res) {
     try {
+      // Start with client-provided filters but enforce server-side restrictions
       const filters = {
         district_id: req.query.district_id,
         email: req.query.email
       };
+
+      // Authorization: enforce coordinator-scoped listing on the server
+      const actor = req.user || {};
+      const role = String(actor.role || '').toLowerCase();
+      const isAdmin = (role && role.includes('admin')) || !!actor.isAdmin;
+
+      if (!isAdmin) {
+        const isCoordinator = role && role.includes('coordinator');
+        // Coordinators must only see stakeholders in their district.
+        if (!isCoordinator) {
+          return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+        }
+
+        const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
+        if (!actorDistrict) {
+          return res.status(403).json({ success: false, message: 'Unauthorized: coordinator missing district information' });
+        }
+
+        // Override any client-supplied district filter to prevent bypassing
+        filters.district_id = String(actorDistrict);
+      }
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const result = await stakeholderService.list(filters, page, limit);
