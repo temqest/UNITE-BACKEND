@@ -770,16 +770,19 @@ class EventRequestService {
         // Swallow history creation failures to avoid blocking event creation
       }
 
-      // Notify coordinator about the auto-approved request (if coordinator id exists)
+      // Notify the appropriate recipient about the auto-approved request (if id exists)
       try {
         if (requestCoordinatorId) {
+          const recipientId = request.MadeByStakeholderID ? request.MadeByStakeholderID : requestCoordinatorId;
+          const recipientType = request.MadeByStakeholderID ? 'Stakeholder' : 'Coordinator';
           await Notification.createAdminActionNotification(
-            requestCoordinatorId,
+            recipientId,
             requestId,
             eventId,
             'Accepted',
             null,
-            null
+            null,
+            recipientType
           );
         }
       } catch (e) {
@@ -1072,19 +1075,31 @@ class EventRequestService {
       console.log('[Service] updateEventRequest returning', { requestId, event: freshEvent ? freshEvent.toObject() : null, category: categoryData });
 
       // If the actor is admin or coordinator, auto-approve the updated request/event
+      // but only when the request was NOT created by a stakeholder. If the
+      // request was created by a stakeholder, admins/coordinators must not
+      // finalize it — the stakeholder must confirm any reschedule/changes.
       if (actorIsAdmin || actorIsCoordinator) {
         try {
           const approverId = actorId;
           if (freshEvent) {
-            freshEvent.Status = 'Approved';
+            // If stakeholder created the request, do not auto-publish the event
+            const createdByStakeholder = !!request.MadeByStakeholderID;
+            if (createdByStakeholder) {
+              freshEvent.Status = 'Pending';
+            } else {
+              freshEvent.Status = 'Approved';
+            }
             freshEvent.ApprovedByAdminID = approverId;
             await freshEvent.save();
           }
-          // mark request as completed
-          request.Status = 'Completed';
-          if (!request.CoordinatorFinalAction) {
-            request.CoordinatorFinalAction = 'Approved';
-            request.CoordinatorFinalActionDate = new Date();
+          // mark request as completed only when not stakeholder-created
+          const createdByStakeholder = !!request.MadeByStakeholderID;
+          if (!createdByStakeholder) {
+            request.Status = 'Completed';
+            if (!request.CoordinatorFinalAction) {
+              request.CoordinatorFinalAction = 'Approved';
+              request.CoordinatorFinalActionDate = new Date();
+            }
           }
           request.Admin_ID = approverId;
           await request.save();
@@ -1204,15 +1219,20 @@ class EventRequestService {
           const createdByStakeholder = !!request.MadeByStakeholderID;
 
           // If an Admin or Coordinator performs the reschedule:
-          // - If the request was created by a stakeholder, do NOT auto-approve.
-          //   Leave the request awaiting stakeholder confirmation (keep request.Status
-          //   as-is) and set event to 'Pending' so it's not published yet.
+          // - If the request was created by a stakeholder, DO NOT auto-approve.
+          //   Leave the request awaiting stakeholder confirmation and set event
+          //   to 'Pending' so it's not published yet.
           // - If the request was NOT created by a stakeholder (i.e., created by
           //   admin/coordinator), auto-approve the event and complete the request.
           if (actorRole === 'Admin' || actorRole === 'Coordinator') {
-            // Admins and coordinators' actions are treated as final approvals in this system.
-            // Always mark the event as Approved when they reschedule (they don't need further stakeholder confirmation).
-            event.Status = 'Approved';
+            const createdByStakeholder = !!request.MadeByStakeholderID;
+            if (createdByStakeholder) {
+              // Admin rescheduled a stakeholder-owned request: require stakeholder confirmation
+              event.Status = 'Pending';
+            } else {
+              // Admin/coordinator-owned request — auto-approve
+              event.Status = 'Approved';
+            }
           } else {
             // Non-admin actors (if allowed) keep previous rescheduled marker
             event.Status = 'Rescheduled';
@@ -1258,19 +1278,27 @@ class EventRequestService {
         event.ApprovedByAdminID = adminId;
         await event.save();
 
-        // For admin/coordinator actions, treat their decision as final and complete the request.
+        // For admin/coordinator actions, treat their decision as final and
+        // complete the request only when the request was NOT created by a stakeholder.
         if (actorRole === 'Admin' || actorRole === 'Coordinator') {
           try {
-            // Mark request completed and set coordinator final action based on the admin action
-            request.Status = 'Completed';
-            if (!request.CoordinatorFinalAction) {
-              if (action === 'Rejected') {
-                request.CoordinatorFinalAction = 'Rejected';
-              } else {
-                // Accepted or Rescheduled -> treat as approved by coordinator for audit
-                request.CoordinatorFinalAction = 'Approved';
+            const createdByStakeholder = !!request.MadeByStakeholderID;
+            if (!createdByStakeholder) {
+              // Mark request completed and set coordinator final action based on the admin action
+              request.Status = 'Completed';
+              if (!request.CoordinatorFinalAction) {
+                if (action === 'Rejected') {
+                  request.CoordinatorFinalAction = 'Rejected';
+                } else {
+                  // Accepted or Rescheduled -> treat as approved by coordinator for audit
+                  request.CoordinatorFinalAction = 'Approved';
+                }
+                request.CoordinatorFinalActionDate = new Date();
               }
-              request.CoordinatorFinalActionDate = new Date();
+            } else {
+              // Admin acted on a stakeholder-created request: do NOT finalize.
+              // Leave AdminAction present (so stakeholder can respond) but keep
+              // the request open for stakeholder confirmation.
             }
             await request.save();
           } catch (e) {
@@ -1297,15 +1325,22 @@ class EventRequestService {
         event ? event.Start_Date : null
       );
 
-      // Send notification to coordinator
-      await Notification.createAdminActionNotification(
-        request.Coordinator_ID,
-        requestId,
-        request.Event_ID,
-        action,
-        note,
-        rescheduledDate
-      );
+        // Send notification to the appropriate recipient (stakeholder if request was created by stakeholder)
+        try {
+          const recipientId = request.MadeByStakeholderID ? request.MadeByStakeholderID : request.Coordinator_ID;
+          const recipientType = request.MadeByStakeholderID ? 'Stakeholder' : 'Coordinator';
+          await Notification.createAdminActionNotification(
+            recipientId,
+            requestId,
+            request.Event_ID,
+            action,
+            note,
+            rescheduledDate,
+            recipientType
+          );
+        } catch (e) {
+          // swallow notification errors
+        }
 
       return {
         success: true,
@@ -1516,13 +1551,16 @@ class EventRequestService {
 
       // Send notification to the coordinator (recipient: Coordinator)
       try {
+        const recipientId = request.MadeByStakeholderID ? request.MadeByStakeholderID : request.Coordinator_ID;
+        const recipientType = request.MadeByStakeholderID ? 'Stakeholder' : 'Coordinator';
         await Notification.createAdminActionNotification(
-          request.Coordinator_ID,
+          recipientId,
           request.Request_ID,
           request.Event_ID,
           action,
           null,
-          null
+          null,
+          recipientType
         );
       } catch (e) {
         // swallow notification errors

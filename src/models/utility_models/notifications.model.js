@@ -14,7 +14,7 @@ const notificationSchema = new mongoose.Schema({
   },
   RecipientType: {
     type: String,
-    enum: ['Admin', 'Coordinator'],
+    enum: ['Admin', 'Coordinator', 'Stakeholder'],
     required: true
   },
   Request_ID: {
@@ -102,7 +102,9 @@ notificationSchema.statics.createNewRequestNotification = function(adminId, requ
 };
 
 // Static method to create notification for admin action
-notificationSchema.statics.createAdminActionNotification = function(coordinatorId, requestId, eventId, action, note, rescheduledDate) {
+// recipientId: id of the recipient (coordinator or stakeholder)
+// recipientType: optional string 'Coordinator'|'Stakeholder' (defaults to 'Coordinator')
+notificationSchema.statics.createAdminActionNotification = function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator') {
   let title, message, type;
   
   switch(action) {
@@ -129,8 +131,8 @@ notificationSchema.statics.createAdminActionNotification = function(coordinatorI
 
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    Recipient_ID: coordinatorId,
-    RecipientType: 'Coordinator',
+    Recipient_ID: recipientId,
+    RecipientType: recipientType,
     Request_ID: requestId,
     Event_ID: eventId,
     Title: title,
