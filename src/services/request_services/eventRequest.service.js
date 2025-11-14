@@ -140,6 +140,15 @@ class EventRequestService {
     };
 
     try {
+      // Determine actor role/id (controller may tag eventData with these)
+      const actorRole = (options && options.actorRole) || (eventData && eventData._actorRole) || null;
+      const actorId = (options && options.actorId) || (eventData && eventData._actorId) || null;
+
+      // If actor is Admin or Coordinator, bypass validation rules entirely
+      if (actorRole && (String(actorRole).toLowerCase() === 'admin' || String(actorRole).toLowerCase() === 'coordinator')) {
+        return { isValid: true, errors: [], warnings: [] };
+      }
+
       // Normalize date to Date instance
       const startDate = new Date(eventData.Start_Date);
       if (isNaN(startDate.getTime())) {
@@ -201,10 +210,20 @@ class EventRequestService {
       // Optionally skip this check for admin/coordinator actors who auto-approve
       // their own actions (they shouldn't be limited by pending stakeholder requests).
       if (!options.skipPendingLimit) {
-        const pendingCount = await EventRequest.countDocuments({
-          Coordinator_ID: coordinatorId,
-          Status: 'Pending_Admin_Review'
-        });
+        let pendingCount = 0;
+        // If actor is a stakeholder, count only their own pending requests
+        if (actorRole && String(actorRole).toLowerCase() === 'stakeholder' && actorId) {
+          pendingCount = await EventRequest.countDocuments({
+            MadeByStakeholderID: actorId,
+            Status: 'Pending_Admin_Review'
+          });
+        } else {
+          // Default: count pending for the coordinator
+          pendingCount = await EventRequest.countDocuments({
+            Coordinator_ID: coordinatorId,
+            Status: 'Pending_Admin_Review'
+          });
+        }
         const pendingCheck = systemSettings.validatePendingRequestsLimit(pendingCount);
         if (!pendingCheck.isValid) {
           validationResults.isValid = false;
@@ -214,11 +233,33 @@ class EventRequestService {
 
       // 4. Check for overlapping requests (same coordinator, same date)
       if (systemSettings.getSetting('preventOverlappingRequests')) {
-        const hasOverlap = await this.checkCoordinatorOverlappingRequests(
-          coordinatorId,
-          startDate,
-          excludeRequestId
-        );
+        let hasOverlap = false;
+        // If actor is a stakeholder, only consider their own requests for overlap
+        if (actorRole && String(actorRole).toLowerCase() === 'stakeholder' && actorId) {
+          // Find requests created by this stakeholder
+          const requests = await EventRequest.find({ MadeByStakeholderID: actorId, Status: { $nin: ['Rejected', 'Rejected_By_Admin'] } });
+          for (const request of requests) {
+            const event = await Event.findOne({ Event_ID: request.Event_ID });
+            if (event && event.Start_Date) {
+              const requestEventDate = new Date(event.Start_Date);
+              requestEventDate.setHours(0, 0, 0, 0);
+              const startDay = new Date(startDate);
+              startDay.setHours(0,0,0,0);
+              if (requestEventDate.getTime() === startDay.getTime()) {
+                hasOverlap = true;
+                break;
+              }
+            }
+          }
+        } else {
+          // Default: coordinator-level overlap check
+          hasOverlap = await this.checkCoordinatorOverlappingRequests(
+            coordinatorId,
+            startDate,
+            excludeRequestId
+          );
+        }
+
         if (hasOverlap) {
           validationResults.isValid = false;
           validationResults.errors.push('You already have an event request for this date');
@@ -288,6 +329,96 @@ class EventRequestService {
 
     } catch (error) {
       throw new Error(`Validation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Compute allowed UI actions for a given actor and request/event state
+   * @param {string|null} actorRole - 'Admin' | 'Coordinator' | 'Stakeholder' | null
+   * @param {string|null} actorId - actor identifier
+   * @param {Object} requestDoc - EventRequest mongoose doc or plain object
+   * @param {Object} eventDoc - Event mongoose doc or plain object
+   * @returns {string[]} allowed actions list
+   */
+  computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) {
+    try {
+      const role = actorRole ? String(actorRole).toLowerCase() : null;
+      const event = eventDoc || (requestDoc ? requestDoc.event : null) || {};
+      const req = requestDoc || {};
+
+      const isPublished = event && (String(event.Status) === 'Approved' || String(event.Status) === 'Completed');
+
+      // Published: all users see view, edit, manage-staff, resched
+      if (isPublished) {
+        return ['view', 'edit', 'manage-staff', 'resched'];
+      }
+
+      // Not published: behavior differs by role
+      if (role === 'admin' || role === 'coordinator') {
+        // admins/coordinators always see full approval controls before publish
+        return ['view', 'resched', 'accept', 'reject'];
+      }
+
+      if (role === 'stakeholder') {
+        const adminAction = req.AdminAction || null; // e.g., 'Accepted' | 'Rejected' | 'Rescheduled'
+        const stakeholderAction = req.StakeholderFinalAction || null;
+
+        // If admin hasn't acted yet, stakeholder only sees view
+        if (!adminAction) {
+          return ['view'];
+        }
+
+        // Admin has acted: stakeholder can respond
+        if (String(adminAction).toLowerCase().includes('reject')) {
+          // If admin rejected, stakeholder may accept to re-apply; if already acted, only view
+          if (!stakeholderAction) return ['view', 'accept'];
+          return ['view'];
+        }
+
+        // Admin accepted or rescheduled: stakeholder can accept or reject unless they've already acted
+        if (!stakeholderAction) return ['view', 'accept', 'reject'];
+        return ['view'];
+      }
+
+      // Unknown actor: only view by default
+      return ['view'];
+    } catch (e) {
+      return ['view'];
+    }
+  }
+
+  /**
+   * Compute boolean flags for common UI actions based on allowedActions
+   * @param {string|null} actorRole
+   * @param {string|null} actorId
+   * @param {Object} requestDoc
+   * @param {Object} eventDoc
+   * @returns {Object} flags like { canView, canEdit, canManageStaff, canReschedule, canAccept, canReject }
+   */
+  computeActionFlags(actorRole, actorId, requestDoc, eventDoc) {
+    try {
+      const allowed = this.computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) || [];
+      const has = (a) => allowed.includes(a);
+      return {
+        canView: has('view'),
+        canEdit: has('edit'),
+        canManageStaff: has('manage-staff'),
+        canReschedule: has('resched') || has('reschedule') || has('resched'),
+        canAccept: has('accept') || has('Accepted') || has('approve'),
+        canReject: has('reject') || has('reject') === true,
+        // convenience: any admin-like controls
+        canAdminAction: has('accept') || has('reject') || has('resched')
+      };
+    } catch (e) {
+      return {
+        canView: true,
+        canEdit: false,
+        canManageStaff: false,
+        canReschedule: false,
+        canAccept: false,
+        canReject: false,
+        canAdminAction: false
+      };
     }
   }
 
@@ -434,14 +565,33 @@ class EventRequestService {
       await request.save();
 
       // Create history entry
-      const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: coordinatorId });
+      const models = require('../../models/index');
+      const bloodbankStaff = await models.BloodbankStaff.findOne({ ID: coordinatorId }).catch(() => null);
       const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
-      
+
+      // If this request was created by a stakeholder, prefer using the stakeholder's
+      // full name as the "created by" label so coordinators can easily see who
+      // submitted the request. Otherwise use the coordinator/staff name.
+      let createdByName = coordinatorName;
+      if (eventData.MadeByStakeholderID) {
+        try {
+          const stakeholder = await models.Stakeholder.findOne({ Stakeholder_ID: eventData.MadeByStakeholderID }).catch(() => null);
+          if (stakeholder) {
+            const sfirst = stakeholder.First_Name || stakeholder.FirstName || stakeholder.First || '';
+            const slast = stakeholder.Last_Name || stakeholder.LastName || stakeholder.Last || '';
+            const full = `${(sfirst || '').toString().trim()} ${(slast || '').toString().trim()}`.trim();
+            if (full) createdByName = full;
+          }
+        } catch (e) {
+          // ignore lookup failures and fall back to coordinatorName
+        }
+      }
+
       await EventRequestHistory.createRequestHistory(
         requestId,
         eventId,
         coordinatorId,
-        coordinatorName
+        createdByName
       );
 
       // Send notification to admin
@@ -456,16 +606,25 @@ class EventRequestService {
         );
       }
 
+      // Attach createdByName to returned payloads so frontend can display creator
+      const returnedRequest = {
+        Request_ID: request.Request_ID,
+        Event_ID: event.Event_ID,
+        Status: request.Status,
+        created_at: request.createdAt,
+        createdByName: createdByName || null,
+        MadeByStakeholderID: request.MadeByStakeholderID || null
+      };
+
+      // Do not modify persisted schemas here (avoid adding ad-hoc properties to DB records),
+      // but include createdByName on the returned event object for UI convenience.
+      const returnedEvent = event.toObject ? { ...event.toObject(), createdByName: createdByName || null } : { ...event, createdByName: createdByName || null };
+
       return {
         success: true,
         message: 'Event request submitted successfully',
-        request: {
-          Request_ID: request.Request_ID,
-          Event_ID: event.Event_ID,
-          Status: request.Status,
-          created_at: request.createdAt
-        },
-        event: event,
+        request: returnedRequest,
+        event: returnedEvent,
         category: categoryData,
         warnings: validation.warnings
       };
@@ -493,7 +652,10 @@ class EventRequestService {
         if (!coordinator) throw new Error('Coordinator not found');
       }
 
-      // Validate scheduling rules (use coordinatorId when present, otherwise bypass overlap checks)
+      // Tag actor info (so validateSchedulingRules can skip checks for admin/coordinator)
+      eventData._actorRole = creatorRole;
+      eventData._actorId = creatorId;
+      // Validate scheduling rules (validateSchedulingRules will bypass for admin/coordinator)
       const validation = await this.validateSchedulingRules(coordinatorId || 'ADMIN', eventData);
       if (!validation.isValid) {
         throw new Error(`Validation failed: ${validation.errors.join(', ')}`);

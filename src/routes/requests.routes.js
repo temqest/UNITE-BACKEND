@@ -20,7 +20,8 @@ const {
  * @desc    Coordinator submits event request
  * @access  Private (Coordinator)
  */
-router.post('/requests', async (req, res, next) => {
+// Protect this route so server can derive actor identity (coordinator/stakeholder)
+router.post('/requests', authenticate, async (req, res, next) => {
   try {
     await eventRequestController.createEventRequest(req, res);
   } catch (error) {
@@ -185,7 +186,7 @@ router.get('/requests/blood-bags/:date', async (req, res, next) => {
  * @desc    Get event request by ID with full details
  * @access  Private
  */
-router.get('/requests/:requestId', async (req, res, next) => {
+router.get('/requests/:requestId', authenticate, async (req, res, next) => {
   try {
     await eventRequestController.getEventRequestById(req, res);
   } catch (error) {
