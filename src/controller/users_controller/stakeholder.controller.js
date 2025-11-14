@@ -116,12 +116,25 @@ class StakeholderController {
       if (!isAdmin) {
         // Allow coordinators only for stakeholders in their district
         const isCoordinator = role && role.includes('coordinator');
-        const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
-        if (!isCoordinator) {
-          return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
-        }
-        if (!actorDistrict || String(actorDistrict) !== String(stakeholder.District_ID)) {
-          return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only access stakeholders in their district' });
+        const isStakeholder = role && role.includes('stakeholder');
+
+        // Allow stakeholders to fetch their own record
+        if (isStakeholder) {
+          // actor.id comes from token payload (see signin flows)
+          const actorId = actor.id || actor.userId || actor.Stakeholder_ID || actor.stakeholder_id || null;
+          if (!actorId || String(actorId) !== String(stakeholder.Stakeholder_ID)) {
+            return res.status(403).json({ success: false, message: 'Unauthorized: stakeholders may only access their own record' });
+          }
+          // allowed: stakeholder requesting their own record
+        } else {
+          // existing coordinator checks
+          if (!isCoordinator) {
+            return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+          }
+          const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
+          if (!actorDistrict || String(actorDistrict) !== String(stakeholder.District_ID)) {
+            return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only access stakeholders in their district' });
+          }
         }
       }
 
