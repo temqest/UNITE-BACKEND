@@ -193,9 +193,7 @@ class EventRequestController {
         return res.status(403).json({ success: false, message: 'Unable to determine actor role from authentication token' });
       }
 
-      // (debug logs removed)
-
-  const result = await eventRequestService.updateEventRequest(requestId, actorId, updateData, actorIsAdmin, actorIsCoordinator, actorIsStakeholder);
+        const result = await eventRequestService.updateEventRequest(requestId, actorId, updateData, actorIsAdmin, actorIsCoordinator, actorIsStakeholder);
 
       return res.status(200).json({
         success: result.success,
@@ -208,7 +206,7 @@ class EventRequestController {
         updatedFields: result.updatedFields
       });
     } catch (error) {
-      // Log error for debugging update failures
+      // Log error
       console.error('[API] PUT /api/requests/:requestId - updateEventRequest error', {
         message: error.message,
         stack: error.stack

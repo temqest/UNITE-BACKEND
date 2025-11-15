@@ -34,9 +34,7 @@ class StakeholderController {
           email: result.stakeholder.Email || result.stakeholder.email || null,
           id: result.stakeholder.Stakeholder_ID || result.stakeholder.id || null,
         });
-        if (process.env.NODE_ENV !== 'production') {
-          try { console.log('[auth] setting unite_user cookie (stakeholder login):', cookieValue); } catch (e) {}
-        }
+        // Development: do not log cookie content to avoid leaking sensitive data
         const cookieOpts = {
           // HttpOnly so the cookie is only used by the server on subsequent requests
           httpOnly: true,

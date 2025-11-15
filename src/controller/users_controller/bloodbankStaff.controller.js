@@ -39,9 +39,7 @@ class BloodbankStaffController {
           email: result.user.Email || result.user.email || null,
           id: result.user.id || null,
         });
-        if (process.env.NODE_ENV !== 'production') {
-          try { console.log('[auth] setting unite_user cookie (staff login):', cookieValue); } catch (e) {}
-        }
+        // Development: do not log cookie content to avoid leaking sensitive data
         const cookieOpts = {
           // Make cookie HttpOnly so it's only sent to the server and cannot be read by JS.
           httpOnly: true,

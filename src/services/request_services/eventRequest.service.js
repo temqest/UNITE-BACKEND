@@ -814,7 +814,7 @@ class EventRequestService {
    */
   async getEventRequestById(requestId) {
     try {
-      console.log('[Service] getEventRequestById called', { requestId });
+      
       const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Event request not found');
@@ -881,7 +881,7 @@ class EventRequestService {
       };
 
     } catch (error) {
-      // Log full error for easier debugging (stack + message)
+      // Log full error
       try { console.error('[Service] getEventRequestById error', { message: error.message, stack: error.stack }); } catch (e) {}
       throw new Error(`Failed to get event request: ${error.message}`);
     }
@@ -902,18 +902,7 @@ class EventRequestService {
       }
 
       // Debug log: show what we're attempting to update and current request state
-      try {
-        console.log('[Service] updateEventRequest called', {
-          requestId,
-          coordinatorId,
-          actorIsAdmin,
-          requestStatus: request.Status,
-          requestCoordinatorId: request.Coordinator_ID,
-          updateDataKeys: updateData ? Object.keys(updateData) : null
-        });
-      } catch (e) {
-        // swallow logging errors
-      }
+      
 
       // Authorization rules:
       // - Admins may update any request
@@ -1010,7 +999,7 @@ class EventRequestService {
   await event.save();
     // Resolve category type for this update: prefer payload, then event, then request
     const categoryType = updateData && updateData.categoryType ? updateData.categoryType : (event.Category || request.Category);
-    console.log('[Service] resolved categoryType for update', { requestId, categoryType });
+    
 
     // Remove control/actor fields from updateData copy so we don't accidentally persist them into category docs
     if (updateData.adminId) delete updateData.adminId;
@@ -1018,14 +1007,11 @@ class EventRequestService {
 
   // Update category-specific data if provided (use resolved categoryType)
   if (categoryType === 'BloodDrive' && (updateData.Target_Donation !== undefined && updateData.Target_Donation !== null)) {
-        console.log('[Service] updating BloodDrive', { eventId: event.Event_ID, Target_Donation: updateData.Target_Donation, VenueType: updateData.VenueType });
         const bdRes = await BloodDrive.updateOne(
           { BloodDrive_ID: event.Event_ID },
           { Target_Donation: updateData.Target_Donation, VenueType: updateData.VenueType }
         );
-        console.log('[Service] BloodDrive.updateOne result', bdRes);
         const bdDoc = await BloodDrive.findOne({ BloodDrive_ID: event.Event_ID }).catch(() => null);
-        console.log('[Service] BloodDrive after update', bdDoc ? bdDoc.toObject() : null);
   } else if (categoryType === 'Advocacy') {
         const advocacyData = {};
         if (updateData.Topic) advocacyData.Topic = updateData.Topic;
@@ -1036,20 +1022,14 @@ class EventRequestService {
           advocacyData.ExpectedAudienceSize = parseInt(expectedRaw, 10);
         }
         if (updateData.PartnerOrganization) advocacyData.PartnerOrganization = updateData.PartnerOrganization;
-        console.log('[Service] updating Advocacy', { eventId: event.Event_ID, advocacyData });
         const advRes = await Advocacy.updateOne({ Advocacy_ID: event.Event_ID }, advocacyData);
-        console.log('[Service] Advocacy.updateOne result', advRes);
         const advDoc = await Advocacy.findOne({ Advocacy_ID: event.Event_ID }).catch(() => null);
-        console.log('[Service] Advocacy after update', advDoc ? advDoc.toObject() : null);
   } else if (categoryType === 'Training') {
         const trainingData = {};
         if (updateData.TrainingType) trainingData.TrainingType = updateData.TrainingType;
         if (updateData.MaxParticipants) trainingData.MaxParticipants = updateData.MaxParticipants;
-  console.log('[Service] updating Training', { eventId: event.Event_ID, trainingData });
   const trRes = await Training.updateOne({ Training_ID: event.Event_ID }, trainingData);
-  console.log('[Service] Training.updateOne result', trRes);
   const trDoc = await Training.findOne({ Training_ID: event.Event_ID }).catch(() => null);
-  console.log('[Service] Training after update', trDoc ? trDoc.toObject() : null);
       }
 
       // Re-fetch the up-to-date event and category data to return to caller
@@ -1072,7 +1052,7 @@ class EventRequestService {
         }
       }
 
-      console.log('[Service] updateEventRequest returning', { requestId, event: freshEvent ? freshEvent.toObject() : null, category: categoryData });
+      
 
       // If the actor is admin or coordinator, auto-approve the updated request/event
       // but only when the request was NOT created by a stakeholder. If the
