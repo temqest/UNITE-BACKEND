@@ -58,8 +58,14 @@ class BloodbankStaffController {
         // Ensure any previous cookie (possibly set without HttpOnly) is removed
         // before setting the new one. This prevents stale cookie values when
         // switching accounts in the same browser session.
+        // Use same options as setting to ensure proper clearing
         try {
-          res.clearCookie('unite_user', { path: '/' });
+          res.clearCookie('unite_user', { 
+            path: '/',
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            httpOnly: true
+          });
         } catch (e) {}
 
         // Do not force domain in case different local hosts (127.0.0.1 vs localhost)
