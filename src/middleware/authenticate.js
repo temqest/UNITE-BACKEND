@@ -20,7 +20,12 @@ module.exports = function authenticate(req, res, next) {
 
     if (token) {
       const decoded = verifyToken(token);
-      req.user = decoded; // { id, role, district_id?, type }
+      // Ensure StaffType is set from role for frontend compatibility
+      req.user = {
+        ...decoded,
+        StaffType: decoded.role || decoded.StaffType || null,
+        role: decoded.role || decoded.StaffType || null
+      }; // { id, role, district_id?, type, StaffType }
       return next();
     }
 
@@ -35,7 +40,8 @@ module.exports = function authenticate(req, res, next) {
           // Normalize to the shape expected by requireRoles and other logic.
           req.user = {
             id: parsed.id || parsed.ID || null,
-            role: parsed.role || parsed.staff_type || null,
+            role: parsed.role || parsed.staff_type || parsed.StaffType || null,
+            StaffType: parsed.StaffType || parsed.staff_type || parsed.role || null,
             email: parsed.email || parsed.Email || null,
             isAdmin: !!parsed.isAdmin
           };
