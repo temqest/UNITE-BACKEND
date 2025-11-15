@@ -11,12 +11,11 @@ const createTrainingSchema = Joi.object({
     }),
 
   TrainingType: Joi.string()
-    .required()
     .trim()
     .min(3)
     .max(100)
     .messages({
-      'any.required': 'Training Type is required',
+      //'any.required': 'Training Type is required',
       'string.empty': 'Training Type cannot be empty',
       'string.min': 'Training Type must be at least 3 characters long',
       'string.max': 'Training Type must not exceed 100 characters'

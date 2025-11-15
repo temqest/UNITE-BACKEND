@@ -4,7 +4,6 @@ const eventStaffSchema = new mongoose.Schema({
   EventID: {
     type: String,
     required: true,
-    unique: true,
     trim: true,
     ref: 'Event'
   },

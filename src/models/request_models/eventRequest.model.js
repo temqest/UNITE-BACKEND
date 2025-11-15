@@ -19,6 +19,18 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Coordinator'
   },
+  MadeByStakeholderID: {
+    type: String,
+    required: false,
+    trim: true,
+    ref: 'Stakeholder'
+  },
+  // Category/type of the event (e.g., 'BloodDrive', 'Training', 'Advocacy')
+  Category: {
+    type: String,
+    required: false,
+    trim: true
+  },
   Admin_ID: {
     type: String,
     trim: true,
@@ -69,6 +81,15 @@ const eventRequestSchema = new mongoose.Schema({
     default: null
   },
   CoordinatorFinalActionDate: {
+    type: Date
+  },
+  // Stakeholder's final confirmation after admin/coordinator review
+  StakeholderFinalAction: {
+    type: String,
+    enum: ['Accepted', 'Rejected', null],
+    default: null
+  },
+  StakeholderFinalActionDate: {
     type: Date
   },
   // Overall status tracking the workflow

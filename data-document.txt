@@ -1,0 +1,200 @@
+an event has this:
+
+{
+  "_id": { "$oid": "6912fd2fa5247cfc044951c9" },
+  "Event_ID": "EVENT_1762624202151_ahnifopau",
+  "Event_Title": "Training Event 1",
+  "Location": "Iriga City",
+  "Start_Date": {
+    "$date": { "$numberLong": "1763769600000" }
+  },
+  "End_Date": {
+    "$date": { "$numberLong": "1763812800000" }
+  },
+  "ApprovedByAdminID": "ADMIN_BOOTSTRAP_001",
+  "MadeByCoordinatorID": "COORD_1762246751437_hwiptms8w",
+  "Email": "pvillamer@gmail.com",
+  "Phone_Number": "09686255210",
+  "Category": "Training",
+  "Status": "Approved",
+  "createdAt": {
+    "$date": { "$numberLong": "1762624202258" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762634442772" }
+  },
+  "__v": { "$numberInt": "0" },
+  "Event_Description": "Test 2",
+  "StaffAssignmentID": "STAFF_1762634442771_e8ahxwbi1"
+}
+
+and also each event is a parent entity of a specefic type of event which contains this:
+
+training:
+
+{
+  "_id": { "$oid": "6912fd6ba5247cfc044951ca" },
+  "Training_ID": "EVENT_1762624202151_ahnifopau",
+  "TrainingType": "How to suck blood 2",
+  "MaxParticipants": { "$numberInt": "150" },
+  "createdAt": {
+    "$date": { "$numberLong": "1762624202166" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762632032816" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+advocacy:
+
+{
+  "_id": { "$oid": "6912fd8ea5247cfc044951cb" },
+  "Advocacy_ID": "EVENT_1762628133544_4o91biuxt",
+  "TargetAudience": "Students",
+  "ExpectedAudienceSize": { "$numberInt": "120" }
+  "createdAt": {
+    "$date": { "$numberLong": "1762628133577" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762632002678" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+blood drive:
+
+{
+  "_id": { "$oid": "6912fda4a5247cfc044951cc" },
+  "BloodDrive_ID": "EVENT_1762623648202_qqxgutqgb",
+  "Target_Donation": { "$numberInt": "25" },
+  "createdAt": {
+    "$date": { "$numberLong": "1762623648210" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762632138866" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+district:
+
+{
+  "_id": { "$oid": "69143d6f0d01d31692208a56" },
+  "District_ID": "CSUR-001",
+  "Province_Name": "Camarines Sur",
+  "District_Name": "1st District",
+  "District_City": "Iriga City",
+  "District_Number": "1",
+  "Region": "Region V (Bicol)",
+  "createdAt": {
+    "$date": { "$numberLong": "1735689600000" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1735689600000" }
+  }
+}
+
+notification:
+
+{
+  "_id": { "$oid": "6915f478c48966af331f9c6a" },
+  "Notification_ID": "NOTIF_1763030244991_6xp1hwlwh",
+  "Recipient_ID": "COORD_1762246751437_hwiptms8w",
+  "RecipientType": "Coordinator",
+  "Request_ID": "REQ_1762624202335_3ra783xcd",
+  "Event_ID": "EVENT_1762624202151_ahnifopau",
+  "Title": "Event Request Rescheduled",
+  "Message": "Your event request has been rescheduled by the admin. Note: ok",
+  "NotificationType": "AdminRescheduled",
+  "IsRead": false,
+  "ActionTaken": "Rescheduled",
+  "ActionNote": "ok",
+  "RescheduledDate": {
+    "$date": { "$numberLong": "1763769600000" }
+  },
+  "createdAt": {
+    "$date": { "$numberLong": "1763030244992" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1763030244992" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+request:
+
+{
+  "_id": { "$oid": "6915f4dbc48966af331f9c6b" },
+  "Request_ID": "REQ_1762623648375_naiuv5yym",
+  "Event_ID": "EVENT_1762623648202_qqxgutqgb",
+  "Coordinator_ID": "COORD_1762246751437_hwiptms8w",
+  "Category": "BloodDrive",
+  "Admin_ID": "ADMIN_BOOTSTRAP_001",
+  "AdminAction": "Accepted",
+  "AdminNote": "m",
+  "AdminActionDate": {
+    "$date": { "$numberLong": "1763030974105" }
+  },
+  "CoordinatorFinalAction": "Approved",
+  "CoordinatorFinalActionDate": {
+    "$date": { "$numberLong": "1762623648375" }
+  },
+  "StakeholderFinalAction": null,
+  "Status": "Completed",
+  "createdAt": {
+    "$date": { "$numberLong": "1762623648376" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1763030974106" }
+  },
+  "__v": { "$numberInt": "0" },
+  "RescheduledDate": {
+    "$date": { "$numberLong": "1763424000000" }
+  }
+}
+
+registration code
+{
+  "_id": { "$oid": "6916eb3436182f760ae567bd" },
+  "Code": "35HJ3X",
+  "Coordinator_ID": "COORD_1762246751437_hwiptms8w",
+  "District_ID": "CSUR-001",
+  "Max_Uses": { "$numberInt": "10" },
+  "Uses": { "$numberInt": "2" },
+  "Expires_At": {
+    "$date": { "$numberLong": "1763473998320" }
+  },
+  "IsActive": true,
+  "createdAt": {
+    "$date": { "$numberLong": "1762264398506" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762277985042" }
+  },
+  "__v": { "$numberInt": "0" }
+}
+
+stakeholder
+{
+  "_id": { "$oid": "69170592278abc9aadb27070" },
+  "Stakeholder_ID": "STKH_1762277984778_sn7hy6rfi",
+  "Province_Name": "Cam Sur",
+  "District_ID": "CSUR-001",
+  "Coordinator_ID": "COORD_1762246751437_hwiptms8w",
+  "First_Name": "John",
+  "Middle_Name": "Q.",
+  "Last_Name": "Pork",
+  "Email": "test@gmail.com",
+  "Phone_Number": "09123456789",
+  "Password": "$2b$10$OryRG5pgETHl/fzTJgb/j.1flOMr2AkqL/R.Om/Vrgk4ZttihIfi.",
+  "City_Municipality": "Pili",
+  "Registration_Code": "35HJ3X",
+  "createdAt": {
+    "$date": { "$numberLong": "1762277984858" }
+  },
+  "updatedAt": {
+    "$date": { "$numberLong": "1762277984858" }
+  },
+  "__v": { "$numberInt": "0" }
+}

@@ -14,6 +14,7 @@ const createStakeholderSchema = Joi.object({
   City_Municipality: Joi.string().required().trim().min(2).max(100),
   Organization_Institution: Joi.string().allow(null, '').trim().max(200),
   Registration_Code: Joi.string().allow(null, '').trim().max(100)
+  ,Coordinator_ID: Joi.string().allow(null, '').trim().max(200)
 });
 
 const updateStakeholderSchema = Joi.object({

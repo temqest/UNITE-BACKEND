@@ -1,5 +1,7 @@
 const bloodbankStaffService = require('../../services/users_services/bloodbankStaff.service');
 const { signToken } = require('../../utils/jwt');
+const coordinatorService = require('../../services/users_services/coordinator.service');
+const stakeholderService = require('../../services/users_services/stakeholder.service');
 
 /**
  * Bloodbank Staff Controller
@@ -24,6 +26,44 @@ class BloodbankStaffController {
       const result = await bloodbankStaffService.authenticateUser(email, password);
 
       const token = signToken({ id: result.user.id, role: result.user.staff_type, district_id: result.user.role_data?.district_id || null });
+
+      // Set a server-side cookie so the Next.js frontend can read user info
+      // during SSR and show admin/coordinator links immediately.
+      try {
+        const staffTypeStr = String(result.user.staff_type || '').toLowerCase();
+        const isAdminFlag = !!result.user.isAdmin || /sys|system/.test(staffTypeStr) || staffTypeStr.includes('admin');
+        const cookieValue = JSON.stringify({
+          role: result.user.staff_type || null,
+          isAdmin: !!isAdminFlag,
+          First_Name: result.user.First_Name || result.user.FirstName || null,
+          email: result.user.Email || result.user.email || null,
+          id: result.user.id || null,
+        });
+        // Development: do not log cookie content to avoid leaking sensitive data
+        const cookieOpts = {
+          // Make cookie HttpOnly so it's only sent to the server and cannot be read by JS.
+          httpOnly: true,
+          // Secure cookies are required in production when SameSite='none'. During
+          // local development we avoid setting secure so the cookie can be stored
+          // on localhost without HTTPS. Use SameSite='lax' in development to avoid
+          // browsers rejecting the cookie when Secure is false.
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+          path: '/',
+        };
+        // Ensure any previous cookie (possibly set without HttpOnly) is removed
+        // before setting the new one. This prevents stale cookie values when
+        // switching accounts in the same browser session.
+        try {
+          res.clearCookie('unite_user', { path: '/' });
+        } catch (e) {}
+
+        // Do not force domain in case different local hosts (127.0.0.1 vs localhost)
+        res.cookie('unite_user', cookieValue, cookieOpts);
+      } catch (e) {
+        // ignore cookie set errors
+      }
 
       return res.status(200).json({
         success: result.success,
@@ -268,6 +308,90 @@ class BloodbankStaffController {
         success: false,
         message: error.message || 'User not found'
       });
+    }
+  }
+
+  /**
+   * Logout endpoint - clears cookies and server session if present
+   * POST /api/auth/logout
+   */
+  async logout(req, res) {
+    try {
+      try {
+        res.clearCookie('unite_user', { path: '/' });
+        res.clearCookie('connect.sid', { path: '/' });
+      } catch (e) {}
+
+      try {
+        if (req.session && typeof req.session.destroy === 'function') {
+          req.session.destroy(() => {});
+        }
+      } catch (e) {}
+
+      return res.status(200).json({ success: true, message: 'Logged out' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to logout' });
+    }
+  }
+
+  /**
+   * List users for admin or coordinator
+   * Admin: return all coordinators and stakeholders (exclude the requesting admin)
+   * Coordinator: return stakeholders in their district
+   */
+  async listUsers(req, res) {
+    try {
+      const requester = req.user || {};
+      const role = requester.role || requester.Roles || null;
+      const requesterId = requester.id;
+
+      // Pagination params
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 50;
+
+      if (role === 'Admin') {
+        // Get coordinators (all)
+        const coordResult = await coordinatorService.getAllCoordinators({}, 1, 1000);
+        const coords = Array.isArray(coordResult?.coordinators) ? coordResult.coordinators : coordResult?.coordinators || [];
+
+        // Get stakeholders (all)
+        const stakeResult = await stakeholderService.list({}, 1, 1000);
+        const stakes = Array.isArray(stakeResult?.data) ? stakeResult.data : [];
+
+        // Normalize and combine
+        const coordinators = coords
+          .filter(c => !(c.Staff && (c.Staff.ID === requesterId || c.Staff.ID === requesterId)))
+          .map(c => ({
+            type: 'coordinator',
+            id: c.Coordinator_ID,
+            staff: c.Staff,
+            district: c.District
+          }));
+
+        const stakeholders = stakes.map(s => ({
+          type: 'stakeholder',
+          id: s.Stakeholder_ID,
+          first_name: s.First_Name,
+          last_name: s.Last_Name,
+          email: s.Email,
+          district_id: s.District_ID
+        }));
+
+        return res.status(200).json({ success: true, data: { coordinators, stakeholders } });
+      } else if (role === 'Coordinator') {
+        // Coordinator can only see stakeholders in their district
+        const districtId = requester.district_id || (requester.role_data && requester.role_data.district_id) || null;
+        if (!districtId) {
+          return res.status(400).json({ success: false, message: 'Coordinator district_id not found' });
+        }
+
+        const stakeResult = await stakeholderService.list({ district_id: districtId }, page, limit);
+        return res.status(200).json({ success: true, data: stakeResult.data, pagination: stakeResult.pagination });
+      }
+
+      return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to list users' });
     }
   }
 

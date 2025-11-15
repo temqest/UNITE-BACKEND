@@ -108,6 +108,42 @@ const createEventRequestSchema = Joi.object({
 
 // Validation schema for updating an existing event request
 const updateEventRequestSchema = Joi.object({
+  // actor identifiers (controller forwards either coordinatorId or adminId)
+  coordinatorId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Coordinator ID cannot be empty if provided' }),
+  adminId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Admin ID cannot be empty if provided' }),
+  // Stakeholder identifier when a stakeholder is submitting an update (allowed)
+  MadeByStakeholderID: Joi.string().trim().allow('', null).messages({ 'string.empty': 'MadeByStakeholderID cannot be empty if provided' }),
+  // also accept lower-cased variant if client uses different casing
+  madeByStakeholderID: Joi.string().trim().allow('', null).messages({ 'string.empty': 'madeByStakeholderID cannot be empty if provided' }),
+
+  // Common event fields that can be updated
+  Event_Title: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Event title cannot be empty' }),
+  Event_Description: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Event description cannot be empty' }),
+  Location: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Location cannot be empty' }),
+  Email: Joi.string().email().allow('', null).messages({ 'string.email': 'Email must be a valid email address' }),
+  Phone_Number: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Phone number cannot be empty' }),
+
+  // Date/time updates - frontend should only change times, but backend accepts ISO datetime
+  Start_Date: Joi.date().iso().allow('', null).messages({ 'date.base': 'Start_Date must be a valid ISO date' }),
+  End_Date: Joi.date().iso().allow('', null).messages({ 'date.base': 'End_Date must be a valid ISO date' }),
+
+  // Category hints and specific fields
+  categoryType: Joi.string().trim().allow('', null).messages({ 'string.empty': 'categoryType cannot be empty' }),
+
+  // Training
+  TrainingType: Joi.string().trim().allow('', null),
+  MaxParticipants: Joi.number().integer().allow(null),
+
+  // BloodDrive
+  Target_Donation: Joi.number().integer().allow(null),
+  VenueType: Joi.string().trim().allow('', null),
+
+  // Advocacy
+  Topic: Joi.string().trim().allow('', null),
+  TargetAudience: Joi.string().trim().allow('', null),
+  ExpectedAudienceSize: Joi.number().integer().allow(null),
+  PartnerOrganization: Joi.string().trim().allow('', null),
+
   Request_ID: Joi.string()
     .trim()
     .messages({
@@ -227,7 +263,90 @@ const validateCreateEventRequest = (req, res, next) => {
 };
 
 const validateUpdateEventRequest = (req, res, next) => {
-  const { error, value } = updateEventRequestSchema.validate(req.body, {
+  // Detect actor presence strictly from the authenticated token only.
+  // We ignore any actor ids that may be present in the body to prevent
+  // clients from spoofing roles. The route should be protected by
+  // authentication middleware so req.user is available.
+  const actorPresent = !!(req.user && (req.user.role === 'Admin' || req.user.staff_type === 'Admin' || req.user.role === 'Coordinator' || req.user.staff_type === 'Coordinator' || req.user.role === 'Stakeholder' || req.user.staff_type === 'Stakeholder'));
+
+  // Sanitize admin-related action fields (AdminAction/AdminNote/RescheduledDate)
+  // from the incoming payload for all update requests. Admin actions should be
+  // performed via the dedicated admin-action endpoint; stripping here prevents
+  // accidental validation triggers when clients include the full request object
+  // while performing a simple edit (e.g., changing title).
+  if (req.body) {
+    // Deep-clone the body so we don't mutate the original request unexpectedly
+    const cloneDeep = (o) => JSON.parse(JSON.stringify(o));
+    const originalBody = cloneDeep(req.body);
+    const sanitized = cloneDeep(req.body);
+
+    // Recursively strip any admin-related fields (many clients may send different casings or snake_case)
+    const stripAdminFields = (obj) => {
+      if (!obj || typeof obj !== 'object') return;
+      for (const key of Object.keys(obj)) {
+        const k = String(key);
+        const normalized = k.replace(/[^a-zA-Z]/g, '').toLowerCase();
+        // Keys that indicate admin action/note/date or reschedule
+        if (
+          normalized === 'adminaction' ||
+          normalized === 'adminnote' ||
+          normalized === 'adminactiondate' ||
+          normalized === 'rescheduleddate' ||
+          normalized === 'rescheduleddate'
+        ) {
+          delete obj[key];
+          continue;
+        }
+
+        // also remove common snake_case or camel variants that include admin + action/note
+        if (normalized.includes('admin') && (normalized.includes('action') || normalized.includes('note') || normalized.includes('rescheduled'))) {
+          delete obj[key];
+          continue;
+        }
+
+        // Recurse into nested objects/arrays
+        if (typeof obj[key] === 'object' && obj[key] !== null) {
+          stripAdminFields(obj[key]);
+        }
+      }
+    };
+
+    stripAdminFields(sanitized);
+
+    // Replace the request body used for validation with the sanitized copy
+    req.body = sanitized;
+  }
+
+  let schemaToUse = updateEventRequestSchema;
+  if (!actorPresent) {
+    // When the caller is NOT an admin/coordinator, ensure admin-related keys
+    // are stripped from the validated result so Joi conditional rules based
+    // on AdminAction do not trigger. Using Joi.any().strip() will silently
+    // remove these keys during validation.
+    schemaToUse = updateEventRequestSchema.keys({
+      AdminAction: Joi.any().strip(),
+      adminAction: Joi.any().strip(),
+      AdminNote: Joi.any().strip(),
+      adminNote: Joi.any().strip(),
+      RescheduledDate: Joi.any().strip(),
+      rescheduledDate: Joi.any().strip()
+    });
+  } else {
+    // create a relaxed schema where AdminNote is allowed to be empty for most actor-driven updates
+    // but require AdminNote when the incoming action is explicitly Rescheduled or Rejected.
+    const incomingAction = req.body && (req.body.AdminAction ? String(req.body.AdminAction) : (req.body.adminAction ? String(req.body.adminAction) : null));
+    if (incomingAction === 'Rescheduled' || incomingAction === 'Rejected') {
+      // keep original schema which enforces AdminNote when AdminAction is Rescheduled or Rejected
+      schemaToUse = updateEventRequestSchema;
+    } else {
+      const relaxedAdminNote = Joi.string().trim().allow('', null).messages({
+        'string.empty': 'Admin Note cannot be empty when provided'
+      });
+      schemaToUse = updateEventRequestSchema.keys({ AdminNote: relaxedAdminNote });
+    }
+  }
+
+  const { error, value } = schemaToUse.validate(req.body, {
     abortEarly: false
   });
 

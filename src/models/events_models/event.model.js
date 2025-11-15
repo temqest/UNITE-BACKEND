@@ -36,6 +36,12 @@ const eventSchema = new mongoose.Schema({
     trim: true,
     ref: 'Coordinator'
   },
+  MadeByStakeholderID: {
+    type: String,
+    required: false,
+    trim: true,
+    ref: 'Stakeholder'
+  },
   StaffAssignmentID: {
     type: String,
     trim: true
@@ -49,6 +55,17 @@ const eventSchema = new mongoose.Schema({
   Phone_Number: {
     type: String,
     required: true,
+    trim: true
+  },
+  Event_Description: {
+    type: String,
+    required: false,
+    trim: true
+  },
+  // Category/type of event (e.g., 'BloodDrive', 'Training', 'Advocacy')
+  Category: {
+    type: String,
+    required: false,
     trim: true
   },
   Status: {

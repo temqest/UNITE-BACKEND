@@ -9,6 +9,9 @@ const requestsRoutes = require('./requests.routes');
 const utilityRoutes = require('./utility.routes');
 
 // Mount routes
+// Auth routes are mounted under /api/auth (canonical) and also under /api
+// to preserve compatibility with frontend calls that expect /api/login.
+router.use('/api/auth', authRoutes);
 router.use('/api', authRoutes);
 router.use('/api', usersRoutes);
 router.use('/api', eventsRoutes);

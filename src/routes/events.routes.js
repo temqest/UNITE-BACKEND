@@ -7,6 +7,14 @@ const {
   eventStatisticsController
 } = require('../controller/events_controller');
 
+// Public events (calendar) - intentionally public so calendar can read approved events
+router.get('/public/events', async (req, res, next) => {
+  try {
+    await eventOverviewController.getPublicEvents(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
 // ==================== CALENDAR ROUTES ====================
 
 /**

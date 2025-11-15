@@ -79,8 +79,11 @@ class EventDetailsService {
         event: {
           Event_ID: event.Event_ID,
           Event_Title: event.Event_Title,
+          // Include description fields returned from DB under common keys
+          Event_Description: event.Event_Description || event.EventDescription || event.Description || '',
           Location: event.Location,
           Start_Date: event.Start_Date,
+          End_Date: event.End_Date,
           Status: event.Status,
           Email: event.Email,
           Phone_Number: event.Phone_Number,

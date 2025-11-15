@@ -14,7 +14,6 @@ const bloodDriveSchema = new mongoose.Schema({
   },
   VenueType: {
     type: String,
-    required: true,
     trim: true
   }
 }, {

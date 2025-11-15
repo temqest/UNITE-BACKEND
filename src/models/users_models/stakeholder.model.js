@@ -18,6 +18,12 @@ const stakeholderSchema = new mongoose.Schema({
     trim: true,
     ref: 'District'
   },
+  Coordinator_ID: {
+    type: String,
+    required: false,
+    trim: true,
+    ref: 'Coordinator'
+  },
   First_Name: {
     type: String,
     required: true,

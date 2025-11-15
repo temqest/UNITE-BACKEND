@@ -10,7 +10,6 @@ const trainingSchema = new mongoose.Schema({
   },
   TrainingType: {
     type: String,
-    required: true,
     trim: true
   },
   MaxParticipants: {

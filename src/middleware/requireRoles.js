@@ -13,6 +13,12 @@ function requireStakeholder(req, res, next) {
   return res.status(403).json({ success: false, message: 'Stakeholder access required' });
 }
 
-module.exports = { requireAdmin, requireCoordinator, requireStakeholder };
+function requireAdminOrCoordinator(req, res, next) {
+  const role = req.user?.role || '';
+  if (role === 'Admin' || role === 'Coordinator') return next();
+  return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
+}
+
+module.exports = { requireAdmin, requireCoordinator, requireStakeholder, requireAdminOrCoordinator };
 
 

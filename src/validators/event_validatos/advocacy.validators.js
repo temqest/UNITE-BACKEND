@@ -11,36 +11,30 @@ const createAdvocacySchema = Joi.object({
     }),
 
   Topic: Joi.string()
-    .required()
     .trim()
     .min(3)
     .max(200)
     .messages({
-      'any.required': 'Topic is required',
       'string.empty': 'Topic cannot be empty',
       'string.min': 'Topic must be at least 3 characters long',
       'string.max': 'Topic must not exceed 200 characters'
     }),
 
   TargetAudience: Joi.string()
-    .required()
     .trim()
     .min(3)
     .max(200)
     .messages({
-      'any.required': 'Target Audience is required',
       'string.empty': 'Target Audience cannot be empty',
       'string.min': 'Target Audience must be at least 3 characters long',
       'string.max': 'Target Audience must not exceed 200 characters'
     }),
 
   ExpectedAudienceSize: Joi.number()
-    .required()
     .integer()
     .min(1)
     .max(100000)
     .messages({
-      'any.required': 'Expected Audience Size is required',
       'number.base': 'Expected Audience Size must be a number',
       'number.integer': 'Expected Audience Size must be an integer',
       'number.min': 'Expected Audience Size must be at least 1',
@@ -48,12 +42,10 @@ const createAdvocacySchema = Joi.object({
     }),
 
   PartnerOrganization: Joi.string()
-    .required()
     .trim()
     .min(3)
     .max(200)
     .messages({
-      'any.required': 'Partner Organization is required',
       'string.empty': 'Partner Organization cannot be empty',
       'string.min': 'Partner Organization must be at least 3 characters long',
       'string.max': 'Partner Organization must not exceed 200 characters'
