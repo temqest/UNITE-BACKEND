@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { bloodbankStaffController, stakeholderController } = require('../controller/users_controller');
+const authenticate = require('../middleware/authenticate');
 
 // Note: For authentication, you may want to create specific validators
 // For now, using basic validation
@@ -20,6 +21,19 @@ router.post('/login', async (req, res, next) => {
       });
     }
     await bloodbankStaffController.authenticateUser(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route GET /api/auth/me
+ * @desc  Get current authenticated user info
+ * @access Private
+ */
+router.get('/me', authenticate, async (req, res, next) => {
+  try {
+    await bloodbankStaffController.getCurrentUser(req, res);
   } catch (error) {
     next(error);
   }

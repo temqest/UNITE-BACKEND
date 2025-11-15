@@ -30,13 +30,16 @@ class BloodbankStaffController {
       // Set a server-side cookie so the Next.js frontend can read user info
       // during SSR and show admin/coordinator links immediately.
       try {
-        const staffTypeStr = String(result.user.staff_type || '').toLowerCase();
-        const isAdminFlag = !!result.user.isAdmin || /sys|system/.test(staffTypeStr) || staffTypeStr.includes('admin');
+        const staffType = result.user.staff_type || null;
+        const staffTypeStr = String(staffType || '').toLowerCase();
+        // System admin is determined by StaffType === 'Admin'
+        const isAdminFlag = staffType === 'Admin' || /sys|system/.test(staffTypeStr) || staffTypeStr.includes('admin');
         const cookieValue = JSON.stringify({
-          role: result.user.staff_type || null,
+          role: staffType || null,
+          StaffType: staffType || null, // Include StaffType for frontend compatibility
           isAdmin: !!isAdminFlag,
-          First_Name: result.user.First_Name || result.user.FirstName || null,
-          email: result.user.Email || result.user.email || null,
+          First_Name: result.user.first_name || result.user.First_Name || result.user.FirstName || null,
+          email: result.user.email || result.user.Email || null,
           id: result.user.id || null,
         });
         // Development: do not log cookie content to avoid leaking sensitive data
@@ -65,10 +68,16 @@ class BloodbankStaffController {
         // ignore cookie set errors
       }
 
+      // Ensure response includes StaffType for frontend compatibility
+      const responseData = {
+        ...result.user,
+        StaffType: result.user.staff_type || null, // Add StaffType field for frontend
+      };
+
       return res.status(200).json({
         success: result.success,
         message: result.message,
-        data: result.user,
+        data: responseData,
         token
       });
     } catch (error) {
@@ -307,6 +316,55 @@ class BloodbankStaffController {
       return res.status(404).json({
         success: false,
         message: error.message || 'User not found'
+      });
+    }
+  }
+
+  /**
+   * Get current authenticated user info
+   * GET /api/auth/me
+   */
+  async getCurrentUser(req, res) {
+    try {
+      const user = req.user || {};
+      
+      // If we have a user ID, fetch full user details from database
+      if (user.id) {
+        try {
+          const result = await bloodbankStaffService.getUserById(user.id);
+          if (result.success && result.user) {
+            // Return user data with StaffType for frontend compatibility
+            const userData = {
+              ...result.user,
+              StaffType: result.user.staff_type || user.StaffType || null,
+              role: result.user.staff_type || user.role || null,
+              isAdmin: user.StaffType === 'Admin' || (result.user.staff_type === 'Admin') || !!user.isAdmin
+            };
+            return res.status(200).json({
+              success: true,
+              data: userData
+            });
+          }
+        } catch (e) {
+          // If getUserById fails, fall through to return basic user info
+        }
+      }
+      
+      // Fallback: return basic user info from token/cookie
+      return res.status(200).json({
+        success: true,
+        data: {
+          id: user.id || null,
+          role: user.role || user.StaffType || null,
+          StaffType: user.StaffType || user.role || null,
+          email: user.email || null,
+          isAdmin: !!user.isAdmin || (user.role === 'Admin' || user.StaffType === 'Admin')
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get current user'
       });
     }
   }
