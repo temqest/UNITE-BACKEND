@@ -7,74 +7,35 @@ const stakeholderSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
-  Province_Name: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  District_ID: {
-    type: String,
-    required: true,
-    trim: true,
-    ref: 'District'
-  },
-  Coordinator_ID: {
-    type: String,
-    required: false,
-    trim: true,
-    ref: 'Coordinator'
-  },
-  First_Name: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  Middle_Name: {
-    type: String,
-    required: false,
-    trim: true
-  },
-  Last_Name: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  Field: {
-    type: String,
-    required: false,
-    trim: true
-  },
-  Email: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    lowercase: true
-  },
-  Phone_Number: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  Password: {
-    type: String,
+  province: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Province',
     required: true
   },
-  City_Municipality: {
-    type: String,
-    required: true,
-    trim: true
+  district: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'District',
+    required: true
   },
-  Organization_Institution: {
-    type: String,
-    required: false,
-    trim: true
+  municipality: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Municipality',
+    required: true
   },
-  Registration_Code: {
-    type: String,
-    required: false,
-    trim: true
-  }
+  coordinator: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Coordinator',
+    required: false
+  },
+  firstName: { type: String, required: true, trim: true },
+  middleName: { type: String, required: false, trim: true },
+  lastName: { type: String, required: true, trim: true },
+  field: { type: String, required: false, trim: true },
+  email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+  phoneNumber: { type: String, required: true, trim: true },
+  password: { type: String, required: true },
+  organizationInstitution: { type: String, required: false, trim: true },
+  registrationCode: { type: String, required: false, trim: true }
 }, {
   timestamps: true
 });

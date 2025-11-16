@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const { BloodbankStaff, SystemAdmin, Coordinator, District, EventRequest, Event, Notification } = require('../../models/index');
 const coordinatorService = require('./coordinator.service');
+const notificationService = require('../utility_services/notification.service');
 
 class SystemAdminService {
   /**
@@ -199,6 +200,17 @@ class SystemAdminService {
         await admin.save();
       }
 
+
+      // Compute diffs for notification
+      const changedFields = [];
+      if (updateData.First_Name && updateData.First_Name !== staff.First_Name) changedFields.push('First_Name');
+      if (updateData.Middle_Name !== undefined && updateData.Middle_Name !== staff.Middle_Name) changedFields.push('Middle_Name');
+      if (updateData.Last_Name && updateData.Last_Name !== staff.Last_Name) changedFields.push('Last_Name');
+      if (updateData.Email && updateData.Email !== staff.Email) changedFields.push('Email');
+      if (updateData.Phone_Number && updateData.Phone_Number !== staff.Phone_Number) changedFields.push('Phone_Number');
+      const passwordChanged = !!(updateData.Password && updateData.Password.length > 0);
+      if (passwordChanged) changedFields.push('Password');
+
       // Update staff information
       if (updateData.First_Name) staff.First_Name = updateData.First_Name;
       if (updateData.Middle_Name !== undefined) staff.Middle_Name = updateData.Middle_Name;
@@ -213,6 +225,34 @@ class SystemAdminService {
       }
 
       await staff.save();
+
+      // If admin changed their own profile (or an admin was updated), create a notification summarizing changed fields
+      try {
+        if (changedFields.length > 0) {
+          const title = 'Profile Updated';
+          // Avoid putting raw password in message
+          const readableFields = changedFields.map(f => (f === 'Password' ? 'Password (changed)' : f)).join(', ');
+          const message = `The following fields were updated: ${readableFields}`;
+
+          // Use a synthetic Request_ID for profile changes so the Notification schema's required field is satisfied
+          const requestId = `PROFILE_EDIT_${adminId}_${Date.now()}`;
+
+          await notificationService.createNotification({
+            Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2,9)}`,
+            Recipient_ID: adminId,
+            RecipientType: 'Admin',
+            Request_ID: requestId,
+            Event_ID: null,
+            Title: title,
+            Message: message,
+            NotificationType: 'RequestCompleted',
+            IsRead: false
+          });
+        }
+      } catch (notifErr) {
+        // Don't block admin update if notification creation fails; just log
+        console.warn('Failed to create profile update notification:', notifErr.message || notifErr);
+      }
 
       return {
         success: true,

@@ -18,7 +18,7 @@ class StakeholderController {
         return res.status(400).json({ success: false, message: 'Email and password are required' });
       }
       const result = await stakeholderService.authenticate(email, password);
-  const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.District_ID, coordinator_id: result.stakeholder.Coordinator_ID });
+  const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.district, coordinator_id: result.stakeholder.coordinator });
       // Set a server-side cookie with a sanitized user payload so the
       // frontend (Next.js app) can read it during SSR and show admin links
       // without waiting for client-side localStorage. Cookie contains only
@@ -30,8 +30,8 @@ class StakeholderController {
         const cookieValue = JSON.stringify({
           role: result.stakeholder.Role || result.stakeholder.role || result.stakeholder.StaffType || null,
           isAdmin: !!isAdminFlag,
-          First_Name: result.stakeholder.First_Name || result.stakeholder.FirstName || null,
-          email: result.stakeholder.Email || result.stakeholder.email || null,
+          First_Name: result.stakeholder.firstName || result.stakeholder.First_Name || null,
+          email: result.stakeholder.email || result.stakeholder.Email || null,
           id: result.stakeholder.Stakeholder_ID || result.stakeholder.id || null,
         });
         // Development: do not log cookie content to avoid leaking sensitive data

@@ -127,6 +127,12 @@ const updateEventSchema = Joi.object({
 
   Location: Joi.string()
     .trim()
+  // New hierarchical fields
+  province: Joi.string().trim().allow(null, ''),
+  district: Joi.string().trim().allow(null, ''),
+  municipality: Joi.string().trim().allow(null, ''),
+  // Optional stakeholder association when admin/coordinator attaches one
+  stakeholder: Joi.string().trim().allow(null, ''),
     .min(3)
     .max(500)
     .messages({

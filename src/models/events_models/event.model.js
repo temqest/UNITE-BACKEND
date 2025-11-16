@@ -42,6 +42,28 @@ const eventSchema = new mongoose.Schema({
     trim: true,
     ref: 'Stakeholder'
   },
+  // New hierarchical references (ObjectId refs) to support Province -> District -> Municipality
+  province: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Province',
+    required: false
+  },
+  district: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'District',
+    required: false
+  },
+  municipality: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Municipality',
+    required: false
+  },
+  // Optional explicit stakeholder reference (ObjectId)
+  stakeholder: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Stakeholder',
+    required: false
+  },
   StaffAssignmentID: {
     type: String,
     trim: true

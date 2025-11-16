@@ -26,6 +26,15 @@ const createEventRequestSchema = Joi.object({
       'string.empty': 'Coordinator ID cannot be empty'
     }),
 
+  // New hierarchical selection (optional when request is created by a coordinator/sysadmin)
+  province: Joi.string().trim().allow(null, ''),
+  district: Joi.string().trim().allow(null, ''),
+  municipality: Joi.string().trim().allow(null, ''),
+
+  // Optional stakeholder reference (when admin/coordinator attaches a stakeholder)
+  stakeholder: Joi.string().trim().allow(null, '')
+,
+
   Admin_ID: Joi.string()
     .trim()
     .allow('', null)

@@ -25,6 +25,28 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Stakeholder'
   },
+  // New hierarchical references to support Province -> District -> Municipality
+  province: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Province',
+    required: false
+  },
+  district: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'District',
+    required: false
+  },
+  municipality: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Municipality',
+    required: false
+  },
+  // Optional explicit stakeholder reference as ObjectId
+  stakeholder: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Stakeholder',
+    required: false
+  },
   // Category/type of the event (e.g., 'BloodDrive', 'Training', 'Advocacy')
   Category: {
     type: String,

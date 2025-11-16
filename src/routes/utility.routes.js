@@ -5,6 +5,8 @@ const {
   notificationController
 } = require('../controller/utility_controller');
 
+const { locationController } = require('../controller/utility_controller');
+
 const {
   validateCreateDistrict,
   validateUpdateDistrict
@@ -306,4 +308,99 @@ router.post('/notifications/coordinator-action', async (req, res, next) => {
 });
 
 module.exports = router;
+
+// ==================== LOCATION & SIGNUP REQUEST ROUTES ====================
+
+/**
+ * @route   GET /api/locations/provinces
+ * @desc    Get all provinces
+ * @access  Public
+ */
+router.get('/locations/provinces', async (req, res, next) => {
+  try {
+    await locationController.getProvinces(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/locations/provinces/:provinceId/districts
+ * @desc    Get districts for a province
+ * @access  Public
+ */
+router.get('/locations/provinces/:provinceId/districts', async (req, res, next) => {
+  try {
+    await locationController.getDistrictsByProvince(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/locations/districts/:districtId/municipalities
+ * @desc    Get municipalities for a district
+ * @access  Public
+ */
+router.get('/locations/districts/:districtId/municipalities', async (req, res, next) => {
+  try {
+    await locationController.getMunicipalitiesByDistrict(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/signup-requests
+ * @desc    Submit a public signup request (province/district/municipality)
+ * @access  Public
+ */
+router.post('/signup-requests', async (req, res, next) => {
+  try {
+    await locationController.createSignUpRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/signup-requests/:id/approve
+ * @desc    Approve a signup request
+ * @access  Private (Coordinator or Admin)
+ */
+router.put('/signup-requests/:id/approve', async (req, res, next) => {
+  try {
+    await locationController.approveRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/signup-requests/:id/reject
+ * @desc    Reject a signup request
+ * @access  Private (Coordinator or Admin)
+ */
+router.put('/signup-requests/:id/reject', async (req, res, next) => {
+  try {
+    await locationController.rejectRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/signup-requests/verify-email
+ * @desc    Verify email via token
+ * @access  Public
+ */
+router.get('/signup-requests/verify-email', async (req, res, next) => {
+  try {
+    await locationController.verifyEmail(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+
 
