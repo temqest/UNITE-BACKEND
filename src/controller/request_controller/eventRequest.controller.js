@@ -43,7 +43,7 @@ class EventRequestController {
 
         // If authenticated user is a Stakeholder, record them as the creator of this request
         if (role === 'Stakeholder' || role === 'stakeholder') {
-          eventData.MadeByStakeholderID = eventData.MadeByStakeholderID || user.Stakeholder_ID || user.StakeholderId || user.id || null;
+          eventData.stakeholder_id = eventData.stakeholder_id || eventData.Stakeholder_ID || eventData.MadeByStakeholderID || user.Stakeholder_ID || user.StakeholderId || user.id || null;
           // If coordinatorId is missing but stakeholder belongs to a coordinator, derive it
           if (!coordinatorId && (user.Coordinator_ID || user.CoordinatorId)) {
             coordinatorId = user.Coordinator_ID || user.CoordinatorId;
@@ -81,7 +81,7 @@ class EventRequestController {
   }
 
   /**
-   * Immediate event creation (auto-publish for Admin or Coordinator)
+   * Event creation through approval workflow (no auto-publishing)
    * POST /api/events/direct
    */
   async createImmediateEvent(req, res) {
@@ -92,7 +92,23 @@ class EventRequestController {
       const body = req.body || {};
       let creatorId = body.creatorId || null;
       let creatorRole = body.creatorRole || null;
-      const eventData = body;
+      const eventData = { ...body };
+
+      // Map old field names to new ones for backward compatibility
+      if (body.MadeByCoordinatorID && !body.coordinator_id) {
+        eventData.coordinator_id = body.MadeByCoordinatorID;
+      }
+      if (body.MadeByStakeholderID && !body.stakeholder_id) {
+        eventData.stakeholder_id = body.MadeByStakeholderID;
+      }
+      if (body.stakeholder && !body.stakeholder_id) {
+        eventData.stakeholder_id = body.stakeholder;
+      }
+
+      // Convert "Admin" to "SystemAdmin" for enum compatibility
+      if (creatorRole === 'Admin') {
+        creatorRole = 'SystemAdmin';
+      }
 
       if (user) {
         // Determine role and id from token
@@ -219,28 +235,30 @@ class EventRequestController {
   }
 
   /**
-   * Admin accepts/rejects/reschedules the request
+   * Process request actions (Admin, Coordinator, or Stakeholder)
    * POST /api/requests/:requestId/admin-action
    */
   async adminAcceptRequest(req, res) {
     try {
       const { requestId } = req.params;
-      // Derive admin id from authenticated token only
+      // Derive actor from authenticated token
       const user = req.user;
       if (!user) return res.status(401).json({ success: false, message: 'Authentication required' });
-      if (!(user.role === 'Admin' || user.staff_type === 'Admin' || user.role === 'Coordinator' || user.staff_type === 'Coordinator')) {
-        return res.status(403).json({ success: false, message: 'Only admins or coordinators may perform this action' });
+      
+      const actorRole = user.staff_type || user.role;
+      if (!['Admin', 'Coordinator', 'Stakeholder'].includes(actorRole)) {
+        return res.status(403).json({ success: false, message: 'Invalid actor role' });
       }
 
-      const adminId = user.Admin_ID || user.Coordinator_ID || user.id || null;
+      const actorId = user.Admin_ID || user.Coordinator_ID || user.Stakeholder_ID || user.id || null;
       const { action, note, rescheduledDate } = req.body;
-      const adminAction = {
+      const actionData = {
         action,
         note,
         rescheduledDate: rescheduledDate ? new Date(rescheduledDate) : null
       };
 
-      const result = await eventRequestService.adminAcceptRequest(adminId, requestId, adminAction);
+      const result = await eventRequestService.processRequestAction(actorId, actorRole, requestId, actionData);
 
       return res.status(200).json({
         success: result.success,
@@ -250,7 +268,7 @@ class EventRequestController {
     } catch (error) {
       return res.status(400).json({
         success: false,
-        message: error.message || 'Failed to process admin action'
+        message: error.message || 'Failed to process request action'
       });
     }
   }
@@ -354,27 +372,74 @@ class EventRequestController {
   }
 
   /**
-   * Stakeholder confirms admin/coordinator decision
-   * POST /api/requests/:requestId/stakeholder-confirm
+   * Coordinator accepts/rejects the request
+   * POST /api/requests/:requestId/coordinator-action
    */
-  async stakeholderConfirmRequest(req, res) {
+  async coordinatorAcceptRequest(req, res) {
     try {
       const { requestId } = req.params;
-      const { stakeholderId, action } = req.body;
-
-      if (!stakeholderId) {
-        return res.status(400).json({ success: false, message: 'Stakeholder ID is required' });
+      const user = req.user;
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required' });
+      if (!(user.role === 'Coordinator' || user.staff_type === 'Coordinator')) {
+        return res.status(403).json({ success: false, message: 'Only coordinators may perform this action' });
       }
 
-      if (!action) {
-        return res.status(400).json({ success: false, message: 'Action is required' });
-      }
+      const actorId = user.Coordinator_ID || user.id || null;
+      const { action, note, rescheduledDate } = req.body;
+      const actionData = {
+        action,
+        note,
+        rescheduledDate: rescheduledDate ? new Date(rescheduledDate) : null
+      };
 
-      const result = await eventRequestService.stakeholderConfirmRequest(stakeholderId, requestId, action);
+      const result = await eventRequestService.processRequestAction(actorId, 'Coordinator', requestId, actionData);
 
-      return res.status(200).json({ success: result.success, message: result.message, data: result.request });
+      return res.status(200).json({
+        success: result.success,
+        message: result.message,
+        data: result.request
+      });
     } catch (error) {
-      return res.status(400).json({ success: false, message: error.message || 'Failed to record stakeholder confirmation' });
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to process coordinator action'
+      });
+    }
+  }
+
+  /**
+   * Stakeholder accepts/rejects the request
+   * POST /api/requests/:requestId/stakeholder-action
+   */
+  async stakeholderAcceptRequest(req, res) {
+    try {
+      const { requestId } = req.params;
+      const user = req.user;
+      if (!user) return res.status(401).json({ success: false, message: 'Authentication required' });
+      if (!(user.role === 'Stakeholder' || user.staff_type === 'Stakeholder')) {
+        return res.status(403).json({ success: false, message: 'Only stakeholders may perform this action' });
+      }
+
+      const actorId = user.Stakeholder_ID || user.id || null;
+      const { action, note, rescheduledDate } = req.body;
+      const actionData = {
+        action,
+        note,
+        rescheduledDate: rescheduledDate ? new Date(rescheduledDate) : null
+      };
+
+      const result = await eventRequestService.processRequestAction(actorId, 'Stakeholder', requestId, actionData);
+
+      return res.status(200).json({
+        success: result.success,
+        message: result.message,
+        data: result.request
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to process stakeholder action'
+      });
     }
   }
 
@@ -432,8 +497,8 @@ class EventRequestController {
       // Enrich each request with its event and coordinator/staff info for frontend convenience
       const enriched = await Promise.all(result.requests.map(async (r) => {
         const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
-        const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
-        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+        const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
+        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
         // Fetch district details if coordinator has District_ID
         let districtInfo = null;
         try {
@@ -457,9 +522,9 @@ class EventRequestController {
         try {
           // Attach creator display name: prefer stakeholder full name when present
           const models = require('../../models/index');
-          if (plain.MadeByStakeholderID) {
+          if (plain.stakeholder_id) {
             try {
-              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.MadeByStakeholderID }).catch(() => null);
+              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.stakeholder_id }).catch(() => null);
               if (st) {
                 plain.createdByName = `${(st.First_Name || st.FirstName || '').toString().trim()} ${(st.Last_Name || st.LastName || '').toString().trim()}`.trim();
               }
@@ -524,8 +589,8 @@ class EventRequestController {
         // Enrich similar to getAllRequests controller behavior
         const enriched = await Promise.all(result.requests.map(async (r) => {
           const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
-          const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
-          const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+          const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
+          const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
           let districtInfo = null;
           try {
             if (coordinator && coordinator.District_ID) {
@@ -545,8 +610,8 @@ class EventRequestController {
           };
           try {
             const models = require('../../models/index');
-            if (plain.MadeByStakeholderID) {
-              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.MadeByStakeholderID }).catch(() => null);
+            if (plain.stakeholder_id) {
+              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.stakeholder_id }).catch(() => null);
               if (st) plain.createdByName = `${(st.First_Name || '').toString().trim()} ${(st.Last_Name || '').toString().trim()}`.trim();
             }
             if (!plain.createdByName) plain.createdByName = staff ? `${staff.First_Name} ${staff.Last_Name}` : (coordinator ? (coordinator.Coordinator_Name || coordinator.Name || null) : null);
@@ -570,8 +635,8 @@ class EventRequestController {
         // Enrich each request similar to getCoordinatorRequests
         const enriched = await Promise.all(result.requests.map(async (r) => {
           const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
-          const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
-          const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+          const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
+          const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
           let districtInfo = null;
           try {
             if (coordinator && coordinator.District_ID) {
@@ -591,8 +656,8 @@ class EventRequestController {
           };
           try {
             const models = require('../../models/index');
-            if (plain.MadeByStakeholderID) {
-              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.MadeByStakeholderID }).catch(() => null);
+            if (plain.stakeholder_id) {
+              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.stakeholder_id }).catch(() => null);
               if (st) plain.createdByName = `${(st.First_Name || '').toString().trim()} ${(st.Last_Name || '').toString().trim()}`.trim();
             }
             if (!plain.createdByName) plain.createdByName = staff ? `${staff.First_Name} ${staff.Last_Name}` : (coordinator ? (coordinator.Coordinator_Name || coordinator.Name || null) : null);
@@ -619,8 +684,8 @@ class EventRequestController {
           const plain = { ...toPlain(r), event: event ? toPlain(event) : null };
           try {
             const models = require('../../models/index');
-            if (plain.MadeByStakeholderID) {
-              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.MadeByStakeholderID }).catch(() => null);
+            if (plain.stakeholder_id) {
+              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.stakeholder_id }).catch(() => null);
               if (st) plain.createdByName = `${(st.First_Name || '').toString().trim()} ${(st.Last_Name || '').toString().trim()}`.trim();
             }
             if (!plain.createdByName) plain.createdByName = null;
@@ -667,8 +732,8 @@ class EventRequestController {
           const plain = { ...toPlain(r), event: event ? toPlain(event) : null };
           try {
             const models = require('../../models/index');
-            if (plain.MadeByStakeholderID) {
-              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.MadeByStakeholderID }).catch(() => null);
+            if (plain.stakeholder_id) {
+              const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.stakeholder_id }).catch(() => null);
               if (st) plain.createdByName = `${(st.First_Name || '').toString().trim()} ${(st.Last_Name || '').toString().trim()}`.trim();
             }
             if (!plain.createdByName) plain.createdByName = null;
@@ -753,8 +818,8 @@ class EventRequestController {
       // Enrich requests with event and coordinator/staff info
       const enriched = await Promise.all(result.requests.map(async (r) => {
         const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
-        const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.Coordinator_ID }).catch(() => null);
-        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.Coordinator_ID }).catch(() => null);
+        const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
+        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
         let districtInfo = null;
         try {
           if (coordinator && coordinator.District_ID) {
@@ -776,8 +841,8 @@ class EventRequestController {
         };
         try {
           const models = require('../../models/index');
-          if (plain.MadeByStakeholderID) {
-            const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.MadeByStakeholderID }).catch(() => null);
+          if (plain.stakeholder_id) {
+            const st = await models.Stakeholder.findOne({ Stakeholder_ID: plain.stakeholder_id }).catch(() => null);
             if (st) plain.createdByName = `${(st.First_Name || '').toString().trim()} ${(st.Last_Name || '').toString().trim()}`.trim();
           }
           if (!plain.createdByName) plain.createdByName = staff ? `${staff.First_Name} ${staff.Last_Name}` : (coordinator ? (coordinator.Coordinator_Name || coordinator.Name || null) : null);

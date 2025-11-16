@@ -18,7 +18,7 @@ const createEventRequestSchema = Joi.object({
       'string.empty': 'Event ID cannot be empty'
     }),
 
-  Coordinator_ID: Joi.string()
+  coordinator_id: Joi.string()
     .required()
     .trim()
     .messages({
@@ -32,14 +32,20 @@ const createEventRequestSchema = Joi.object({
   municipality: Joi.string().trim().allow(null, ''),
 
   // Optional stakeholder reference (when admin/coordinator attaches a stakeholder)
-  stakeholder: Joi.string().trim().allow(null, '')
-,
+  stakeholder_id: Joi.string().trim().allow(null, ''),
 
-  Admin_ID: Joi.string()
+  made_by_id: Joi.string()
     .trim()
     .allow('', null)
     .messages({
-      'string.empty': 'Admin ID cannot be empty if provided'
+      'string.empty': 'Made by ID cannot be empty if provided'
+    }),
+
+  made_by_role: Joi.string()
+    .valid('Admin', 'Coordinator', 'Stakeholder')
+    .allow(null)
+    .messages({
+      'any.only': 'Made by role must be one of: Admin, Coordinator, Stakeholder, or null'
     }),
 
   AdminAction: Joi.string()
@@ -121,9 +127,7 @@ const updateEventRequestSchema = Joi.object({
   coordinatorId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Coordinator ID cannot be empty if provided' }),
   adminId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Admin ID cannot be empty if provided' }),
   // Stakeholder identifier when a stakeholder is submitting an update (allowed)
-  MadeByStakeholderID: Joi.string().trim().allow('', null).messages({ 'string.empty': 'MadeByStakeholderID cannot be empty if provided' }),
-  // also accept lower-cased variant if client uses different casing
-  madeByStakeholderID: Joi.string().trim().allow('', null).messages({ 'string.empty': 'madeByStakeholderID cannot be empty if provided' }),
+  stakeholder_id: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Stakeholder ID cannot be empty if provided' }),
 
   // Common event fields that can be updated
   Event_Title: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Event title cannot be empty' }),
@@ -165,17 +169,24 @@ const updateEventRequestSchema = Joi.object({
       'string.empty': 'Event ID cannot be empty'
     }),
 
-  Coordinator_ID: Joi.string()
+  coordinator_id: Joi.string()
     .trim()
     .messages({
       'string.empty': 'Coordinator ID cannot be empty'
     }),
 
-  Admin_ID: Joi.string()
+  made_by_id: Joi.string()
     .trim()
     .allow('', null)
     .messages({
-      'string.empty': 'Admin ID cannot be empty if provided'
+      'string.empty': 'Made by ID cannot be empty if provided'
+    }),
+
+  made_by_role: Joi.string()
+    .valid('Admin', 'Coordinator', 'Stakeholder')
+    .allow(null)
+    .messages({
+      'any.only': 'Made by role must be one of: Admin, Coordinator, Stakeholder, or null'
     }),
 
   AdminAction: Joi.string()

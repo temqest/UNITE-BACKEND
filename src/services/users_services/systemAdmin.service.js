@@ -341,7 +341,7 @@ class SystemAdminService {
       const recentActivity = await EventRequest.find({})
         .sort({ updatedAt: -1 })
         .limit(10)
-        .select('Request_ID Coordinator_ID Status AdminAction CoordinatorFinalAction updatedAt');
+        .select('Request_ID coordinator_id stakeholder_id made_by_id made_by_role Status AdminAction CoordinatorFinalAction updatedAt');
 
       return {
         success: true,

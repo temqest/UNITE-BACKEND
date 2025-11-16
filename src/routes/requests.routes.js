@@ -111,13 +111,26 @@ router.get('/requests/stakeholder/:stakeholderId', async (req, res, next) => {
 });
 
 /**
- * @route   POST /api/requests/:requestId/stakeholder-confirm
- * @desc    Stakeholder confirms admin/coordinator decision
+ * @route   POST /api/requests/:requestId/coordinator-action
+ * @desc    Coordinator accepts/rejects the request
+ * @access  Private (Coordinator)
+ */
+router.post('/requests/:requestId/coordinator-action', authenticate, async (req, res, next) => {
+  try {
+    await eventRequestController.coordinatorAcceptRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/requests/:requestId/stakeholder-action
+ * @desc    Stakeholder accepts/rejects the request
  * @access  Private (Stakeholder)
  */
-router.post('/requests/:requestId/stakeholder-confirm', async (req, res, next) => {
+router.post('/requests/:requestId/stakeholder-action', authenticate, async (req, res, next) => {
   try {
-    await eventRequestController.stakeholderConfirmRequest(req, res);
+    await eventRequestController.stakeholderAcceptRequest(req, res);
   } catch (error) {
     next(error);
   }

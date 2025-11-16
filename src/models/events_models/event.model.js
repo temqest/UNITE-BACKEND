@@ -25,22 +25,29 @@ const eventSchema = new mongoose.Schema({
     type: Date,
     required: false
   },
-  ApprovedByAdminID: {
-    type: String,
-    trim: true,
-    ref: 'SystemAdmin'
-  },
-  MadeByCoordinatorID: {
+  // Simplified structure as requested
+  coordinator_id: {
     type: String,
     required: true,
     trim: true,
     ref: 'Coordinator'
   },
-  MadeByStakeholderID: {
+  stakeholder_id: {
     type: String,
     required: false,
     trim: true,
     ref: 'Stakeholder'
+  },
+  made_by_id: {
+    type: String,
+    required: true,
+    trim: true,
+    refPath: 'made_by_role' // Dynamic reference based on role
+  },
+  made_by_role: {
+    type: String,
+    required: true,
+    enum: ['SystemAdmin', 'Coordinator', 'Stakeholder']
   },
   // New hierarchical references (ObjectId refs) to support Province -> District -> Municipality
   province: {

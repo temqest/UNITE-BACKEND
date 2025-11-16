@@ -13,17 +13,29 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Event'
   },
-  Coordinator_ID: {
+  // Simplified structure as requested
+  coordinator_id: {
     type: String,
     required: true,
     trim: true,
     ref: 'Coordinator'
   },
-  MadeByStakeholderID: {
+  stakeholder_id: {
     type: String,
     required: false,
     trim: true,
     ref: 'Stakeholder'
+  },
+  made_by_id: {
+    type: String,
+    required: true,
+    trim: true,
+    refPath: 'made_by_role' // Dynamic reference based on role
+  },
+  made_by_role: {
+    type: String,
+    required: true,
+    enum: ['SystemAdmin', 'Coordinator', 'Stakeholder']
   },
   // New hierarchical references to support Province -> District -> Municipality
   province: {
@@ -119,6 +131,8 @@ const eventRequestSchema = new mongoose.Schema({
     type: String,
     enum: [
       'Pending_Admin_Review',
+      'Pending_Coordinator_Review',
+      'Pending_Stakeholder_Review',
       'Accepted_By_Admin',
       'Rescheduled_By_Admin',
       'Rejected_By_Admin',
