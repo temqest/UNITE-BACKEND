@@ -2,6 +2,7 @@ const { Province, District, Municipality, SignUpRequest, Coordinator } = require
 const crypto = require('crypto');
 const { signToken, verifyToken } = require('../../utils/jwt');
 const emailService = require('./email.service');
+const bcrypt = require('bcrypt');
 
 class LocationService {
   async getProvinces() {
@@ -64,6 +65,10 @@ class LocationService {
     req.decisionAt = new Date();
     await req.save();
 
+    // Hash the password before creating stakeholder account
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(req.password, saltRounds);
+
     // Create stakeholder account
     const stakeholderId = 'STK-' + Date.now() + Math.random().toString(36).substr(2, 5).toUpperCase();
     const stakeholder = new Stakeholder({
@@ -77,7 +82,7 @@ class LocationService {
       lastName: req.lastName,
       email: req.email,
       phoneNumber: req.phoneNumber || null,
-      password: req.password,
+      password: hashedPassword,
       organizationInstitution: req.organization,
     });
     await stakeholder.save();

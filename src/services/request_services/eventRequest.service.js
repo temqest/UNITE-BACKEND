@@ -1229,7 +1229,8 @@ class EventRequestService {
       // but only when the request was NOT created by a stakeholder. If the
       // request was created by a stakeholder, admins/coordinators must not
       // finalize it — the stakeholder must confirm any reschedule/changes.
-      if (actorIsAdmin || actorIsCoordinator) {
+      // Also skip auto-approval for coordinator review requests where coordinator is acting
+      if ((actorIsAdmin || actorIsCoordinator) && !(actorIsCoordinator && request.Status === 'Pending_Coordinator_Review')) {
         try {
           const approverId = actorId;
           if (freshEvent) {
@@ -1247,10 +1248,8 @@ class EventRequestService {
           const createdByStakeholder = !!request.stakeholder_id;
           if (!createdByStakeholder) {
             request.Status = 'Completed';
-            if (!request.CoordinatorFinalAction) {
-              request.CoordinatorFinalAction = 'Completed';
-              request.CoordinatorFinalActionDate = new Date();
-            }
+            // Note: CoordinatorFinalAction should remain null since this is auto-approval
+            // Only set CoordinatorFinalAction when coordinator actually performs an action
           }
           request.Admin_ID = approverId;
           await request.save();
@@ -1302,10 +1301,15 @@ class EventRequestService {
       isAuthorized = status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || action === 'Cancelled';
     } else if (actorRole === 'Coordinator') {
       // Coordinators can act on coordinator review requests, admin review requests, stakeholder reschedules, and cancel any event
-      isAuthorized = status === 'Pending_Coordinator_Review' || status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || action === 'Cancelled';
+      isAuthorized = status === 'Pending_Coordinator_Review' || status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || status === 'Rescheduled_By_Admin' || action === 'Cancelled';
       // For coordinator review, verify ownership
       if (status === 'Pending_Coordinator_Review' && request.coordinator_id !== actorId) {
         throw new Error('Unauthorized: Coordinator does not own this request');
+      }
+      // Prevent coordinators from acting on requests they already reviewed (system admin workflow)
+      // But allow them to act on Pending_Admin_Review if they haven't already acted on this specific request
+      if (status === 'Pending_Admin_Review' && request.CoordinatorFinalAction && request.CoordinatorFinalAction !== 'Rescheduled') {
+        throw new Error('Coordinator has already acted on this request');
       }
     } else if (actorRole === 'Stakeholder') {
       // Stakeholders can act on stakeholder review requests, accepted admin actions, reschedule or cancel their own completed events
@@ -1325,7 +1329,7 @@ class EventRequestService {
 
       // Only block non-reschedule and non-cancel actions when the request is not in a pending state or rescheduled by stakeholder
       const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
-      const allowedStatusesForActions = [...pendingStatuses, 'Rescheduled_By_Stakeholder'];
+      const allowedStatusesForActions = [...pendingStatuses, 'Rescheduled_By_Stakeholder', 'Rescheduled_By_Admin'];
       if (action !== 'Rescheduled' && action !== 'Cancelled' && !allowedStatusesForActions.includes(request.Status)) {
         throw new Error('Request is not pending review');
       }
@@ -1405,8 +1409,12 @@ class EventRequestService {
         if (action === 'Rescheduled') {
           // Handle rescheduling logic
           const createdByStakeholder = !!request.stakeholder_id;
+          const createdByCoordinator = request.made_by_role === 'Coordinator';
           if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
             if (createdByStakeholder) {
+              event.Status = 'Pending';
+            } else if (createdByCoordinator && (actorRole === 'SystemAdmin' || actorRole === 'Admin')) {
+              // Coordinator-created request rescheduled by admin: keep pending for coordinator review
               event.Status = 'Pending';
             } else {
               event.Status = 'Completed';
@@ -1446,6 +1454,18 @@ class EventRequestService {
             // Admin/Coordinator accepted stakeholder reschedule: event is approved
             event.Status = 'Completed';
             request.Status = 'Completed';
+          } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
+            // Coordinator accepted system admin's request: event publishes immediately
+            event.Status = 'Completed';
+          } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
+            // Admin accepted coordinator's reschedule: event publishes
+            event.Status = 'Completed';
+          } else if (status === 'Pending_Admin_Review' && actorRole === 'Coordinator') {
+            // Coordinator accepted admin's request: event publishes immediately
+            event.Status = 'Completed';
+          } else if (status === 'Rescheduled_By_Admin' && actorRole === 'Coordinator') {
+            // Coordinator accepted admin's reschedule: event is approved
+            event.Status = 'Completed';
           } else {
             // Admin/Coordinator accepted regular request: keep pending for next step
             event.Status = 'Pending';
@@ -1461,10 +1481,8 @@ class EventRequestService {
           if (status === 'Rescheduled_By_Stakeholder' && action === 'Accepted') {
             // Accepting stakeholder reschedule: complete the request
             request.Status = 'Completed';
-            if (!request.CoordinatorFinalAction) {
-              request.CoordinatorFinalAction = 'Completed';
-              request.CoordinatorFinalActionDate = new Date();
-            }
+            // Note: CoordinatorFinalAction should remain null since coordinator didn't act
+            // Only set CoordinatorFinalAction when coordinator actually performs an action
           } else if (action === 'Rejected') {
             // Admin/coordinator rejected: request is rejected regardless of creator
             request.Status = 'Rejected';
@@ -1481,16 +1499,77 @@ class EventRequestService {
             console.log('Previous Status:', request.Status);
             request.Status = 'Cancelled';
             console.log('New Status:', request.Status);
-          } else if (!createdByStakeholder && action !== 'Rescheduled') {
-            request.Status = 'Completed';
-            if (!request.CoordinatorFinalAction) {
-              if (action === 'Rejected') {
-                request.CoordinatorFinalAction = 'Rejected';
-              } else {
-                request.CoordinatorFinalAction = 'Completed';
-              }
+          } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
+            // Coordinator acting on system admin's request
+            if (action === 'Accepted') {
+              // Coordinator accepted: event publishes immediately
+              request.Status = 'Completed';
+              request.CoordinatorFinalAction = 'Accepted';
+              request.CoordinatorFinalActionDate = new Date();
+            } else if (action === 'Rejected') {
+              // Coordinator rejected: send back to sys admin to accept the rejection
+              request.Status = 'Pending_Admin_Review';
+              request.CoordinatorFinalAction = 'Rejected';
+              request.CoordinatorFinalActionDate = new Date();
+            } else if (action === 'Rescheduled') {
+              // Coordinator rescheduled: sys admin reviews the reschedule date
+              request.Status = 'Pending_Admin_Review';
+              request.CoordinatorFinalAction = 'Rescheduled';
               request.CoordinatorFinalActionDate = new Date();
             }
+          } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rejected') {
+            // Sys admin accepting coordinator's rejection: complete the rejection
+            request.Status = 'Rejected';
+          } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
+            // Sys admin reviewing coordinator's reschedule
+            if (action === 'Accepted') {
+              request.Status = 'Completed';
+            } else if (action === 'Rejected') {
+              request.Status = 'Rejected';
+            }
+          } else if (status === 'Pending_Admin_Review' && actorRole === 'Coordinator') {
+            // Coordinator acting on admin's request (coordinator-created without stakeholder)
+            if (action === 'Accepted') {
+              // Coordinator accepted: event publishes immediately
+              request.Status = 'Completed';
+              request.CoordinatorFinalAction = 'Accepted';
+              request.CoordinatorFinalActionDate = new Date();
+            } else if (action === 'Rejected') {
+              // Coordinator rejected: send back to sys admin to accept the rejection
+              request.Status = 'Pending_Admin_Review';
+              request.CoordinatorFinalAction = 'Rejected';
+              request.CoordinatorFinalActionDate = new Date();
+            } else if (action === 'Rescheduled') {
+              // Coordinator rescheduled: sys admin reviews the reschedule date
+              request.Status = 'Pending_Admin_Review';
+              request.CoordinatorFinalAction = 'Rescheduled';
+              request.CoordinatorFinalActionDate = new Date();
+            }
+          } else if (status === 'Rescheduled_By_Admin' && actorRole === 'Coordinator') {
+            // Coordinator acting on admin's reschedule
+            if (action === 'Accepted') {
+              // Coordinator accepted: event publishes immediately
+              request.Status = 'Completed';
+              request.CoordinatorFinalAction = 'Accepted';
+              request.CoordinatorFinalActionDate = new Date();
+            } else if (action === 'Rejected') {
+              // Coordinator rejected: send back to sys admin to accept the rejection
+              request.Status = 'Pending_Admin_Review';
+              request.CoordinatorFinalAction = 'Rejected';
+              request.CoordinatorFinalActionDate = new Date();
+            } else if (action === 'Rescheduled') {
+              // Coordinator rescheduled: sys admin reviews the reschedule date
+              request.Status = 'Pending_Admin_Review';
+              request.CoordinatorFinalAction = 'Rescheduled';
+              request.CoordinatorFinalActionDate = new Date();
+            }
+          } else if (action === 'Rescheduled' && (actorRole === 'SystemAdmin' || actorRole === 'Admin')) {
+            // Admin rescheduling any request: set to rescheduled by admin status
+            request.Status = 'Rescheduled_By_Admin';
+          } else if (!createdByStakeholder && action !== 'Rescheduled' && status !== 'Pending_Coordinator_Review' && status !== 'Pending_Admin_Review') {
+            request.Status = 'Completed';
+            // Note: CoordinatorFinalAction should remain null since coordinator didn't act
+            // Only set CoordinatorFinalAction when coordinator actually performs an action
           } else if (createdByStakeholder && action !== 'Rescheduled' && action !== 'Rejected') {
             // Admin acted on stakeholder-created request: set to pending stakeholder review (only for acceptance)
             request.Status = 'Pending_Stakeholder_Review';
@@ -1545,7 +1624,8 @@ class EventRequestService {
             recipientId = request.coordinator_id;
             recipientType = 'Coordinator';
           } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
-            // Coordinator accepted: no further notification needed (final approval)
+            // Coordinator accepted system admin's request: no notification needed (event published)
+            recipientId = null;
           } else if (status === 'Pending_Admin_Review' && (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator')) {
             // Admin accepted: notify next in chain
             if (request.stakeholder_id) {
@@ -1562,8 +1642,20 @@ class EventRequestService {
             recipientId = request.coordinator_id;
             recipientType = 'Coordinator';
           } else if (request.made_by_role === 'SystemAdmin') {
-            // For admin rejections, we might need to notify all admins or handle differently
-            // For now, skip notification
+            // For admin rejections, notify the admin who created the request
+            if (request.made_by_id) {
+              recipientId = request.made_by_id;
+              recipientType = 'Admin';
+            }
+          }
+        } else if (action === 'Rescheduled') {
+          // Notify the creator about reschedule
+          if (request.made_by_role === 'SystemAdmin' && request.made_by_id) {
+            recipientId = request.made_by_id;
+            recipientType = 'Admin';
+          } else if (request.made_by_role === 'Coordinator') {
+            recipientId = request.coordinator_id;
+            recipientType = 'Coordinator';
           }
         }
 
@@ -1681,7 +1773,7 @@ class EventRequestService {
       }
 
       // Validate action
-      const validActions = ['Completed', 'Accepted', 'Rejected'];
+      const validActions = ['Accepted', 'Rejected'];
       if (!validActions.includes(action)) {
         throw new Error(`Invalid action. Must be one of: ${validActions.join(', ')}`);
       }
@@ -2113,7 +2205,7 @@ class EventRequestService {
       }
 
       // Allow cancellation of pending requests or approved events
-      const allowedStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review', 'Completed'];
+      const allowedStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review', 'Rescheduled_By_Admin', 'Completed'];
       if (!allowedStatuses.includes(request.Status)) {
         throw new Error('Cannot cancel request. Request status does not allow cancellation.');
       }
