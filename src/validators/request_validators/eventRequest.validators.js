@@ -128,6 +128,7 @@ const updateEventRequestSchema = Joi.object({
   adminId: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Admin ID cannot be empty if provided' }),
   // Stakeholder identifier when a stakeholder is submitting an update (allowed)
   stakeholder_id: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Stakeholder ID cannot be empty if provided' }),
+  MadeByStakeholderID: Joi.string().trim().allow('', null).messages({ 'string.empty': 'MadeByStakeholderID cannot be empty if provided' }),
 
   // Common event fields that can be updated
   Event_Title: Joi.string().trim().allow('', null).messages({ 'string.empty': 'Event title cannot be empty' }),

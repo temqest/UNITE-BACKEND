@@ -429,6 +429,140 @@ class NotificationController {
       });
     }
   }
+
+  /**
+   * Create admin cancellation notification (convenience method)
+   * POST /api/notifications/admin-cancellation
+   */
+  async createAdminCancellationNotification(req, res) {
+    try {
+      const { coordinatorId, requestId, eventId, note } = req.body;
+
+      if (!coordinatorId || !requestId || !eventId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator ID, Request ID, and Event ID are required'
+        });
+      }
+
+      const result = await notificationService.createAdminCancellationNotification(
+        coordinatorId,
+        requestId,
+        eventId,
+        note
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
+
+  /**
+   * Create stakeholder cancellation notification (convenience method)
+   * POST /api/notifications/stakeholder-cancellation
+   */
+  async createStakeholderCancellationNotification(req, res) {
+    try {
+      const { stakeholderId, requestId, eventId, note } = req.body;
+
+      if (!stakeholderId || !requestId || !eventId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Stakeholder ID, Request ID, and Event ID are required'
+        });
+      }
+
+      const result = await notificationService.createStakeholderCancellationNotification(
+        stakeholderId,
+        requestId,
+        eventId,
+        note
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
+
+  /**
+   * Create request deletion notification (convenience method)
+   * POST /api/notifications/request-deletion
+   */
+  async createRequestDeletionNotification(req, res) {
+    try {
+      const { coordinatorId, requestId, eventId } = req.body;
+
+      if (!coordinatorId || !requestId || !eventId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator ID, Request ID, and Event ID are required'
+        });
+      }
+
+      const result = await notificationService.createRequestDeletionNotification(
+        coordinatorId,
+        requestId,
+        eventId
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
+
+  /**
+   * Create stakeholder deletion notification (convenience method)
+   * POST /api/notifications/stakeholder-deletion
+   */
+  async createStakeholderDeletionNotification(req, res) {
+    try {
+      const { stakeholderId, requestId, eventId } = req.body;
+
+      if (!stakeholderId || !requestId || !eventId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Stakeholder ID, Request ID, and Event ID are required'
+        });
+      }
+
+      const result = await notificationService.createStakeholderDeletionNotification(
+        stakeholderId,
+        requestId,
+        eventId
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
 }
 
 module.exports = new NotificationController();

@@ -45,11 +45,14 @@ const notificationSchema = new mongoose.Schema({
       'AdminAccepted',        // Admin accepted the request
       'AdminRescheduled',     // Admin rescheduled the request
       'AdminRejected',        // Admin rejected the request
+      'AdminCancelled',       // Admin cancelled the request
       'CoordinatorApproved',  // Coordinator approved admin's acceptance
       'CoordinatorAccepted', // Coordinator accepted admin's reschedule/rejection
       'CoordinatorRejected',  // Coordinator rejected after admin action
       'RequestCompleted',     // Request completed
-      'RequestRejected'       // Request finally rejected
+      'RequestRejected',      // Request finally rejected
+      'RequestCancelled',     // Request cancelled
+      'RequestDeleted'        // Request deleted by sys admin
     ],
     required: true
   },
@@ -176,6 +179,68 @@ notificationSchema.statics.createCoordinatorActionNotification = function(adminI
     Message: message,
     NotificationType: type,
     ActionTaken: action
+  });
+};
+
+// Static method to create notification for admin cancellation
+notificationSchema.statics.createAdminCancellationNotification = function(coordinatorId, requestId, eventId, note) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: coordinatorId,
+    RecipientType: 'Coordinator',
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Title: 'Event Request Cancelled',
+    Message: `An event request has been cancelled by the admin. ${note ? `Reason: ${note}` : ''}`,
+    NotificationType: 'AdminCancelled',
+    ActionTaken: 'Cancelled',
+    ActionNote: note || null
+  });
+};
+
+// Static method to create notification for stakeholder when request is cancelled
+notificationSchema.statics.createStakeholderCancellationNotification = function(stakeholderId, requestId, eventId, note) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: stakeholderId,
+    RecipientType: 'Stakeholder',
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Title: 'Your Event Request Cancelled',
+    Message: `Your event request has been cancelled. ${note ? `Reason: ${note}` : ''}`,
+    NotificationType: 'RequestCancelled',
+    ActionTaken: 'Cancelled',
+    ActionNote: note || null
+  });
+};
+
+// Static method to create notification for request deletion
+notificationSchema.statics.createRequestDeletionNotification = function(coordinatorId, requestId, eventId) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: coordinatorId,
+    RecipientType: 'Coordinator',
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Title: 'Event Request Deleted',
+    Message: `A cancelled event request has been permanently deleted by the system administrator.`,
+    NotificationType: 'RequestDeleted',
+    ActionTaken: 'Deleted'
+  });
+};
+
+// Static method to create notification for stakeholder when request is deleted
+notificationSchema.statics.createStakeholderDeletionNotification = function(stakeholderId, requestId, eventId) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: stakeholderId,
+    RecipientType: 'Stakeholder',
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Title: 'Your Event Request Deleted',
+    Message: `Your event request has been permanently deleted by the system administrator.`,
+    NotificationType: 'RequestDeleted',
+    ActionTaken: 'Deleted'
   });
 };
 

@@ -112,7 +112,7 @@ class EventRequestService {
       const query = {
         Start_Date: { $gte: startOfDay, $lte: endOfDay },
         Location: location,
-        Status: { $in: ['Approved', 'Completed', 'Accepted'] }
+        Status: { $in: ['Completed', 'Completed', 'Accepted'] }
       };
 
       if (excludeEventId) {
@@ -187,7 +187,7 @@ class EventRequestService {
       // 2b. Check permanently blocked weekdays and specific blocked dates
       try {
         const blockedWeekdays = systemSettings.getSetting('blockedWeekdays') || [];
-        if (Array.isArray(blockedWeekdays) && blockedWeekdays.includes(startDate.getDay())) {
+        if (Array.isArray(blockedWeekdays) && blockedWeekdays.length >= 7 && blockedWeekdays[startDate.getDay()]) {
           validationResults.isValid = false;
           validationResults.errors.push('Selected weekday is blocked and not available for events');
         }
@@ -314,7 +314,7 @@ class EventRequestService {
           $gte: new Date(new Date(startDate).setHours(0, 0, 0, 0)),
           $lt: new Date(new Date(endDate || startDate).setHours(23, 59, 59, 999))
         },
-        Status: { $in: ['Approved', 'Completed'] }
+        Status: { $in: ['Completed', 'Completed'] }
       });
       
       const maxEventsPerDay = systemSettings.getSetting('maxEventsPerDay');
@@ -340,17 +340,41 @@ class EventRequestService {
    * @param {Object} eventDoc - Event mongoose doc or plain object
    * @returns {string[]} allowed actions list
    */
-  computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) {
+  async computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) {
     try {
       const role = actorRole ? String(actorRole).toLowerCase() : null;
       const event = eventDoc || (requestDoc ? requestDoc.event : null) || {};
       const req = requestDoc || {};
 
-      const isPublished = event && (String(event.Status) === 'Approved' || String(event.Status) === 'Completed');
+      const isPublished = event && (String(event.Status) === 'Completed' || String(event.Status) === 'Completed');
 
       // Published: all users see view, edit, manage-staff, resched
+      // For approved events, also allow cancel for admins, stakeholders who created the request, and coordinators who own or manage
       if (isPublished) {
-        return ['view', 'edit', 'manage-staff', 'resched'];
+        const actions = ['view', 'edit', 'manage-staff', 'resched'];
+        
+        // Allow cancel for approved events
+        const isAdmin = role === 'admin' || role === 'systemadmin';
+        const isStakeholder = role === 'stakeholder' && req.stakeholder_id === actorId;
+        let isCoordinator = false;
+        if (role === 'coordinator') {
+          isCoordinator = req.coordinator_id === actorId;
+          if (!isCoordinator && req.stakeholder_id) {
+            try {
+              const Stakeholder = require('../../models/index').Stakeholder;
+              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: req.stakeholder_id });
+              isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
+            } catch (e) {
+              // Ignore errors in stakeholder lookup
+            }
+          }
+        }
+        
+        if (isAdmin || isStakeholder || isCoordinator) {
+          actions.push('cancel');
+        }
+        
+        return actions;
       }
 
       // Handle different pending statuses based on workflow
@@ -378,6 +402,16 @@ class EventRequestService {
           return ['view', 'resched', 'accept', 'reject'];
         }
         return ['view']; // Others can only view
+      }
+
+      // Check for cancelled status
+      if (status.includes('cancel')) {
+        return ['view', 'delete'];
+      }
+
+      // Check for rejected status
+      if (status.includes('reject')) {
+        return ['view', 'delete'];
       }
 
       // Legacy handling for other statuses
@@ -422,9 +456,9 @@ class EventRequestService {
    * @param {Object} eventDoc
    * @returns {Object} flags like { canView, canEdit, canManageStaff, canReschedule, canAccept, canReject }
    */
-  computeActionFlags(actorRole, actorId, requestDoc, eventDoc) {
+  async computeActionFlags(actorRole, actorId, requestDoc, eventDoc) {
     try {
-      const allowed = this.computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) || [];
+      const allowed = await this.computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) || [];
       const has = (a) => allowed.includes(a);
       return {
         canView: has('view'),
@@ -434,7 +468,7 @@ class EventRequestService {
         canAccept: has('accept') || has('Accepted') || has('approve'),
         canReject: has('reject') || has('reject') === true,
         // convenience: any admin-like controls
-        canAdminAction: has('accept') || has('reject') || has('resched')
+        canAdminAction: has('accept') || has('reject') || has('resched') || has('cancel')
       };
     } catch (e) {
       return {
@@ -465,7 +499,7 @@ class EventRequestService {
       // Find all blood drive events on this date
       const events = await Event.find({
         Start_Date: { $gte: startOfDay, $lte: endOfDay },
-        Status: { $in: ['Approved', 'Completed'] }
+        Status: { $in: ['Completed', 'Completed'] }
       });
 
       let totalBags = 0;
@@ -611,7 +645,7 @@ class EventRequestService {
       let createdByName = coordinatorName;
       if (eventData.stakeholder_id) {
         try {
-          const stakeholder = await models.Stakeholder.findOne({ Stakeholder_ID: eventData.stakeholder_id }).catch(() => null);
+          const stakeholder = await models.Stakeholder.findOne({ Stakeholder_ID: eventData.stakeholder_id ? eventData.stakeholder_id.toString().trim() : eventData.stakeholder_id }).catch(() => null);
           if (stakeholder) {
             const sfirst = stakeholder.First_Name || stakeholder.FirstName || stakeholder.First || '';
             const slast = stakeholder.Last_Name || stakeholder.LastName || stakeholder.Last || '';
@@ -821,7 +855,7 @@ class EventRequestService {
           eventId,
           coordinatorId,
           coordinatorName,
-          'Approved',
+          'Completed',
           'Accepted_By_Admin'
         );
       } catch (e) {
@@ -931,6 +965,17 @@ class EventRequestService {
       const coordinator = await Coordinator.findOne({ Coordinator_ID: request.coordinator_id });
       const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: request.coordinator_id });
 
+      // Get stakeholder info if the request was made by a stakeholder
+      let stakeholder = null;
+      let stakeholderDistrict = null;
+      if (request.made_by_role === 'Stakeholder' && request.stakeholder_id) {
+        stakeholder = await require('../../models/index').Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id ? request.stakeholder_id.toString().trim() : request.stakeholder_id });
+        if (stakeholder) {
+          // Populate district information
+          stakeholderDistrict = await require('../../models/index').District.findOne({ _id: stakeholder.district }).catch(() => null);
+        }
+      }
+
       // Also fetch any staff assignments for this event so the frontend can display them
       let staffAssignments = [];
       try {
@@ -949,7 +994,7 @@ class EventRequestService {
           ...request.toObject(),
           event: event.toObject(),
           category: categoryData,
-          coordinator: {
+          coordinator: coordinator ? {
             ...coordinator.toObject(),
             staff: staff ? {
               First_Name: staff.First_Name,
@@ -957,7 +1002,18 @@ class EventRequestService {
               Email: staff.Email,
               Phone_Number: staff.Phone_Number
             } : null
-          },
+          } : null,
+          stakeholder: stakeholder ? {
+            ...stakeholder.toObject(),
+            staff: stakeholder ? {
+              First_Name: stakeholder.firstName,
+              Last_Name: stakeholder.lastName,
+              Email: stakeholder.email,
+              Phone_Number: stakeholder.phoneNumber
+            } : null,
+            District_Name: stakeholderDistrict ? stakeholderDistrict.name : undefined,
+            District_Number: stakeholderDistrict ? stakeholderDistrict.code : undefined
+          } : null,
           // include normalized staff assignment list for convenience
           staff: staffAssignments
         }
@@ -1003,29 +1059,31 @@ class EventRequestService {
       // by strict ownership; we only enforce that the request is still
       // pending review.
       if (actorIsStakeholder) {
-        // Allow stakeholder updates. If the request was already processed (e.g., Completed)
-        // then convert it back to the appropriate pending status so the stakeholder's changes
-        // will be re-evaluated. Clear previous admin/coordinator/stakeholder
-        // approvals so the flow requires fresh review.
-        const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
-        if (!pendingStatuses.includes(request.Status)) {
-          request.AdminAction = null;
-          request.AdminNote = null;
-          request.RescheduledDate = null;
-          request.AdminActionDate = null;
-          request.CoordinatorFinalAction = null;
-          request.CoordinatorFinalActionDate = null;
-          request.StakeholderFinalAction = null;
-          request.StakeholderFinalActionDate = null;
-          // Reset to the initial status based on the workflow
-          const stakeholderId = request.stakeholder_id;
-          const madeByRole = request.made_by_role;
-          if (stakeholderId && madeByRole !== 'Stakeholder') {
-            request.Status = 'Pending_Stakeholder_Review';
-          } else if (!stakeholderId && madeByRole === 'SystemAdmin') {
-            request.Status = 'Pending_Coordinator_Review';
-          } else {
-            request.Status = 'Pending_Admin_Review';
+        // Check if this edit requires review based on the frontend flag
+        const requiresReview = updateData.requiresReview === true;
+        
+        // Only reset status to pending review if this edit requires review
+        if (requiresReview) {
+          const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
+          if (!pendingStatuses.includes(request.Status)) {
+            request.AdminAction = null;
+            request.AdminNote = null;
+            request.RescheduledDate = null;
+            request.AdminActionDate = null;
+            request.CoordinatorFinalAction = null;
+            request.CoordinatorFinalActionDate = null;
+            request.StakeholderFinalAction = null;
+            request.StakeholderFinalActionDate = null;
+            // Reset to the initial status based on the workflow
+            const stakeholderId = request.stakeholder_id;
+            const madeByRole = request.made_by_role;
+            if (stakeholderId && madeByRole !== 'Stakeholder') {
+              request.Status = 'Pending_Stakeholder_Review';
+            } else if (!stakeholderId && madeByRole === 'SystemAdmin') {
+              request.Status = 'Pending_Coordinator_Review';
+            } else {
+              request.Status = 'Pending_Admin_Review';
+            }
           }
         }
 
@@ -1053,6 +1111,26 @@ class EventRequestService {
       const event = await Event.findOne({ Event_ID: request.Event_ID });
       if (!event) {
         throw new Error('Event not found');
+      }
+
+      // Store original data if not already stored (for showing changes in view modal)
+      if (!request.originalData) {
+        const categoryData = {};
+        if (event.Category === 'BloodDrive') {
+          const bd = await BloodDrive.findOne({ BloodDrive_ID: event.Event_ID });
+          if (bd) categoryData.bloodDrive = bd.toObject();
+        } else if (event.Category === 'Advocacy') {
+          const adv = await Advocacy.findOne({ Advocacy_ID: event.Event_ID });
+          if (adv) categoryData.advocacy = adv.toObject();
+        } else if (event.Category === 'Training') {
+          const tr = await Training.findOne({ Training_ID: event.Event_ID });
+          if (tr) categoryData.training = tr.toObject();
+        }
+        request.originalData = {
+          event: event.toObject(),
+          category: categoryData
+        };
+        await request.save();
       }
 
       // If date/time is being updated, revalidate and apply
@@ -1160,7 +1238,7 @@ class EventRequestService {
             if (createdByStakeholder) {
               freshEvent.Status = 'Pending';
             } else {
-              freshEvent.Status = 'Approved';
+              freshEvent.Status = 'Completed';
             }
             freshEvent.ApprovedByAdminID = approverId;
             await freshEvent.save();
@@ -1170,7 +1248,7 @@ class EventRequestService {
           if (!createdByStakeholder) {
             request.Status = 'Completed';
             if (!request.CoordinatorFinalAction) {
-              request.CoordinatorFinalAction = 'Approved';
+              request.CoordinatorFinalAction = 'Completed';
               request.CoordinatorFinalActionDate = new Date();
             }
           }
@@ -1216,55 +1294,83 @@ class EventRequestService {
 
       // Validate actor permissions based on request status
       const status = request.Status;
+      console.log('processRequestAction: actorRole=', actorRole, 'status=', status);
       let isAuthorized = false;
 
-      if (actorRole === 'SystemAdmin') {
-        // Admins can act on admin review requests
-        isAuthorized = status === 'Pending_Admin_Review';
-      } else if (actorRole === 'Coordinator') {
-        // Coordinators can act on coordinator review requests or admin review requests (as admin)
-        isAuthorized = status === 'Pending_Coordinator_Review' || status === 'Pending_Admin_Review';
-        // For coordinator review, verify ownership
-        if (status === 'Pending_Coordinator_Review' && request.coordinator_id !== actorId) {
-          throw new Error('Unauthorized: Coordinator does not own this request');
-        }
-      } else if (actorRole === 'Stakeholder') {
-        // Stakeholders can act on stakeholder review requests
-        isAuthorized = status === 'Pending_Stakeholder_Review';
-        // Verify ownership
-        if (request.stakeholder_id !== actorId) {
-          throw new Error('Unauthorized: Stakeholder does not own this request');
-        }
+    if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+      // Admins can act on admin review requests, stakeholder reschedules, and cancel any event
+      isAuthorized = status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || action === 'Cancelled';
+    } else if (actorRole === 'Coordinator') {
+      // Coordinators can act on coordinator review requests, admin review requests, stakeholder reschedules, and cancel any event
+      isAuthorized = status === 'Pending_Coordinator_Review' || status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || action === 'Cancelled';
+      // For coordinator review, verify ownership
+      if (status === 'Pending_Coordinator_Review' && request.coordinator_id !== actorId) {
+        throw new Error('Unauthorized: Coordinator does not own this request');
       }
-
-      if (!isAuthorized) {
+    } else if (actorRole === 'Stakeholder') {
+      // Stakeholders can act on stakeholder review requests, accepted admin actions, reschedule or cancel their own completed events
+      isAuthorized = status === 'Pending_Stakeholder_Review' || status === 'Accepted_By_Admin' || (action === 'Rescheduled' && request.stakeholder_id === actorId) || (action === 'Cancelled' && request.stakeholder_id === actorId);
+      // Also allow reschedule on completed/approved requests if they own the request
+      if (action === 'Rescheduled' && request.stakeholder_id === actorId) {
+        isAuthorized = true;
+      }
+      // Verify ownership
+      console.log('Stakeholder check: request.stakeholder_id=', request.stakeholder_id, 'actorId=', actorId);
+      if (request.stakeholder_id !== actorId) {
+        throw new Error('Unauthorized: Stakeholder does not own this request');
+      }
+    }      if (!isAuthorized) {
         throw new Error(`Unauthorized: ${actorRole} cannot act on requests with status ${status}`);
       }
 
-      // Only block non-reschedule actions when the request is not in a pending state
+      // Only block non-reschedule and non-cancel actions when the request is not in a pending state or rescheduled by stakeholder
       const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
-      if (action !== 'Rescheduled' && !pendingStatuses.includes(request.Status)) {
+      const allowedStatusesForActions = [...pendingStatuses, 'Rescheduled_By_Stakeholder'];
+      if (action !== 'Rescheduled' && action !== 'Cancelled' && !allowedStatusesForActions.includes(request.Status)) {
         throw new Error('Request is not pending review');
       }
 
       // Update request based on actor type
-      if (actorRole === 'SystemAdmin' || actorRole === 'Coordinator') {
-        // Admin/Coordinator action
+      if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+        // Admin action
         request.Admin_ID = actorId;
         request.AdminAction = action;
-        if ((action === 'Rescheduled' || action === 'Accepted') && (actorRole === 'SystemAdmin' || actorRole === 'Coordinator')) {
-          request.AdminAction = 'Accepted';
-        }
         request.AdminNote = note;
         request.RescheduledDate = rescheduledDate;
         request.AdminActionDate = new Date();
+      } else if (actorRole === 'Coordinator') {
+        // Coordinator action
+        if (status === 'Pending_Coordinator_Review') {
+          request.CoordinatorFinalAction = action;
+          request.CoordinatorFinalActionDate = new Date();
+        } else {
+          // Acting as admin
+          request.Admin_ID = actorId;
+          request.AdminAction = action;
+          request.AdminNote = note;
+          request.RescheduledDate = rescheduledDate;
+          request.AdminActionDate = new Date();
+        }
       } else if (actorRole === 'Stakeholder') {
-        // Stakeholder action - they can only accept
-        if (action !== 'Accepted') {
-          throw new Error('Stakeholders can only accept requests');
+        // Stakeholder action - they can accept, reschedule, or cancel approved events
+        if (action !== 'Accepted' && action !== 'Rescheduled' && action !== 'Cancelled') {
+          throw new Error('Stakeholders can only accept, reschedule, or cancel requests');
         }
         request.StakeholderFinalAction = action;
+        request.StakeholderNote = note;
         request.StakeholderFinalActionDate = new Date();
+
+        // Handle stakeholder cancellation
+        if (action === 'Cancelled') {
+          console.log('=== PROCESS REQUEST ACTION DEBUG: Stakeholder Setting status to Cancelled ===');
+          console.log('Request ID:', requestId);
+          console.log('Actor Role:', actorRole);
+          console.log('Action:', action);
+          console.log('Previous Status:', request.Status);
+          request.Status = 'Cancelled';
+          console.log('New Status:', request.Status);
+          await request.save();
+        }
       }
 
       if (action === 'Rescheduled' && !rescheduledDate) {
@@ -1299,11 +1405,11 @@ class EventRequestService {
         if (action === 'Rescheduled') {
           // Handle rescheduling logic
           const createdByStakeholder = !!request.stakeholder_id;
-          if (actorRole === 'SystemAdmin' || actorRole === 'Coordinator') {
+          if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
             if (createdByStakeholder) {
               event.Status = 'Pending';
             } else {
-              event.Status = 'Approved';
+              event.Status = 'Completed';
             }
           } else {
             event.Status = 'Rescheduled';
@@ -1328,14 +1434,20 @@ class EventRequestService {
           }
         } else if (action === 'Rejected') {
           event.Status = 'Rejected';
+        } else if (action === 'Cancelled') {
+          event.Status = 'Rejected';
         } else if (action === 'Accepted') {
           // Different logic based on actor and workflow
           if (actorRole === 'Stakeholder') {
             // Stakeholder accepted: event is approved
-            event.Status = 'Approved';
+            event.Status = 'Completed';
+            request.Status = 'Completed';
+          } else if (status === 'Rescheduled_By_Stakeholder') {
+            // Admin/Coordinator accepted stakeholder reschedule: event is approved
+            event.Status = 'Completed';
             request.Status = 'Completed';
           } else {
-            // Admin/Coordinator accepted: keep pending for next step
+            // Admin/Coordinator accepted regular request: keep pending for next step
             event.Status = 'Pending';
           }
         }
@@ -1344,27 +1456,51 @@ class EventRequestService {
         await event.save();
 
         // Handle request completion for admin/coordinator actions
-        if (actorRole === 'SystemAdmin' || actorRole === 'Coordinator') {
+        if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
           const createdByStakeholder = !!request.stakeholder_id;
-          if (!createdByStakeholder && action !== 'Rescheduled') {
+          if (status === 'Rescheduled_By_Stakeholder' && action === 'Accepted') {
+            // Accepting stakeholder reschedule: complete the request
+            request.Status = 'Completed';
+            if (!request.CoordinatorFinalAction) {
+              request.CoordinatorFinalAction = 'Completed';
+              request.CoordinatorFinalActionDate = new Date();
+            }
+          } else if (action === 'Rejected') {
+            // Admin/coordinator rejected: request is rejected regardless of creator
+            request.Status = 'Rejected';
+            if (!request.CoordinatorFinalAction) {
+              request.CoordinatorFinalAction = 'Rejected';
+              request.CoordinatorFinalActionDate = new Date();
+            }
+          } else if (action === 'Cancelled') {
+            // Admin/coordinator cancelled: request is cancelled
+            console.log('=== PROCESS REQUEST ACTION DEBUG: Setting status to Cancelled ===');
+            console.log('Request ID:', requestId);
+            console.log('Actor Role:', actorRole);
+            console.log('Action:', action);
+            console.log('Previous Status:', request.Status);
+            request.Status = 'Cancelled';
+            console.log('New Status:', request.Status);
+          } else if (!createdByStakeholder && action !== 'Rescheduled') {
             request.Status = 'Completed';
             if (!request.CoordinatorFinalAction) {
               if (action === 'Rejected') {
                 request.CoordinatorFinalAction = 'Rejected';
               } else {
-                request.CoordinatorFinalAction = 'Approved';
+                request.CoordinatorFinalAction = 'Completed';
               }
               request.CoordinatorFinalActionDate = new Date();
             }
-          } else if (createdByStakeholder && action !== 'Rescheduled') {
-            // Admin acted on stakeholder-created request: leave for stakeholder confirmation
+          } else if (createdByStakeholder && action !== 'Rescheduled' && action !== 'Rejected') {
+            // Admin acted on stakeholder-created request: set to pending stakeholder review (only for acceptance)
+            request.Status = 'Pending_Stakeholder_Review';
           }
           await request.save();
         }
       }
 
       // Create history entry
-      if (actorRole === 'SystemAdmin' || actorRole === 'Coordinator') {
+      if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
         const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
         const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
         
@@ -1410,7 +1546,7 @@ class EventRequestService {
             recipientType = 'Coordinator';
           } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
             // Coordinator accepted: no further notification needed (final approval)
-          } else if (status === 'Pending_Admin_Review' && (actorRole === 'SystemAdmin' || actorRole === 'Coordinator')) {
+          } else if (status === 'Pending_Admin_Review' && (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator')) {
             // Admin accepted: notify next in chain
             if (request.stakeholder_id) {
               recipientId = request.stakeholder_id;
@@ -1479,7 +1615,7 @@ class EventRequestService {
       }
 
       // Check if event is approved
-      if (event.Status !== 'Approved' && event.Status !== 'Completed') {
+      if (event.Status !== 'Completed' && event.Status !== 'Completed') {
         throw new Error('Staff can only be assigned to approved events');
       }
 
@@ -1545,7 +1681,7 @@ class EventRequestService {
       }
 
       // Validate action
-      const validActions = ['Approved', 'Accepted', 'Rejected'];
+      const validActions = ['Completed', 'Accepted', 'Rejected'];
       if (!validActions.includes(action)) {
         throw new Error(`Invalid action. Must be one of: ${validActions.join(', ')}`);
       }
@@ -1628,7 +1764,7 @@ class EventRequestService {
       // Approve the linked event
       const event = await Event.findOne({ Event_ID: request.Event_ID });
       if (event) {
-        event.Status = 'Approved';
+        event.Status = 'Completed';
         await event.save();
       }
       request.Status = 'Completed';
@@ -1691,48 +1827,6 @@ class EventRequestService {
       };
     } catch (error) {
       throw new Error(`Failed to record stakeholder confirmation: ${error.message}`);
-    }
-  }
-
-  /**
-   * Cancel/Delete pending request
-   * @param {string} requestId 
-   * @param {string} coordinatorId 
-   * @returns {Object} Result
-   */
-  async cancelEventRequest(requestId, coordinatorId) {
-    try {
-      const request = await this._findRequest(requestId);
-      if (!request) {
-        throw new Error('Request not found');
-      }
-
-      // Only allow cancellation if pending any review
-      const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
-      if (!pendingStatuses.includes(request.Status)) {
-        throw new Error('Cannot cancel request. Request is no longer pending.');
-      }
-
-      // Verify coordinator owns this request
-      if (request.coordinator_id !== coordinatorId) {
-        throw new Error('Unauthorized: Coordinator does not own this request');
-      }
-
-      // Delete related data
-      await Event.deleteOne({ Event_ID: request.Event_ID });
-      await BloodDrive.deleteOne({ BloodDrive_ID: request.Event_ID });
-      await Advocacy.deleteOne({ Advocacy_ID: request.Event_ID });
-      await Training.deleteOne({ Training_ID: request.Event_ID });
-      await EventRequestHistory.deleteMany({ Request_ID: requestId });
-      await EventRequest.deleteOne({ Request_ID: requestId });
-
-      return {
-        success: true,
-        message: 'Request cancelled successfully'
-      };
-
-    } catch (error) {
-      throw new Error(`Failed to cancel request: ${error.message}`);
     }
   }
 
@@ -2003,7 +2097,338 @@ class EventRequestService {
       throw new Error(`Failed to get all requests: ${error.message}`);
     }
   }
+
+  /**
+   * Cancel/Delete pending request or cancel approved event
+   * @param {string} requestId 
+   * @param {string} actorRole - Role of the actor (Coordinator, SystemAdmin, Admin, Stakeholder)
+   * @param {string} actorId - ID of the actor performing the cancellation
+   * @returns {Object} Result
+   */
+  async cancelEventRequest(requestId, actorRole, actorId, note = null) {
+    try {
+      const request = await this._findRequest(requestId);
+      if (!request) {
+        throw new Error('Request not found');
+      }
+
+      // Allow cancellation of pending requests or approved events
+      const allowedStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review', 'Completed'];
+      if (!allowedStatuses.includes(request.Status)) {
+        throw new Error('Cannot cancel request. Request status does not allow cancellation.');
+      }
+
+      // Authorization checks based on actor role and request status
+      if (request.Status === 'Completed') {
+        // For approved events, sys admins, coordinators (own or handle stakeholder), stakeholders (own) can cancel
+        const isAdmin = actorRole === 'SystemAdmin' || actorRole === 'Admin';
+        const isStakeholder = actorRole === 'Stakeholder' && request.stakeholder_id === actorId;
+        
+        let isCoordinator = false;
+        if (actorRole === 'Coordinator') {
+          isCoordinator = request.coordinator_id === actorId;
+          if (!isCoordinator && request.stakeholder_id) {
+            try {
+              const Stakeholder = require('../../models/index').Stakeholder;
+              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
+              isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
+            } catch (e) {
+              // Ignore errors in stakeholder lookup
+            }
+          }
+        }
+        
+        if (!isAdmin && !isStakeholder && !isCoordinator) {
+          throw new Error('Unauthorized: Only sys admins, coordinators (who own the event or handle the stakeholder), or the stakeholder who created this event can cancel approved events');
+        }
+      } else {
+        // For pending requests, sys admins, coordinators (own or handle stakeholder), stakeholders (own) can cancel
+        const isAdmin = actorRole === 'SystemAdmin' || actorRole === 'Admin';
+        const isStakeholder = actorRole === 'Stakeholder' && request.stakeholder_id === actorId;
+        
+        let isCoordinator = false;
+        if (actorRole === 'Coordinator') {
+          isCoordinator = request.coordinator_id === actorId;
+          if (!isCoordinator && request.stakeholder_id) {
+            try {
+              const Stakeholder = require('../../models/index').Stakeholder;
+              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
+              isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
+            } catch (e) {
+              // Ignore errors in stakeholder lookup
+            }
+          }
+        }
+        
+        if (!isAdmin && !isStakeholder && !isCoordinator) {
+          throw new Error('Unauthorized: Only sys admins, coordinators (who own the request or handle the stakeholder), or the stakeholder who created this request can cancel pending requests');
+        }
+      }
+
+      // Handle cancellation based on request status
+      if (request.Status === 'Completed') {
+        // For approved events: update event status to 'Cancelled' but keep the request record
+        const event = await Event.findOne({ Event_ID: request.Event_ID });
+        if (event) {
+          event.Status = 'Cancelled';
+          await event.save();
+        }
+        
+        // Update request status to 'Cancelled' and store cancellation note
+        request.Status = 'Cancelled';
+        if (note) {
+          request.AdminNote = note; // Store cancellation note in AdminNote field
+        }
+        await request.save();
+        
+        console.log('cancelEventRequest: Set request status to Cancelled for completed event, requestId=', requestId, 'final status=', request.Status);
+        
+        // Create history entry
+        if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+          
+          await EventRequestHistory.createAdminActionHistory(
+            requestId,
+            request.Event_ID,
+            actorId,
+            actorName,
+            'Cancelled',
+            note || 'Event cancelled by admin',
+            null,
+            event ? event.Start_Date : null
+          );
+        } else if (actorRole === 'Coordinator') {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+          
+          await EventRequestHistory.createCoordinatorActionHistory(
+            requestId,
+            request.Event_ID,
+            actorId,
+            coordinatorName,
+            'Cancelled',
+            request.Status
+          );
+        } else if (actorRole === 'Stakeholder') {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+          
+          await EventRequestHistory.createCoordinatorActionHistory(
+            requestId,
+            request.Event_ID,
+            actorId,
+            stakeholderName,
+            'Cancelled',
+            request.Status
+          );
+        }
+        
+        // Send cancellation notifications
+        try {
+          const Notification = require('../../models/index').Notification;
+          
+          // Notify coordinator
+          await Notification.createAdminCancellationNotification(
+            request.coordinator_id,
+            requestId,
+            request.Event_ID,
+            note || 'Event cancelled'
+          );
+          
+          // Notify stakeholder if they created the request
+          if (request.stakeholder_id) {
+            await Notification.createStakeholderCancellationNotification(
+              request.stakeholder_id,
+              requestId,
+              request.Event_ID,
+              note || 'Event cancelled'
+            );
+          }
+        } catch (notificationError) {
+          console.warn('Error sending cancellation notifications:', notificationError);
+        }
+        
+        return {
+          success: true,
+          message: 'Event cancelled successfully',
+          request: request
+        };
+      } else {
+        // For pending requests: set status to 'Cancelled' instead of deleting
+        const event = await Event.findOne({ Event_ID: request.Event_ID });
+        if (event) {
+          event.Status = 'Cancelled';
+          await event.save();
+        }
+        
+        // Update request status to 'Cancelled' and store cancellation note
+        request.Status = 'Cancelled';
+        if (note) {
+          request.AdminNote = note; // Store cancellation note in AdminNote field
+        }
+        await request.save();
+        
+        console.log('cancelEventRequest: Set request status to Cancelled for pending request, requestId=', requestId, 'final status=', request.Status);
+        
+        // Create history entry
+        if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+          
+          await EventRequestHistory.createAdminActionHistory(
+            requestId,
+            request.Event_ID,
+            actorId,
+            actorName,
+            'Cancelled',
+            note || 'Request cancelled by admin',
+            null,
+            event ? event.Start_Date : null
+          );
+        } else if (actorRole === 'Coordinator') {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+          
+          await EventRequestHistory.createCoordinatorActionHistory(
+            requestId,
+            request.Event_ID,
+            actorId,
+            coordinatorName,
+            'Cancelled',
+            request.Status
+          );
+        } else if (actorRole === 'Stakeholder') {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+          
+          await EventRequestHistory.createCoordinatorActionHistory(
+            requestId,
+            request.Event_ID,
+            actorId,
+            stakeholderName,
+            'Cancelled',
+            request.Status
+          );
+        }
+        
+        // Send cancellation notifications
+        try {
+          const Notification = require('../../models/index').Notification;
+          
+          // Notify coordinator
+          await Notification.createAdminCancellationNotification(
+            request.coordinator_id,
+            requestId,
+            request.Event_ID,
+            note || 'Request cancelled'
+          );
+          
+          // Notify stakeholder if they created the request
+          if (request.stakeholder_id) {
+            await Notification.createStakeholderCancellationNotification(
+              request.stakeholder_id,
+              requestId,
+              request.Event_ID,
+              note || 'Request cancelled'
+            );
+          }
+        } catch (notificationError) {
+          console.warn('Error sending cancellation notifications:', notificationError);
+        }
+        
+        return {
+          success: true,
+          message: 'Request cancelled successfully',
+          request: request
+        };
+      }
+
+    } catch (error) {
+      throw new Error(`Failed to cancel request: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delete a cancelled or rejected event request and associated data
+   * @param {string} requestId
+   * @param {string} actorRole
+   * @param {string} actorId
+   * @returns {Object} Result
+   */
+  async deleteEventRequest(requestId, actorRole, actorId) {
+    try {
+      console.log('=== DELETE EVENT REQUEST DEBUG ===');
+      console.log('Request ID:', requestId);
+      console.log('Actor Role:', actorRole);
+      console.log('Actor ID:', actorId);
+
+      const request = await this._findRequest(requestId);
+      if (!request) {
+        console.log('ERROR: Request not found');
+        throw new Error('Request not found');
+      }
+
+      console.log('Found request with Status:', request.Status);
+      console.log('Request object:', JSON.stringify(request, null, 2));
+
+      // Debug logging
+      console.log('deleteEventRequest: requestId=', requestId, 'current Status=', request.Status, 'allowedStatuses=', ['Cancelled', 'Rejected']);
+
+      // Only allow deletion of cancelled or rejected requests
+      const allowedStatuses = ['Cancelled', 'Rejected'];
+      if (!allowedStatuses.includes(request.Status)) {
+        console.log('deleteEventRequest: Status not allowed. Current status:', request.Status);
+        console.log('Allowed statuses:', allowedStatuses);
+        console.log('Request details:', {
+          Request_ID: request.Request_ID,
+          Status: request.Status,
+          AdminAction: request.AdminAction,
+          StakeholderFinalAction: request.StakeholderFinalAction,
+          CoordinatorFinalAction: request.CoordinatorFinalAction
+        });
+        throw new Error('Cannot delete request. Only cancelled or rejected requests can be deleted.');
+      }
+
+      // Authorization checks based on actor role and request status
+      const isAdmin = actorRole === 'SystemAdmin' || actorRole === 'Admin';
+      const isStakeholder = actorRole === 'Stakeholder' && request.stakeholder_id === actorId;
+      
+      let isCoordinator = false;
+      if (actorRole === 'Coordinator') {
+        isCoordinator = request.coordinator_id === actorId;
+        if (!isCoordinator && request.stakeholder_id) {
+          try {
+            const Stakeholder = require('../../models/index').Stakeholder;
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
+            isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
+          } catch (e) {
+            // Ignore errors in stakeholder lookup
+          }
+        }
+      }
+      
+      if (!isAdmin && !isStakeholder && !isCoordinator) {
+        throw new Error('Unauthorized: Only sys admins, coordinators (who own the request or handle the stakeholder), or the stakeholder who created this request can delete cancelled or rejected requests');
+      }
+
+      // Delete everything associated with the request
+      await Event.deleteOne({ Event_ID: request.Event_ID });
+      await BloodDrive.deleteOne({ BloodDrive_ID: request.Event_ID });
+      await Advocacy.deleteOne({ Advocacy_ID: request.Event_ID });
+      await Training.deleteOne({ Training_ID: request.Event_ID });
+      await EventRequestHistory.deleteMany({ Request_ID: requestId });
+      await EventRequest.deleteOne({ Request_ID: requestId });
+
+      return {
+        success: true,
+        message: 'Request deleted successfully'
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to delete request: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new EventRequestService();
-

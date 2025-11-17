@@ -307,7 +307,57 @@ router.post('/notifications/coordinator-action', async (req, res, next) => {
   }
 });
 
-module.exports = router;
+/**
+ * @route   POST /api/notifications/admin-cancellation
+ * @desc    Create admin cancellation notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/admin-cancellation', async (req, res, next) => {
+  try {
+    await notificationController.createAdminCancellationNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/notifications/stakeholder-cancellation
+ * @desc    Create stakeholder cancellation notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/stakeholder-cancellation', async (req, res, next) => {
+  try {
+    await notificationController.createStakeholderCancellationNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/notifications/request-deletion
+ * @desc    Create request deletion notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/request-deletion', async (req, res, next) => {
+  try {
+    await notificationController.createRequestDeletionNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/notifications/stakeholder-deletion
+ * @desc    Create stakeholder deletion notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/stakeholder-deletion', async (req, res, next) => {
+  try {
+    await notificationController.createStakeholderDeletionNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
 
 // ==================== LOCATION & SIGNUP REQUEST ROUTES ====================
 
@@ -402,5 +452,4 @@ router.get('/signup-requests/verify-email', async (req, res, next) => {
   }
 });
 
-
-
+module.exports = router;

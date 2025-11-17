@@ -27,9 +27,11 @@ const eventRequestHistorySchema = new mongoose.Schema({
       'AdminAccepted',        // Admin accepted the request
       'AdminRescheduled',    // Admin rescheduled the request
       'AdminRejected',       // Admin rejected the request
+      'AdminCancelled',      // Admin cancelled approved event
       'CoordinatorApproved', // Coordinator approved admin's acceptance
       'CoordinatorAccepted', // Coordinator accepted admin's reschedule/rejection
       'CoordinatorRejected', // Coordinator rejected after admin action
+      'StakeholderCancelled', // Stakeholder cancelled approved event
       'Completed',           // Request completed
       'Rejected'             // Request finally rejected
     ],
@@ -132,6 +134,9 @@ eventRequestHistorySchema.statics.createAdminActionHistory = function(
     case 'Rejected':
       newStatus = 'Rejected_By_Admin';
       break;
+    case 'Cancelled':
+      newStatus = 'Cancelled';
+      break;
     default:
       newStatus = 'Pending_Admin_Review';
   }
@@ -144,7 +149,7 @@ eventRequestHistorySchema.statics.createAdminActionHistory = function(
     Actor_ID: adminId,
     ActorType: 'Admin',
     ActorName: adminName || null,
-    PreviousStatus: 'Pending_Admin_Review',
+    PreviousStatus: 'Completed', // For cancellations, previous status was Completed
     NewStatus: newStatus,
     Note: note || null,
     RescheduledDate: rescheduledDate || null,
@@ -177,6 +182,10 @@ eventRequestHistorySchema.statics.createCoordinatorActionHistory = function(
     case 'Rejected':
       actionType = 'CoordinatorRejected';
       newStatus = 'Rejected';
+      break;
+    case 'Cancelled':
+      actionType = 'StakeholderCancelled';
+      newStatus = 'Cancelled';
       break;
     default:
       actionType = 'CoordinatorApproved';
@@ -211,12 +220,16 @@ eventRequestHistorySchema.methods.getFormattedDescription = function() {
       return `Admin ${actor} rescheduled this request on ${date}${this.RescheduledDate ? ` to ${new Date(this.RescheduledDate).toLocaleDateString()}` : ''}${this.Note ? ` - ${this.Note}` : ''}`;
     case 'AdminRejected':
       return `Admin ${actor} rejected this request on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
+    case 'AdminCancelled':
+      return `Admin ${actor} cancelled this event on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
     case 'CoordinatorApproved':
       return `Coordinator ${actor} approved this request on ${date}`;
     case 'CoordinatorAccepted':
       return `Coordinator ${actor} accepted the admin's decision on ${date}`;
     case 'CoordinatorRejected':
       return `Coordinator ${actor} rejected this request on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
+    case 'StakeholderCancelled':
+      return `Stakeholder ${actor} cancelled this event on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
     case 'Completed':
       return `Request completed on ${date}`;
     case 'Rejected':

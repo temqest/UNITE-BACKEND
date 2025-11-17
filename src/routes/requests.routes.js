@@ -248,13 +248,13 @@ router.post('/requests/:requestId/staff', authenticate, async (req, res, next) =
 });
 
 /**
- * @route   POST /api/requests/:requestId/coordinator-confirm
- * @desc    Coordinator confirms admin's decision
- * @access  Private (Coordinator)
+ * @route   POST /api/requests/:requestId/stakeholder-confirm
+ * @desc    Stakeholder confirms admin/coordinator decision
+ * @access  Private (Stakeholder)
  */
-router.post('/requests/:requestId/coordinator-confirm', async (req, res, next) => {
+router.post('/requests/:requestId/stakeholder-confirm', authenticate, async (req, res, next) => {
   try {
-    await eventRequestController.coordinatorConfirmRequest(req, res);
+    await eventRequestController.stakeholderConfirmRequest(req, res);
   } catch (error) {
     next(error);
   }
@@ -265,9 +265,22 @@ router.post('/requests/:requestId/coordinator-confirm', async (req, res, next) =
  * @desc    Cancel/Delete pending request
  * @access  Private (Coordinator)
  */
-router.delete('/requests/:requestId', async (req, res, next) => {
+router.delete('/requests/:requestId', authenticate, async (req, res, next) => {
   try {
     await eventRequestController.cancelEventRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/requests/:requestId/delete
+ * @desc    Delete a cancelled or rejected request
+ * @access  Private
+ */
+router.delete('/requests/:requestId/delete', authenticate, async (req, res, next) => {
+  try {
+    await eventRequestController.deleteEventRequest(req, res);
   } catch (error) {
     next(error);
   }
