@@ -31,7 +31,11 @@ class LocationService {
     // find coordinator for the district (first match)
     const coordinator = await Coordinator.findOne({ district: district._id });
 
-    const token = signToken({
+    // Generate 6-digit verification code
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Create signup request with verification code
+    const req = new SignUpRequest({
       firstName: data.firstName,
       middleName: data.middleName,
       lastName: data.lastName,
@@ -42,13 +46,17 @@ class LocationService {
       province: province._id,
       district: district._id,
       municipality: municipality._id,
-      assignedCoordinator: coordinator?._id || null
-    }, { expiresIn: '24h' });
+      assignedCoordinator: coordinator?._id || null,
+      verificationCode: verificationCode,
+      emailVerified: false
+    });
 
-    // Send verification email with the JWT token
-    await emailService.sendVerificationCode(data.email, token);
+    await req.save();
 
-    return { message: 'Verification email sent' };
+    // Send verification email with the code
+    await emailService.sendVerificationCode(data.email, verificationCode);
+
+    return { message: 'Verification code sent to your email' };
   }
 
   async approveRequest(requestId, approverId) {
@@ -155,20 +163,41 @@ UNITE Blood Bank Team
   }
 
   async getSignUpRequests(user) {
-    // Temporarily show all pending requests for debugging
     if (user.role === 'Admin') {
-      return SignUpRequest.find({ status: 'pending' }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
+      return SignUpRequest.find({ status: 'pending', emailVerified: true }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
     } else if (user.role === 'Coordinator') {
-      // Find coordinator record to get their district
+      // Find coordinator record to get their district and province
       const coord = await Coordinator.findOne({ Coordinator_ID: user.id });
       if (!coord) return [];
-      // Show all pending requests in the coordinator's district
-      return SignUpRequest.find({ district: coord.District_ID, status: 'pending' }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
+      // Show all pending requests in the coordinator's province and district
+      return SignUpRequest.find({ province: coord.province, district: coord.district, status: 'pending', emailVerified: true }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
     }
     return [];
   }
 
   async verifyEmailToken(token) {
+    // Check if token is a 6-digit code
+    if (/^\d{6}$/.test(token)) {
+      const req = await SignUpRequest.findOne({ verificationCode: token, emailVerified: false });
+      if (!req) throw new Error('Invalid verification code');
+      req.emailVerified = true;
+      await req.save();
+
+      // Create notification for coordinator about new signup request
+      if (req.assignedCoordinator) {
+        const { Notification } = require('../../models');
+        const requesterName = `${req.firstName} ${req.middleName || ''} ${req.lastName}`.trim();
+        await Notification.createNewSignupRequestNotification(
+          req.assignedCoordinator,
+          req._id.toString(),
+          requesterName,
+          req.email
+        );
+      }
+
+      return req;
+    }
+
     try {
       // Try to decode as JWT first
       const decoded = verifyToken(token);

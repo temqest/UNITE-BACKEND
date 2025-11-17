@@ -14,6 +14,7 @@ const signupRequestSchema = new mongoose.Schema({
   assignedCoordinator: { type: mongoose.Schema.Types.ObjectId, ref: 'Coordinator', required: false },
   status: { type: String, enum: ['pending','approved','rejected'], default: 'pending' },
   emailVerificationToken: { type: String, required: false },
+  verificationCode: { type: String, required: false },
   emailVerified: { type: Boolean, default: false },
   submittedAt: { type: Date, default: Date.now },
   decisionAt: { type: Date }

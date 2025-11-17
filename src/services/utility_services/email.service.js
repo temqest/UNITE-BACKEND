@@ -11,15 +11,13 @@ class EmailService {
     });
   }
 
-  async sendVerificationCode(email, token) {
-    const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/verify-email?token=${encodeURIComponent(token)}`;
-    
+  async sendVerificationCode(email, code) {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: email,
       subject: 'UNITE - Verify Your Email',
-      text: `Please click the following link to verify your email: ${verificationUrl}`,
-      html: `<p>Please click the following link to verify your email:</p><p><a href="${verificationUrl}">Verify Email</a></p><p>This link will expire in 24 hours.</p>`
+      text: `Your verification code is: ${code}\n\nPlease enter this code in the signup form to verify your email.\n\nThis code will expire in 24 hours.`,
+      html: `<p>Your verification code is: <strong>${code}</strong></p><p>Please enter this code in the signup form to verify your email.</p><p>This code will expire in 24 hours.</p>`
     };
 
     try {
