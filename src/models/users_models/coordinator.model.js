@@ -8,20 +8,21 @@ const coordinatorSchema = new mongoose.Schema({
     trim: true,
     ref: 'BloodbankStaff'
   },
-  District_ID: {
-    type: String,
-    required: true,
-    trim: true,
-    ref: 'District'
+  province: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Province',
+    required: true
   },
-  Province_Name: {
-    type: String,
-    required: false,
-    trim: true
+  district: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'District',
+    required: true
   }
 }, {
   timestamps: true
 });
+
+coordinatorSchema.index({ province: 1, district: 1 }, { unique: true });
 
 const Coordinator = mongoose.model('Coordinator', coordinatorSchema);
 

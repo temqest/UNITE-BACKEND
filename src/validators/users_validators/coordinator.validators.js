@@ -10,21 +10,21 @@ const createCoordinatorSchema = Joi.object({
       'string.empty': 'Coordinator ID cannot be empty'
     }),
 
-  District_ID: Joi.string()
+  district: Joi.string()
     .required()
     .trim()
     .messages({
-      'any.required': 'District ID is required',
-      'string.empty': 'District ID cannot be empty'
+      'any.required': 'District is required',
+      'string.empty': 'District cannot be empty'
     }),
 
-  Province_Name: Joi.string()
+  province: Joi.string()
     .trim()
     .min(2)
     .max(100)
     .messages({
-      'string.min': 'Province Name must be at least 2 characters long',
-      'string.max': 'Province Name must not exceed 100 characters'
+      'string.min': 'Province must be at least 2 characters long',
+      'string.max': 'Province must not exceed 100 characters'
     })
 });
 
@@ -42,6 +42,13 @@ const updateCoordinatorSchema = Joi.object({
       'string.empty': 'District ID cannot be empty'
     }),
 
+  // New normalized fields (ObjectId refs) — allow updating with new keys during migration
+  district: Joi.string()
+    .trim()
+    .messages({
+      'string.empty': 'district cannot be empty'
+    }),
+
   Province_Name: Joi.string()
     .trim()
     .min(2)
@@ -50,6 +57,12 @@ const updateCoordinatorSchema = Joi.object({
       'string.empty': 'Province Name cannot be empty',
       'string.min': 'Province Name must be at least 2 characters long',
       'string.max': 'Province Name must not exceed 100 characters'
+    })
+,
+  province: Joi.string()
+    .trim()
+    .messages({
+      'string.empty': 'province cannot be empty'
     })
 ,
   // Allow updating staff fields as part of coordinator update

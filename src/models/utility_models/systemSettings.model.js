@@ -8,7 +8,7 @@ const SystemSettingsSchema = new mongoose.Schema({
   advanceBookingDays: { type: Number, default: 30 },
   maxPendingRequests: { type: Number, default: 1 },
   preventOverlappingRequests: { type: Boolean, default: true },
-  preventDoubleBooking: { type: Boolean, default: true },
+  preventDoubleBooking: { type: Boolean, default: false },
   allowCoordinatorStaffAssignment: { type: Boolean, default: false },
   requireStaffAssignment: { type: Boolean, default: false },
   blockedWeekdays: { type: [Number], default: [] }, // 0..6 (Sun..Sat)

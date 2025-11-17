@@ -13,17 +13,51 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Event'
   },
-  Coordinator_ID: {
+  // Simplified structure as requested
+  coordinator_id: {
     type: String,
     required: true,
     trim: true,
     ref: 'Coordinator'
   },
-  MadeByStakeholderID: {
+  stakeholder_id: {
     type: String,
     required: false,
     trim: true,
     ref: 'Stakeholder'
+  },
+  made_by_id: {
+    type: String,
+    required: true,
+    trim: true,
+    refPath: 'made_by_role' // Dynamic reference based on role
+  },
+  made_by_role: {
+    type: String,
+    required: true,
+    enum: ['SystemAdmin', 'Coordinator', 'Stakeholder']
+  },
+  // New hierarchical references to support Province -> District -> Municipality
+  province: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Province',
+    required: false
+  },
+  district: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'District',
+    required: false
+  },
+  municipality: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Municipality',
+    required: false
+  },
+  // Optional explicit stakeholder reference as ObjectId
+  stakeholder: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Stakeholder',
+    required: false
   },
   // Category/type of the event (e.g., 'BloodDrive', 'Training', 'Advocacy')
   Category: {
@@ -39,7 +73,7 @@ const eventRequestSchema = new mongoose.Schema({
   // Admin's decision
   AdminAction: {
     type: String,
-    enum: ['Accepted', 'Rescheduled', 'Rejected', null],
+    enum: ['Accepted', 'Rescheduled', 'Rejected', 'Cancelled', null],
     default: null
   },
   AdminNote: {
@@ -47,14 +81,14 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: function(note) {
-        // If admin rescheduled or rejected, note is required
-        if (this.AdminAction === 'Rescheduled' || this.AdminAction === 'Rejected') {
+        // If admin rescheduled, rejected, or cancelled, note is required
+        if (this.AdminAction === 'Rescheduled' || this.AdminAction === 'Rejected' || this.AdminAction === 'Cancelled') {
           return note && note.trim().length > 0;
         }
         // If admin accepted, note is optional
         return true;
       },
-      message: 'Note is required when admin reschedules or rejects the request'
+      message: 'Note is required when admin reschedules, rejects, or cancels the request'
     }
   },
   // New date if admin rescheduled
@@ -77,7 +111,7 @@ const eventRequestSchema = new mongoose.Schema({
   // Coordinator's final decision after admin review
   CoordinatorFinalAction: {
     type: String,
-    enum: ['Approved', 'Accepted', 'Rejected', null],
+    enum: ['Approved', 'Accepted', 'Rejected', 'Rescheduled', null],
     default: null
   },
   CoordinatorFinalActionDate: {
@@ -86,8 +120,23 @@ const eventRequestSchema = new mongoose.Schema({
   // Stakeholder's final confirmation after admin/coordinator review
   StakeholderFinalAction: {
     type: String,
-    enum: ['Accepted', 'Rejected', null],
+    enum: ['Accepted', 'Rejected', 'Rescheduled', null],
     default: null
+  },
+  StakeholderNote: {
+    type: String,
+    trim: true,
+    validate: {
+      validator: function(note) {
+        // If stakeholder rescheduled, note is required
+        if (this.StakeholderFinalAction === 'Rescheduled') {
+          return note && note.trim().length > 0;
+        }
+        // If stakeholder accepted or rejected, note is optional
+        return true;
+      },
+      message: 'Note is required when stakeholder reschedules the request'
+    }
   },
   StakeholderFinalActionDate: {
     type: Date
@@ -97,14 +146,24 @@ const eventRequestSchema = new mongoose.Schema({
     type: String,
     enum: [
       'Pending_Admin_Review',
+      'Pending_Coordinator_Review',
+      'Pending_Stakeholder_Review',
       'Accepted_By_Admin',
       'Rescheduled_By_Admin',
+      'Rescheduled_By_Coordinator',
+      'Rescheduled_By_Stakeholder',
       'Rejected_By_Admin',
       'Completed',
-      'Rejected'
+      'Rejected',
+      'Cancelled'
     ],
     required: true,
     default: 'Pending_Admin_Review'
+  },
+  // For edit requests, store the original event data to show changes
+  originalData: {
+    type: Object,
+    default: null
   }
 }, {
   timestamps: true
@@ -112,6 +171,11 @@ const eventRequestSchema = new mongoose.Schema({
 
 // Pre-save hook to update status based on actions
 eventRequestSchema.pre('save', function(next) {
+  // Don't override if status is already set to a final state
+  if (this.Status === 'Cancelled' || this.Status === 'Rejected') {
+    return next();
+  }
+
   // Update status based on admin action
   if (this.AdminAction && !this.CoordinatorFinalAction) {
     if (this.AdminAction === 'Accepted') {
@@ -120,6 +184,8 @@ eventRequestSchema.pre('save', function(next) {
       this.Status = 'Rescheduled_By_Admin';
     } else if (this.AdminAction === 'Rejected') {
       this.Status = 'Rejected_By_Admin';
+    } else if (this.AdminAction === 'Cancelled') {
+      this.Status = 'Cancelled';
     }
   }
 
@@ -129,6 +195,19 @@ eventRequestSchema.pre('save', function(next) {
       this.Status = 'Completed';
     } else if (this.CoordinatorFinalAction === 'Rejected') {
       this.Status = 'Rejected';
+    } else if (this.CoordinatorFinalAction === 'Rescheduled') {
+      this.Status = 'Rescheduled_By_Coordinator';
+    }
+  }
+
+  // Update status based on stakeholder final action
+  if (this.StakeholderFinalAction) {
+    if (this.StakeholderFinalAction === 'Accepted') {
+      this.Status = 'Completed';
+    } else if (this.StakeholderFinalAction === 'Rejected') {
+      this.Status = 'Rejected';
+    } else if (this.StakeholderFinalAction === 'Rescheduled') {
+      this.Status = 'Rescheduled_By_Stakeholder';
     }
   }
 
@@ -139,6 +218,10 @@ eventRequestSchema.pre('save', function(next) {
 
   if (this.CoordinatorFinalAction && !this.CoordinatorFinalActionDate) {
     this.CoordinatorFinalActionDate = new Date();
+  }
+
+  if (this.StakeholderFinalAction && !this.StakeholderFinalActionDate) {
+    this.StakeholderFinalActionDate = new Date();
   }
 
   next();

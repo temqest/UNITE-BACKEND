@@ -1,5 +1,5 @@
 const bcrypt = require('bcrypt');
-const { BloodbankStaff, Coordinator, District, EventRequest, Event, Notification } = require('../../models/index');
+const { BloodbankStaff, Coordinator, District, Province, EventRequest, Event, Notification } = require('../../models/index');
 
 class CoordinatorService {
   /**
@@ -28,10 +28,16 @@ class CoordinatorService {
         throw new Error('Staff data and coordinator data are required');
       }
 
-      // Validate that district exists
-      const district = await District.findOne({ District_ID: coordinatorData.District_ID });
+      // Validate that district exists and belongs to provided province (if provided)
+      const district = await District.findById(coordinatorData.district);
       if (!district) {
-        throw new Error('Invalid District ID. District does not exist');
+        throw new Error('Invalid district. District does not exist');
+      }
+
+      if (coordinatorData.province) {
+        if (!district.province || String(district.province) !== String(coordinatorData.province)) {
+          throw new Error('District does not belong to the provided province');
+        }
       }
 
       // Check if email already exists
@@ -64,11 +70,11 @@ class CoordinatorService {
 
       const savedStaff = await bloodbankStaff.save();
 
-      // Create Coordinator record
+      // Create Coordinator record with proper references
       const coordinator = new Coordinator({
         Coordinator_ID: coordinatorId,
-        District_ID: coordinatorData.District_ID,
-        Province_Name: coordinatorData.Province_Name || null
+        province: coordinatorData.province,
+        district: coordinatorData.district
       });
 
       const savedCoordinator = await coordinator.save();
@@ -78,7 +84,8 @@ class CoordinatorService {
         success: true,
         coordinator: {
           Coordinator_ID: savedCoordinator.Coordinator_ID,
-          District_ID: savedCoordinator.District_ID,
+          province: savedCoordinator.province,
+          district: savedCoordinator.district,
           District: district,
           Staff: {
             ID: savedStaff.ID,
@@ -115,7 +122,7 @@ class CoordinatorService {
   async getCoordinatorById(coordinatorId) {
     try {
       const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
-      
+
       if (!coordinator) {
         throw new Error('Coordinator not found');
       }
@@ -125,7 +132,7 @@ class CoordinatorService {
         throw new Error('Staff record not found for this coordinator');
       }
 
-      const district = await District.findOne({ District_ID: coordinator.District_ID });
+      const district = await District.findById(coordinator.district);
       if (!district) {
         throw new Error('District not found');
       }
@@ -134,7 +141,8 @@ class CoordinatorService {
         success: true,
         coordinator: {
           Coordinator_ID: coordinator.Coordinator_ID,
-          District_ID: coordinator.District_ID,
+          province: coordinator.province,
+          district: coordinator.district,
           District: district,
           Staff: {
             ID: staff.ID,
@@ -171,7 +179,7 @@ class CoordinatorService {
       // Build query
       const query = {};
       if (filters.district_id) {
-        query.District_ID = filters.district_id;
+        query.district = filters.district_id;
       }
 
       const coordinators = await Coordinator.find(query)
@@ -185,11 +193,12 @@ class CoordinatorService {
       const coordinatorDetails = await Promise.all(
         coordinators.map(async (coord) => {
           const staff = await BloodbankStaff.findOne({ ID: coord.Coordinator_ID });
-          const district = await District.findOne({ District_ID: coord.District_ID });
-          
+          const district = await District.findById(coord.district);
+
           return {
             Coordinator_ID: coord.Coordinator_ID,
-            District_ID: coord.District_ID,
+            province: coord.province,
+            district: coord.district,
             District: district || null,
             Staff: staff ? {
               First_Name: staff.First_Name,
@@ -237,23 +246,22 @@ class CoordinatorService {
         throw new Error('Staff record not found');
       }
 
-      const updates = {};
-
-      // Update district if provided
-      if (updateData.District_ID) {
-        const district = await District.findOne({ District_ID: updateData.District_ID });
-        if (!district) {
-          throw new Error('Invalid District ID');
+      // Update district if provided (ensure it belongs to province if province provided)
+      if (updateData.district) {
+        const district = await District.findById(updateData.district);
+        if (!district) throw new Error('Invalid district');
+        if (updateData.province && String(district.province) !== String(updateData.province)) {
+          throw new Error('District does not belong to the provided province');
         }
-        coordinator.District_ID = updateData.District_ID;
-        await coordinator.save();
+        coordinator.district = updateData.district;
       }
 
-      // Update province name if provided
-      if (updateData.Province_Name !== undefined) {
-        coordinator.Province_Name = updateData.Province_Name;
-        await coordinator.save();
+      // Update province if provided
+      if (updateData.province) {
+        coordinator.province = updateData.province;
       }
+
+      await coordinator.save();
 
       // Update staff information
       if (updateData.First_Name) staff.First_Name = updateData.First_Name;

@@ -39,7 +39,7 @@ This directory contains all event request and scheduling logic for the UNITE Blo
   maxPendingRequests: 1,
   pendingFollowUpDays: 3,
   preventOverlappingRequests: true,
-  preventDoubleBooking: true,
+  preventDoubleBooking: false,
   allowCoordinatorStaffAssignment: false,
   requireStaffAssignment: false
 }

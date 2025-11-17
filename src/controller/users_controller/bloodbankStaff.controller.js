@@ -444,7 +444,20 @@ class BloodbankStaffController {
         return res.status(200).json({ success: true, data: { coordinators, stakeholders } });
       } else if (role === 'Coordinator') {
         // Coordinator can only see stakeholders in their district
-        const districtId = requester.district_id || (requester.role_data && requester.role_data.district_id) || null;
+        let districtId = requester.district_id || (requester.role_data && requester.role_data.district_id) || null;
+        
+        // If district_id is not found in token, try to fetch it from the database
+        if (!districtId) {
+          try {
+            const coord = await coordinatorService.getCoordinatorById(requester.id);
+            if (coord.success && coord.coordinator && coord.coordinator.District_ID) {
+              districtId = coord.coordinator.District_ID;
+            }
+          } catch (e) {
+            // ignore database errors
+          }
+        }
+        
         if (!districtId) {
           return res.status(400).json({ success: false, message: 'Coordinator district_id not found' });
         }

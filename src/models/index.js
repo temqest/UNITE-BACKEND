@@ -26,10 +26,13 @@ const EventRequestHistory = require('./request_models/eventRequestHistory.model'
 // ============================================
 // UTILITY MODELS
 // ============================================
+const Province = require('./utility_models/province.model');
 const District = require('./utility_models/distric.model');
+const Municipality = require('./utility_models/municipality.model');
 const Notification = require('./utility_models/notifications.model');
 const RegistrationCode = require('./utility_models/registrationCode.model');
 const SystemSettings = require('./utility_models/systemSettings.model');
+const SignUpRequest = require('./utility_models/signupRequest.model');
 
 // ============================================
 // MODEL RELATIONSHIPS & CONSTRAINTS
@@ -101,7 +104,7 @@ const validateAdmin = async (adminId) => {
  */
 const validateDistrict = async (districtId) => {
   try {
-    const district = await District.findOne({ District_ID: districtId });
+    const district = await District.findById(districtId);
     return !!district;
   } catch (error) {
     return false;
@@ -173,10 +176,13 @@ module.exports = {
   EventRequestHistory,
   
   // Utility Models
+  Province,
   District,
+  Municipality,
   Notification,
   RegistrationCode,
   SystemSettings,
+  SignUpRequest,
   
   // Validation Helpers
   validateCoordinator,
@@ -185,6 +191,7 @@ module.exports = {
   validateEvent,
   validateRequest,
   validateBloodbankStaff,
+  
   
   // Mongoose instance (in case needed elsewhere)
   mongoose

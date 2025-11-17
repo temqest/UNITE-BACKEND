@@ -7,6 +7,7 @@ const {
   Training,
   EventStaff,
   Coordinator,
+  Stakeholder,
   BloodbankStaff,
   SystemAdmin
 } = require('../../models/index');
@@ -28,7 +29,10 @@ class EventDetailsService {
       const category = await this.getEventCategory(event.Event_ID);
       
       // Get coordinator information
-      const coordinator = await this.getCoordinatorInfo(event.MadeByCoordinatorID);
+      const coordinator = await this.getCoordinatorInfo(event.coordinator_id);
+      
+      // Get stakeholder information
+      const stakeholder = await this.getStakeholderInfo(event.stakeholder_id);
       
       // Get admin information (if approved)
       let admin = null;
@@ -91,6 +95,7 @@ class EventDetailsService {
           category: category.type,
           categoryData: category.data,
           coordinator: coordinator,
+          stakeholder: stakeholder,
           admin: admin,
           request: request ? {
             Request_ID: request.Request_ID,
@@ -181,7 +186,10 @@ class EventDetailsService {
    */
   async getCoordinatorInfo(coordinatorId) {
     try {
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
+      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId })
+        .populate('district', 'name') // Populate district name
+        .populate('province', 'name'); // Also populate province if needed
+      
       if (!coordinator) {
         return null;
       }
@@ -190,19 +198,65 @@ class EventDetailsService {
       if (!staff) {
         return {
           id: coordinatorId,
-          district_id: coordinator.District_ID
+          district: coordinator.district,
+          province: coordinator.province
         };
       }
 
       return {
         id: coordinatorId,
-        district_id: coordinator.District_ID,
+        district: coordinator.district,
+        province: coordinator.province,
         name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
         email: staff.Email,
         phone: staff.Phone_Number
       };
 
     } catch (error) {
+      console.error('Error in getCoordinatorInfo:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get stakeholder information
+   * @param {string} stakeholderId 
+   * @returns {Object} Stakeholder info
+   */
+  async getStakeholderInfo(stakeholderId) {
+    try {
+      if (!stakeholderId) {
+        return null;
+      }
+
+      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId })
+        .populate('district', 'name')
+        .populate('province', 'name');
+      
+      if (!stakeholder) {
+        return null;
+      }
+
+      const staff = await BloodbankStaff.findOne({ ID: stakeholderId });
+      if (!staff) {
+        return {
+          id: stakeholderId,
+          district: stakeholder.district,
+          province: stakeholder.province
+        };
+      }
+
+      return {
+        id: stakeholderId,
+        district: stakeholder.district,
+        province: stakeholder.province,
+        name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
+        email: staff.Email,
+        phone: staff.Phone_Number
+      };
+
+    } catch (error) {
+      console.error('Error in getStakeholderInfo:', error);
       return null;
     }
   }

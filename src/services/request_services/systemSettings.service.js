@@ -19,7 +19,7 @@ const DEFAULTS = {
   maxPendingRequests: 1,
   pendingFollowUpDays: 3,
   preventOverlappingRequests: true,
-  preventDoubleBooking: true,
+  preventDoubleBooking: false,
   allowCoordinatorStaffAssignment: false,
   requireStaffAssignment: false,
   blockedWeekdays: [],

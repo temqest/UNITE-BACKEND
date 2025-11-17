@@ -1,0 +1,19 @@
+System admin created successfully:
+{
+  "Admin_ID": "ADMIN_1763280879714_toms7r2m5",
+  "AccessLevel": "super",
+  "Staff": {
+    "ID": "ADMIN_1763280879714_toms7r2m5",
+    "First_Name": "Test",
+    "Middle_Name": null,
+    "Last_Name": "Admin",
+    "Email": "sysadmin@example.com",
+    "Phone_Number": "+63 9123456789",
+    "StaffType": "Admin",
+    "created_at": "2025-11-16T08:14:39.776Z",
+    "updated_at": "2025-11-16T08:14:39.776Z"
+  },
+  "created_at": "2025-11-16T08:14:39.940Z",
+  "updated_at": "2025-11-16T08:14:39.940Z"
+}
+Credentials (plaintext from config): {"Email":"sysadmin@example.com","Password":"ChangeMe123!"}

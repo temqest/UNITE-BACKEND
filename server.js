@@ -9,13 +9,34 @@ const app = express();
 
 // ==================== ENVIRONMENT VARIABLES ====================
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI;
+// Accept multiple env names for compatibility
+const rawMongoUri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL || null;
+const mongoDbName = process.env.MONGO_DB_NAME || null; // optional DB name to ensure connection to a specific DB
 
 // Validate required environment variables
-if (!MONGO_URI) {
-  console.error('❌ ERROR: MONGO_URI is not defined in environment variables');
-  console.error('Please create a .env file with MONGO_URI');
+if (!rawMongoUri) {
+  console.error('❌ ERROR: MongoDB connection string is not defined (MONGODB_URI or MONGO_URI)');
+  console.error('Please create a .env file with MONGODB_URI or MONGO_URI');
   process.exit(1);
+}
+
+// If a DB name is provided separately and the URI does not already contain a DB path, append it.
+let MONGO_URI = rawMongoUri;
+if (mongoDbName) {
+  // Determine if the URI already has a database name portion (i.e. after the host and before query '?')
+  // We'll check for '/<dbname>' before any query string.
+  const idx = rawMongoUri.indexOf('?');
+  const beforeQuery = idx === -1 ? rawMongoUri : rawMongoUri.slice(0, idx);
+  // If there is no DB portion (no slash followed by non-empty segment after the host), append one.
+  // A simple heuristic: if beforeQuery ends with '/' or contains '/@' (unlikely), treat as missing.
+  const hasDb = /\/[A-Za-z0-9_\-]+$/.test(beforeQuery);
+  if (!hasDb) {
+    if (idx === -1) {
+      MONGO_URI = `${rawMongoUri.replace(/\/$/, '')}/${mongoDbName}`;
+    } else {
+      MONGO_URI = `${rawMongoUri.slice(0, idx).replace(/\/$/, '')}/${mongoDbName}${rawMongoUri.slice(idx)}`;
+    }
+  }
 }
 
 // ==================== SECURITY MIDDLEWARE ====================

@@ -18,7 +18,7 @@ class StakeholderController {
         return res.status(400).json({ success: false, message: 'Email and password are required' });
       }
       const result = await stakeholderService.authenticate(email, password);
-  const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.District_ID, coordinator_id: result.stakeholder.Coordinator_ID });
+  const token = signToken({ id: result.stakeholder.Stakeholder_ID, role: 'Stakeholder', district_id: result.stakeholder.district, coordinator_id: result.stakeholder.coordinator });
       // Set a server-side cookie with a sanitized user payload so the
       // frontend (Next.js app) can read it during SSR and show admin links
       // without waiting for client-side localStorage. Cookie contains only
@@ -30,8 +30,8 @@ class StakeholderController {
         const cookieValue = JSON.stringify({
           role: result.stakeholder.Role || result.stakeholder.role || result.stakeholder.StaffType || null,
           isAdmin: !!isAdminFlag,
-          First_Name: result.stakeholder.First_Name || result.stakeholder.FirstName || null,
-          email: result.stakeholder.Email || result.stakeholder.email || null,
+          First_Name: result.stakeholder.firstName || result.stakeholder.First_Name || null,
+          email: result.stakeholder.email || result.stakeholder.Email || null,
           id: result.stakeholder.Stakeholder_ID || result.stakeholder.id || null,
         });
         // Development: do not log cookie content to avoid leaking sensitive data
@@ -84,12 +84,27 @@ class StakeholderController {
         }
 
         const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
-        if (!actorDistrict) {
+        
+        // If district_id is not found in token, try to fetch it from the database
+        let finalActorDistrict = actorDistrict;
+        if (!finalActorDistrict) {
+          try {
+            const { Coordinator } = require('../../models');
+            const coord = await Coordinator.findOne({ Coordinator_ID: actor.id });
+            if (coord && coord.District_ID) {
+              finalActorDistrict = coord.District_ID;
+            }
+          } catch (e) {
+            // ignore database errors
+          }
+        }
+        
+        if (!finalActorDistrict) {
           return res.status(403).json({ success: false, message: 'Unauthorized: coordinator missing district information' });
         }
 
         // Override any client-supplied district filter to prevent bypassing
-        filters.district_id = String(actorDistrict);
+        filters.district_id = String(finalActorDistrict);
       }
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
@@ -130,7 +145,22 @@ class StakeholderController {
             return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
           }
           const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
-          if (!actorDistrict || String(actorDistrict) !== String(stakeholder.District_ID)) {
+          
+          // If district_id is not found in token, try to fetch it from the database
+          let finalActorDistrict = actorDistrict;
+          if (!finalActorDistrict) {
+            try {
+              const { Coordinator } = require('../../models');
+              const coord = await Coordinator.findOne({ Coordinator_ID: actor.id });
+              if (coord && coord.District_ID) {
+                finalActorDistrict = coord.District_ID;
+              }
+            } catch (e) {
+              // ignore database errors
+            }
+          }
+          
+          if (!finalActorDistrict || String(finalActorDistrict) !== String(stakeholder.district)) {
             return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only access stakeholders in their district' });
           }
         }
@@ -163,12 +193,27 @@ class StakeholderController {
           return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
         }
         const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
-        if (!actorDistrict || String(actorDistrict) !== String(existing.District_ID)) {
+        
+        // If district_id is not found in token, try to fetch it from the database
+        let finalActorDistrict = actorDistrict;
+        if (!finalActorDistrict) {
+          try {
+            const { Coordinator } = require('../../models');
+            const coord = await Coordinator.findOne({ Coordinator_ID: actor.id });
+            if (coord && coord.District_ID) {
+              finalActorDistrict = coord.District_ID;
+            }
+          } catch (e) {
+            // ignore database errors
+          }
+        }
+        
+        if (!finalActorDistrict || String(finalActorDistrict) !== String(existing.district)) {
           return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only update stakeholders in their district' });
         }
 
         // Coordinators are not allowed to change District_ID — enforce by removing it from payload
-        if ('District_ID' in payload) delete payload.District_ID;
+        if ('district' in payload) delete payload.district;
       }
 
       const result = await stakeholderService.update(id, payload);
@@ -196,7 +241,22 @@ class StakeholderController {
           return res.status(403).json({ success: false, message: 'Admin or Coordinator access required' });
         }
         const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
-        if (!actorDistrict || String(actorDistrict) !== String(existing.District_ID)) {
+        
+        // If district_id is not found in token, try to fetch it from the database
+        let finalActorDistrict = actorDistrict;
+        if (!finalActorDistrict) {
+          try {
+            const { Coordinator } = require('../../models');
+            const coord = await Coordinator.findOne({ Coordinator_ID: actor.id });
+            if (coord && coord.District_ID) {
+              finalActorDistrict = coord.District_ID;
+            }
+          } catch (e) {
+            // ignore database errors
+          }
+        }
+        
+        if (!finalActorDistrict || String(finalActorDistrict) !== String(existing.district)) {
           return res.status(403).json({ success: false, message: 'Unauthorized: coordinator may only delete stakeholders in their district' });
         }
       }

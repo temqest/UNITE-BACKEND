@@ -7,7 +7,8 @@ const {
   EventStaff,
   Coordinator,
   BloodbankStaff,
-  District
+  District,
+  Stakeholder
 } = require('../../models/index');
 
 class CalendarService {
@@ -86,6 +87,20 @@ class CalendarService {
             coordinator = null;
           }
 
+          // attempt to resolve any attached stakeholder
+          let stakeholderInfo = null;
+          try {
+            const stakeholderDoc = event.stakeholder ? await Stakeholder.findById(event.stakeholder).catch(() => null) : (event.MadeByStakeholderID ? await Stakeholder.findOne({ Stakeholder_ID: event.MadeByStakeholderID }).catch(() => null) : null);
+            if (stakeholderDoc) {
+              stakeholderInfo = {
+                id: stakeholderDoc.Stakeholder_ID || stakeholderDoc._id,
+                name: `${stakeholderDoc.firstName || stakeholderDoc.First_Name || ''} ${stakeholderDoc.lastName || stakeholderDoc.Last_Name || ''}`.trim()
+              };
+            }
+          } catch (e) {
+            stakeholderInfo = null;
+          }
+
           return {
             Event_ID: event.Event_ID,
             Event_Title: event.Event_Title,
@@ -96,6 +111,7 @@ class CalendarService {
             categoryData: category.data || null,
             color: this.getCategoryColor(category.type),
             coordinator: coordinator
+            , stakeholder: stakeholderInfo
           };
         })
       );
