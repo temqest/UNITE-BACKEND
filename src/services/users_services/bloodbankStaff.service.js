@@ -44,7 +44,7 @@ class BloodbankStaffService {
           roleData = {
             type: 'Coordinator',
             coordinator_id: coordinator.Coordinator_ID,
-            district_id: coordinator.District_ID
+            district_id: coordinator.district
           };
         }
       }
@@ -201,7 +201,7 @@ class BloodbankStaffService {
           roleData = {
             type: 'Coordinator',
             coordinator_id: coordinator.Coordinator_ID,
-            district_id: coordinator.District_ID
+            district_id: coordinator.district
           };
         }
       }

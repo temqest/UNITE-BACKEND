@@ -563,6 +563,106 @@ class NotificationController {
       });
     }
   }
+
+  /**
+   * Create new signup request notification (convenience method)
+   * POST /api/notifications/new-signup-request
+   */
+  async createNewSignupRequestNotification(req, res) {
+    try {
+      const { coordinatorId, signupRequestId, requesterName, requesterEmail } = req.body;
+
+      if (!coordinatorId || !signupRequestId || !requesterName || !requesterEmail) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator ID, Signup Request ID, Requester Name, and Requester Email are required'
+        });
+      }
+
+      const result = await notificationService.createNewSignupRequestNotification(
+        coordinatorId,
+        signupRequestId,
+        requesterName,
+        requesterEmail
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
+
+  /**
+   * Create signup request approved notification (convenience method)
+   * POST /api/notifications/signup-request-approved
+   */
+  async createSignupRequestApprovedNotification(req, res) {
+    try {
+      const { stakeholderId, signupRequestId, stakeholderName } = req.body;
+
+      if (!stakeholderId || !signupRequestId || !stakeholderName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Stakeholder ID, Signup Request ID, and Stakeholder Name are required'
+        });
+      }
+
+      const result = await notificationService.createSignupRequestApprovedNotification(
+        stakeholderId,
+        signupRequestId,
+        stakeholderName
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
+
+  /**
+   * Create signup request rejected notification (convenience method)
+   * POST /api/notifications/signup-request-rejected
+   */
+  async createSignupRequestRejectedNotification(req, res) {
+    try {
+      const { email, signupRequestId, reason } = req.body;
+
+      if (!email || !signupRequestId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email and Signup Request ID are required'
+        });
+      }
+
+      const result = await notificationService.createSignupRequestRejectedNotification(
+        email,
+        signupRequestId,
+        reason
+      );
+
+      return res.status(201).json({
+        success: result.success,
+        data: result.notification
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to create notification'
+      });
+    }
+  }
 }
 
 module.exports = new NotificationController();

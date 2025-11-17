@@ -52,7 +52,10 @@ const notificationSchema = new mongoose.Schema({
       'RequestCompleted',     // Request completed
       'RequestRejected',      // Request finally rejected
       'RequestCancelled',     // Request cancelled
-      'RequestDeleted'        // Request deleted by sys admin
+      'RequestDeleted',       // Request deleted by sys admin
+      'NewSignupRequest',     // New stakeholder signup request
+      'SignupRequestApproved', // Signup request approved
+      'SignupRequestRejected'  // Signup request rejected
     ],
     required: true
   },
@@ -241,6 +244,45 @@ notificationSchema.statics.createStakeholderDeletionNotification = function(stak
     Message: `Your event request has been permanently deleted by the system administrator.`,
     NotificationType: 'RequestDeleted',
     ActionTaken: 'Deleted'
+  });
+};
+
+// Static method to create notification for new signup request
+notificationSchema.statics.createNewSignupRequestNotification = function(coordinatorId, signupRequestId, requesterName, requesterEmail) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: coordinatorId,
+    RecipientType: 'Coordinator',
+    Request_ID: signupRequestId,
+    Title: 'New Stakeholder Signup Request',
+    Message: `${requesterName} (${requesterEmail}) has submitted a request to create a stakeholder account in your district.`,
+    NotificationType: 'NewSignupRequest'
+  });
+};
+
+// Static method to create notification for signup request approval
+notificationSchema.statics.createSignupRequestApprovedNotification = function(stakeholderId, signupRequestId, stakeholderName) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: stakeholderId,
+    RecipientType: 'Stakeholder',
+    Request_ID: signupRequestId,
+    Title: 'Stakeholder Account Created',
+    Message: `Congratulations ${stakeholderName}! Your stakeholder account has been approved and created. You can now log in to the system.`,
+    NotificationType: 'SignupRequestApproved'
+  });
+};
+
+// Static method to create notification for signup request rejection
+notificationSchema.statics.createSignupRequestRejectedNotification = function(email, signupRequestId, reason) {
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: email, // Use email as recipient ID for rejected requests since account doesn't exist
+    RecipientType: 'Stakeholder',
+    Request_ID: signupRequestId,
+    Title: 'Stakeholder Signup Request Rejected',
+    Message: `Your request to create a stakeholder account has been rejected. ${reason ? `Reason: ${reason}` : ''}`,
+    NotificationType: 'SignupRequestRejected'
   });
 };
 

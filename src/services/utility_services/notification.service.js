@@ -613,6 +613,55 @@ class NotificationService {
       throw new Error(`Failed to create notification: ${error.message}`);
     }
   }
+
+  async createNewSignupRequestNotification(coordinatorId, signupRequestId, requesterName, requesterEmail) {
+    try {
+      const notification = await Notification.createNewSignupRequestNotification(
+        coordinatorId,
+        signupRequestId,
+        requesterName,
+        requesterEmail
+      );
+      return {
+        success: true,
+        notification: notification.toObject()
+      };
+    } catch (error) {
+      throw new Error(`Failed to create notification: ${error.message}`);
+    }
+  }
+
+  async createSignupRequestApprovedNotification(stakeholderId, signupRequestId, stakeholderName) {
+    try {
+      const notification = await Notification.createSignupRequestApprovedNotification(
+        stakeholderId,
+        signupRequestId,
+        stakeholderName
+      );
+      return {
+        success: true,
+        notification: notification.toObject()
+      };
+    } catch (error) {
+      throw new Error(`Failed to create notification: ${error.message}`);
+    }
+  }
+
+  async createSignupRequestRejectedNotification(email, signupRequestId, reason) {
+    try {
+      const notification = await Notification.createSignupRequestRejectedNotification(
+        email,
+        signupRequestId,
+        reason
+      );
+      return {
+        success: true,
+        notification: notification.toObject()
+      };
+    } catch (error) {
+      throw new Error(`Failed to create notification: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new NotificationService();

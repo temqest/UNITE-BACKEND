@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const authenticate = require('../middleware/authenticate');
+const { requireAdminOrCoordinator } = require('../middleware/requireRoles');
+
 const {
   districtController,
   notificationController
@@ -359,6 +362,45 @@ router.post('/notifications/stakeholder-deletion', async (req, res, next) => {
   }
 });
 
+/**
+ * @route   POST /api/notifications/new-signup-request
+ * @desc    Create new signup request notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/new-signup-request', async (req, res, next) => {
+  try {
+    await notificationController.createNewSignupRequestNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/notifications/signup-request-approved
+ * @desc    Create signup request approved notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/signup-request-approved', async (req, res, next) => {
+  try {
+    await notificationController.createSignupRequestApprovedNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/notifications/signup-request-rejected
+ * @desc    Create signup request rejected notification (convenience method)
+ * @access  Private
+ */
+router.post('/notifications/signup-request-rejected', async (req, res, next) => {
+  try {
+    await notificationController.createSignupRequestRejectedNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ==================== LOCATION & SIGNUP REQUEST ROUTES ====================
 
 /**
@@ -418,7 +460,7 @@ router.post('/signup-requests', async (req, res, next) => {
  * @desc    Approve a signup request
  * @access  Private (Coordinator or Admin)
  */
-router.put('/signup-requests/:id/approve', async (req, res, next) => {
+router.put('/signup-requests/:id/approve', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
   try {
     await locationController.approveRequest(req, res);
   } catch (error) {
@@ -431,9 +473,22 @@ router.put('/signup-requests/:id/approve', async (req, res, next) => {
  * @desc    Reject a signup request
  * @access  Private (Coordinator or Admin)
  */
-router.put('/signup-requests/:id/reject', async (req, res, next) => {
+router.put('/signup-requests/:id/reject', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
   try {
     await locationController.rejectRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/signup-requests
+ * @desc    Get signup requests (for coordinators: their assigned, for admins: all)
+ * @access  Private (Coordinator or Admin)
+ */
+router.get('/signup-requests', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
+  try {
+    await locationController.getSignUpRequests(req, res);
   } catch (error) {
     next(error);
   }

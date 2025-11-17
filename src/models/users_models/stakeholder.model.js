@@ -32,7 +32,7 @@ const stakeholderSchema = new mongoose.Schema({
   lastName: { type: String, required: true, trim: true },
   field: { type: String, required: false, trim: true },
   email: { type: String, required: true, unique: true, trim: true, lowercase: true },
-  phoneNumber: { type: String, required: true, trim: true },
+  phoneNumber: { type: String, required: false, trim: true },
   password: { type: String, required: true },
   organizationInstitution: { type: String, required: false, trim: true },
   registrationCode: { type: String, required: false, trim: true }

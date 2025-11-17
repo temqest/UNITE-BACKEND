@@ -32,8 +32,8 @@ exports.getMunicipalitiesByDistrict = async (req, res) => {
 exports.createSignUpRequest = async (req, res) => {
   try {
     const payload = req.body;
-    const created = await locationService.createSignUpRequest(payload);
-    return res.status(201).json({ success: true, data: created });
+    const result = await locationService.sendVerificationEmail(payload);
+    return res.status(200).json({ success: true, data: result });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
@@ -55,6 +55,16 @@ exports.rejectRequest = async (req, res) => {
     const { reason } = req.body;
     const result = await locationService.rejectRequest(id, req.user && req.user.id, reason);
     return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+exports.getSignUpRequests = async (req, res) => {
+  try {
+    const user = req.user;
+    const requests = await locationService.getSignUpRequests(user);
+    return res.status(200).json({ success: true, data: requests });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
