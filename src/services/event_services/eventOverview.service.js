@@ -439,7 +439,13 @@ class EventOverviewService {
    */
   async getEventCategory(eventId) {
     try {
-      const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: eventId });
+      // Check all categories in parallel to reduce sequential queries
+      const [bloodDrive, advocacy, training] = await Promise.all([
+        BloodDrive.findOne({ BloodDrive_ID: eventId }),
+        Advocacy.findOne({ Advocacy_ID: eventId }),
+        Training.findOne({ Training_ID: eventId })
+      ]);
+
       if (bloodDrive) {
         return {
           type: 'BloodDrive',
@@ -447,7 +453,6 @@ class EventOverviewService {
         };
       }
 
-      const advocacy = await Advocacy.findOne({ Advocacy_ID: eventId });
       if (advocacy) {
         return {
           type: 'Advocacy',
@@ -455,7 +460,6 @@ class EventOverviewService {
         };
       }
 
-      const training = await Training.findOne({ Training_ID: eventId });
       if (training) {
         return {
           type: 'Training',

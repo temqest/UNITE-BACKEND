@@ -6,6 +6,7 @@ const {
   Training,
   Coordinator
 } = require('../../models/index');
+const cache = require('../../utils/cache');
 
 class EventStatisticsService {
   /**
@@ -15,6 +16,12 @@ class EventStatisticsService {
    */
   async getEventStatistics(filters = {}) {
     try {
+      const cacheKey = `eventStats_${JSON.stringify(filters)}`;
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       const dateFilter = {};
       if (filters.date_from || filters.date_to) {
         dateFilter.Start_Date = {};
@@ -47,7 +54,7 @@ class EventStatisticsService {
       // Timeline statistics (monthly breakdown)
       const timelineStats = await this.getTimelineStatistics(filters);
 
-      return {
+      const result = {
         success: true,
         statistics: {
           overview: {
@@ -65,6 +72,9 @@ class EventStatisticsService {
           timeline: timelineStats
         }
       };
+
+      cache.set(cacheKey, result);
+      return result;
 
     } catch (error) {
       throw new Error(`Failed to get statistics: ${error.message}`);
@@ -112,8 +122,56 @@ class EventStatisticsService {
    */
   async getEventsByCategory(dateFilter = {}) {
     try {
-      const allEvents = await Event.find(dateFilter);
-      
+      const pipeline = [
+        { $match: dateFilter },
+        {
+          $lookup: {
+            from: 'blooddrives',
+            localField: 'Event_ID',
+            foreignField: 'BloodDrive_ID',
+            as: 'bloodDrive'
+          }
+        },
+        {
+          $lookup: {
+            from: 'advocacies',
+            localField: 'Event_ID',
+            foreignField: 'Advocacy_ID',
+            as: 'advocacy'
+          }
+        },
+        {
+          $lookup: {
+            from: 'trainings',
+            localField: 'Event_ID',
+            foreignField: 'Training_ID',
+            as: 'training'
+          }
+        },
+        {
+          $addFields: {
+            category: {
+              $switch: {
+                branches: [
+                  { case: { $gt: [{ $size: '$bloodDrive' }, 0] }, then: 'BloodDrive' },
+                  { case: { $gt: [{ $size: '$advocacy' }, 0] }, then: 'Advocacy' },
+                  { case: { $gt: [{ $size: '$training' }, 0] }, then: 'Training' }
+                ],
+                default: 'Unknown'
+              }
+            }
+          }
+        },
+        {
+          $group: {
+            _id: '$category',
+            count: { $sum: 1 }
+          }
+        }
+      ];
+
+      const results = await Event.aggregate(pipeline);
+
       const breakdown = {
         BloodDrive: 0,
         Advocacy: 0,
@@ -121,27 +179,9 @@ class EventStatisticsService {
         Unknown: 0
       };
 
-      for (const event of allEvents) {
-        const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: event.Event_ID });
-        if (bloodDrive) {
-          breakdown.BloodDrive++;
-          continue;
-        }
-
-        const advocacy = await Advocacy.findOne({ Advocacy_ID: event.Event_ID });
-        if (advocacy) {
-          breakdown.Advocacy++;
-          continue;
-        }
-
-        const training = await Training.findOne({ Training_ID: event.Event_ID });
-        if (training) {
-          breakdown.Training++;
-          continue;
-        }
-
-        breakdown.Unknown++;
-      }
+      results.forEach(result => {
+        breakdown[result._id] = result.count;
+      });
 
       const total = Object.values(breakdown).reduce((sum, count) => sum + count, 0);
 
@@ -263,41 +303,63 @@ class EventStatisticsService {
    */
   async getBloodDriveStatistics(dateFilter = {}) {
     try {
-      const bloodDriveEvents = await Event.find({
-        ...dateFilter,
-        Status: { $in: ['Approved', 'Completed'] }
-      });
-
-      let totalTargetBags = 0;
-      let totalBloodDrives = 0;
-
-      for (const event of bloodDriveEvents) {
-        const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: event.Event_ID });
-        if (bloodDrive) {
-          totalTargetBags += bloodDrive.Target_Donation || 0;
-          totalBloodDrives++;
+      const pipeline = [
+        {
+          $match: {
+            ...dateFilter,
+            Status: { $in: ['Approved', 'Completed'] }
+          }
+        },
+        {
+          $lookup: {
+            from: 'blooddrives',
+            localField: 'Event_ID',
+            foreignField: 'BloodDrive_ID',
+            as: 'bloodDrive'
+          }
+        },
+        { $unwind: '$bloodDrive' },
+        {
+          $group: {
+            _id: null,
+            totalBloodDrives: { $sum: 1 },
+            totalTargetBags: { $sum: '$bloodDrive.Target_Donation' },
+            venueTypes: {
+              $push: '$bloodDrive.VenueType'
+            }
+          }
         }
+      ];
+
+      const result = await Event.aggregate(pipeline);
+
+      if (result.length === 0) {
+        return {
+          total_blood_drives: 0,
+          total_target_bags: 0,
+          avg_bags_per_drive: 0,
+          venue_type_breakdown: {}
+        };
       }
 
-      // Average bags per drive
+      const { totalBloodDrives, totalTargetBags, venueTypes } = result[0];
+
       const avgBagsPerDrive = totalBloodDrives > 0 
         ? Math.round(totalTargetBags / totalBloodDrives) 
         : 0;
 
-      // Venue type breakdown
-      const venueTypes = {};
-      for (const event of bloodDriveEvents) {
-        const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: event.Event_ID });
-        if (bloodDrive && bloodDrive.VenueType) {
-          venueTypes[bloodDrive.VenueType] = (venueTypes[bloodDrive.VenueType] || 0) + 1;
+      const venueTypeBreakdown = {};
+      venueTypes.forEach(venue => {
+        if (venue) {
+          venueTypeBreakdown[venue] = (venueTypeBreakdown[venue] || 0) + 1;
         }
-      }
+      });
 
       return {
         total_blood_drives: totalBloodDrives,
         total_target_bags: totalTargetBags,
         avg_bags_per_drive: avgBagsPerDrive,
-        venue_type_breakdown: venueTypes
+        venue_type_breakdown: venueTypeBreakdown
       };
 
     } catch (error) {
@@ -312,37 +374,68 @@ class EventStatisticsService {
    */
   async getCoordinatorStatistics(dateFilter = {}) {
     try {
-      const allCoordinators = await Coordinator.find();
-      const coordinatorActivity = [];
-
-      for (const coordinator of allCoordinators) {
-        const eventCount = await Event.countDocuments({
-          ...dateFilter,
-          MadeByCoordinatorID: coordinator.Coordinator_ID
-        });
-
-        const completedCount = await Event.countDocuments({
-          ...dateFilter,
-          MadeByCoordinatorID: coordinator.Coordinator_ID,
-          Status: 'Completed'
-        });
-
-        if (eventCount > 0) {
-          coordinatorActivity.push({
-            coordinator_id: coordinator.Coordinator_ID,
-            district_id: coordinator.District_ID,
-            total_events: eventCount,
-            completed_events: completedCount,
-            completion_rate: Math.round((completedCount / eventCount) * 100)
-          });
+      const pipeline = [
+        {
+          $lookup: {
+            from: 'events',
+            let: { coordId: '$Coordinator_ID' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: { $eq: ['$MadeByCoordinatorID', '$$coordId'] },
+                  ...dateFilter
+                }
+              }
+            ],
+            as: 'events'
+          }
+        },
+        {
+          $addFields: {
+            total_events: { $size: '$events' },
+            completed_events: {
+              $size: {
+                $filter: {
+                  input: '$events',
+                  cond: { $eq: ['$$this.Status', 'Completed'] }
+                }
+              }
+            }
+          }
+        },
+        {
+          $match: { total_events: { $gt: 0 } }
+        },
+        {
+          $addFields: {
+            completion_rate: {
+              $round: {
+                $multiply: [
+                  { $divide: ['$completed_events', '$total_events'] },
+                  100
+                ]
+              }
+            }
+          }
+        },
+        {
+          $sort: { total_events: -1 }
+        },
+        {
+          $project: {
+            coordinator_id: '$Coordinator_ID',
+            district_id: '$District_ID',
+            total_events: 1,
+            completed_events: 1,
+            completion_rate: 1
+          }
         }
-      }
+      ];
 
-      // Sort by total events (descending)
-      coordinatorActivity.sort((a, b) => b.total_events - a.total_events);
+      const coordinatorActivity = await Coordinator.aggregate(pipeline);
 
       return {
-        total_coordinators: allCoordinators.length,
+        total_coordinators: await Coordinator.countDocuments(),
         active_coordinators: coordinatorActivity.length,
         top_coordinators: coordinatorActivity.slice(0, 10),
         coordinator_activity: coordinatorActivity
@@ -366,43 +459,59 @@ class EventStatisticsService {
       
       const endDate = filters.date_to || new Date();
 
-      // Generate monthly breakdown
-      const monthlyData = [];
-      const current = new Date(startDate);
-      current.setDate(1); // Start of month
-
-      while (current <= endDate) {
-        const monthStart = new Date(current);
-        const monthEnd = new Date(current.getFullYear(), current.getMonth() + 1, 0);
-
-        const monthEvents = await Event.countDocuments({
-          Start_Date: {
-            $gte: monthStart,
-            $lte: monthEnd
+      const pipeline = [
+        {
+          $match: {
+            Start_Date: {
+              $gte: startDate,
+              $lte: endDate
+            }
           }
-        });
+        },
+        {
+          $addFields: {
+            year: { $year: '$Start_Date' },
+            month: { $month: '$Start_Date' }
+          }
+        },
+        {
+          $group: {
+            _id: { year: '$year', month: '$month' },
+            total_events: { $sum: 1 },
+            completed_events: {
+              $sum: { $cond: [{ $eq: ['$Status', 'Completed'] }, 1, 0] }
+            }
+          }
+        },
+        {
+          $sort: { '_id.year': 1, '_id.month': 1 }
+        },
+        {
+          $project: {
+            year: '$_id.year',
+            month: '$_id.month',
+            month_name: {
+              $arrayElemAt: [
+                ['', 'January', 'February', 'March', 'April', 'May', 'June', 
+                 'July', 'August', 'September', 'October', 'November', 'December'],
+                '$_id.month'
+              ]
+            },
+            total_events: 1,
+            completed_events: 1,
+            completion_rate: {
+              $round: {
+                $multiply: [
+                  { $divide: ['$completed_events', '$total_events'] },
+                  100
+                ]
+              }
+            }
+          }
+        }
+      ];
 
-        const monthCompleted = await Event.countDocuments({
-          Start_Date: {
-            $gte: monthStart,
-            $lte: monthEnd
-          },
-          Status: 'Completed'
-        });
-
-        monthlyData.push({
-          year: current.getFullYear(),
-          month: current.getMonth() + 1,
-          month_name: current.toLocaleString('default', { month: 'long' }),
-          total_events: monthEvents,
-          completed_events: monthCompleted,
-          completion_rate: monthEvents > 0 
-            ? Math.round((monthCompleted / monthEvents) * 100) 
-            : 0
-        });
-
-        current.setMonth(current.getMonth() + 1);
-      }
+      const monthlyData = await Event.aggregate(pipeline);
 
       return monthlyData;
 

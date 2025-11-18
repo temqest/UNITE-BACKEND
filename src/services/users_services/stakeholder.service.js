@@ -284,7 +284,7 @@ class StakeholderService {
     if (filters.email) query.email = { $regex: filters.email, $options: 'i' };
 
     const skip = (page - 1) * limit;
-    const items = await Stakeholder.find(query).skip(skip).limit(limit).sort({ createdAt: -1 });
+    const items = await Stakeholder.find(query).populate('province').populate('district').populate('municipality').skip(skip).limit(limit).sort({ createdAt: -1 });
     const total = await Stakeholder.countDocuments(query);
 
     return {
