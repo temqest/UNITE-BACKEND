@@ -97,20 +97,20 @@ class SystemSettingsService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const maxAllowedDate = new Date(today);
-    maxAllowedDate.setDate(maxAllowedDate.getDate() + advanceDays);
+    const minAllowedDate = new Date(today);
+    minAllowedDate.setDate(minAllowedDate.getDate() + advanceDays);
     
-    const isValid = eventDate <= maxAllowedDate && eventDate >= today;
+    const isValid = eventDate >= minAllowedDate;
 
     return {
       isValid,
-      maxAllowedDate,
+      minAllowedDate,
       currentDate: today,
       eventDate,
       allowed: isValid,
       message: isValid 
         ? 'Date is within allowed booking window'
-        : `Events can only be booked up to ${advanceDays} days in advance`
+        : `Events must be booked at least ${advanceDays} days in advance`
     };
   }
 
@@ -159,7 +159,10 @@ class SystemSettingsService {
    * @returns {Date} Minimum allowed date
    */
   getMinBookingDate() {
-    return new Date(); // Today
+    const advanceDays = this.getSetting('advanceBookingDays') || DEFAULTS.advanceBookingDays;
+    const minDate = new Date();
+    minDate.setDate(minDate.getDate() + advanceDays);
+    return minDate;
   }
 
   /**
@@ -167,9 +170,9 @@ class SystemSettingsService {
    * @returns {Date} Maximum allowed date
    */
   getMaxBookingDate() {
-    const advanceDays = this.getSetting('advanceBookingDays') || DEFAULTS.advanceBookingDays;
+    // No hard maximum, but set to 1 year from today for UI purposes
     const maxDate = new Date();
-    maxDate.setDate(maxDate.getDate() + advanceDays);
+    maxDate.setFullYear(maxDate.getFullYear() + 1);
     return maxDate;
   }
 
