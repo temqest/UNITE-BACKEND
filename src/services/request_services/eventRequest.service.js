@@ -144,11 +144,6 @@ class EventRequestService {
       const actorRole = (options && options.actorRole) || (eventData && eventData._actorRole) || null;
       const actorId = (options && options.actorId) || (eventData && eventData._actorId) || null;
 
-      // If actor is Admin or Coordinator, bypass validation rules entirely
-      if (actorRole && (String(actorRole).toLowerCase() === 'admin' || String(actorRole).toLowerCase() === 'coordinator')) {
-        return { isValid: true, errors: [], warnings: [] };
-      }
-
       // Normalize date to Date instance
       const startDate = new Date(eventData.Start_Date);
       if (isNaN(startDate.getTime())) {
@@ -170,11 +165,16 @@ class EventRequestService {
         }
       }
 
-      // 1. Check advance booking limit (1 month/30 days)
+      // 1. Check advance booking limit (always enforced, even for admins)
       const advanceBooking = systemSettings.validateAdvanceBooking(startDate);
       if (!advanceBooking.isValid) {
         validationResults.isValid = false;
         validationResults.errors.push(advanceBooking.message);
+      }
+
+      // If actor is Admin or Coordinator, bypass other validation rules
+      if (actorRole && (String(actorRole).toLowerCase() === 'admin' || String(actorRole).toLowerCase() === 'coordinator')) {
+        return validationResults; // Return with advance booking check result
       }
 
       // 2. Check weekend restriction
