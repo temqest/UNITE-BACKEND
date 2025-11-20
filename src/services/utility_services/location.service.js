@@ -109,11 +109,36 @@ You can now log in to the system using your registered email and password.
 
 If you have any questions, please contact your assigned coordinator.
 
+Note: If you don't see this email in your inbox, please check your spam/junk folder.
+
 Best regards,
 UNITE Blood Bank Team
     `.trim();
 
-    await emailService.sendEmail(req.email, 'UNITE - Registration Approved', acceptanceMessage, `<pre>${acceptanceMessage}</pre>`);
+    await emailService.sendEmail(req.email, 'UNITE - Registration Approved', acceptanceMessage, `
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+  <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+    <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
+    <p style="margin: 5px 0 0 0; color: #666;">Registration Approved</p>
+  </div>
+  <div style="padding: 30px 20px; background-color: white;">
+    <h3>Dear ${req.firstName} ${req.lastName},</h3>
+    <p style="color: #28a745; font-weight: bold;">Congratulations! Your stakeholder registration request for the UNITE Blood Bank Event Management System has been approved.</p>
+    <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 5px;">
+      <p style="margin: 0; font-weight: bold;">Your account has been created with the following details:</p>
+      <ul style="margin: 10px 0 0 20px;">
+        <li><strong>Email:</strong> ${req.email}</li>
+        <li><strong>Stakeholder ID:</strong> ${stakeholderId}</li>
+      </ul>
+    </div>
+    <p>You can now log in to the system using your registered email and password.</p>
+    <p>If you have any questions, please contact your assigned coordinator.</p>
+    <p style="color: #dc3545; font-size: 14px; font-weight: bold;">Note: If you don't see this email in your inbox, please check your spam/junk folder.</p>
+  </div>
+  <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unite-bloodbank.com" style="color: #dc3545;">unite-bloodbank.com</a></p>
+  </div>
+</div>`);
 
     // Create notification for the new stakeholder
     const { Notification } = require('../../models');
@@ -142,11 +167,32 @@ Reason: ${reason || 'Not specified'}
 
 If you have any questions, please contact your assigned coordinator.
 
+Note: If you don't see this email in your inbox, please check your spam/junk folder.
+
 Best regards,
 UNITE Blood Bank Team
     `.trim();
 
-    await emailService.sendEmail(req.email, 'UNITE - Registration Rejected', rejectionMessage, `<pre>${rejectionMessage}</pre>`);
+    await emailService.sendEmail(req.email, 'UNITE - Registration Update', rejectionMessage, `
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+  <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+    <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
+    <p style="margin: 5px 0 0 0; color: #666;">Registration Update</p>
+  </div>
+  <div style="padding: 30px 20px; background-color: white;">
+    <h3>Dear ${req.firstName} ${req.lastName},</h3>
+    <p style="color: #dc3545;">We regret to inform you that your stakeholder registration request for the UNITE Blood Bank Event Management System has been rejected.</p>
+    <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #dc3545;">
+      <p style="margin: 0; font-weight: bold;">Reason:</p>
+      <p style="margin: 10px 0 0 0;">${reason || 'Not specified'}</p>
+    </div>
+    <p>If you have any questions, please contact your assigned coordinator.</p>
+    <p style="color: #dc3545; font-size: 14px; font-weight: bold;">Note: If you don't see this email in your inbox, please check your spam/junk folder.</p>
+  </div>
+  <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
+    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unite-bloodbank.com" style="color: #dc3545;">unite-bloodbank.com</a></p>
+  </div>
+</div>`);
 
     // Create notification for the rejected request (using email as recipient ID)
     const { Notification } = require('../../models');

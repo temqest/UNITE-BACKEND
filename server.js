@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const compression = require('compression');
 const routes = require('./src/routes');
 
 // Initialize Express app
@@ -67,9 +68,12 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+// Compression middleware
+app.use(compression());
+
 // Body Parser Middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Security Headers
 app.use((req, res, next) => {
@@ -105,6 +109,7 @@ const mongooseOptions = {
   serverSelectionTimeoutMS: 5000, // How long to try connecting before timing out
   socketTimeoutMS: 45000, // How long to wait for a response from the server
   family: 4, // Use IPv4, skip trying IPv6
+  maxPoolSize: 5, // Limit connection pool for free tier
 };
 
 // Connect to MongoDB
