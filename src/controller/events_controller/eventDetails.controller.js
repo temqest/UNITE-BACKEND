@@ -114,6 +114,22 @@ class EventDetailsController {
       });
     }
   }
+
+  /**
+   * Batch fetch events by Event_IDs
+   * POST /api/events/batch
+   */
+  async getEventsBatch(req, res) {
+    try {
+      const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+
+      const result = await eventDetailsService.getEventsBatch(ids);
+
+      return res.status(200).json({ success: true, data: result.events });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message || 'Failed to retrieve events batch' });
+    }
+  }
 }
 
 module.exports = new EventDetailsController();

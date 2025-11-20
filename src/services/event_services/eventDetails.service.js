@@ -359,6 +359,92 @@ class EventDetailsService {
       throw new Error(`Failed to check event completeness: ${error.message}`);
     }
   }
+
+  /**
+   * Get multiple events by Event_IDs in batch (efficient for UI batch fetch)
+   * @param {Array<string>} ids
+   * @returns {Object} Mapping of Event_ID -> minimal event info
+   */
+  async getEventsBatch(ids = []) {
+    try {
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return { success: true, events: [] };
+      }
+
+      // Fetch minimal event fields for requested ids
+      const events = await Event.find({ Event_ID: { $in: ids } })
+        .select('Event_ID Event_Title Start_Date End_Date Location Status MadeByCoordinatorID MadeByStakeholderID stakeholder Email Phone_Number')
+        .lean();
+
+      // Collect unique coordinator and stakeholder ids to resolve names in batch
+      const coordinatorIds = Array.from(new Set(events.map(e => e.MadeByCoordinatorID).filter(Boolean)));
+      const stakeholderIds = Array.from(new Set(events.map(e => e.MadeByStakeholderID || e.stakeholder).filter(Boolean)));
+
+      const [staffDocs, coordDocs, stakeholderDocs] = await Promise.all([
+        // staff records may use ID
+        coordinatorIds.length ? BloodbankStaff.find({ ID: { $in: coordinatorIds } }).select('ID First_Name Middle_Name Last_Name Email Phone_Number').lean() : Promise.resolve([]),
+        coordinatorIds.length ? Coordinator.find({ Coordinator_ID: { $in: coordinatorIds } }).select('Coordinator_ID District_ID District_Name District_Number').lean() : Promise.resolve([]),
+        stakeholderIds.length ? Stakeholder.find({ Stakeholder_ID: { $in: stakeholderIds } }).select('Stakeholder_ID First_Name Last_Name').lean() : Promise.resolve([])
+      ]);
+
+      const staffById = new Map();
+      for (const s of staffDocs) staffById.set(String(s.ID), s);
+
+      const coordById = new Map();
+      for (const c of coordDocs) coordById.set(String(c.Coordinator_ID), c);
+
+      const stakeholderById = new Map();
+      for (const st of stakeholderDocs) stakeholderById.set(String(st.Stakeholder_ID), st);
+
+      // Fetch categories in parallel to include category/type and categoryData
+      const categories = await Promise.all(events.map(ev => this.getEventCategory(ev.Event_ID)));
+
+      const mapped = events.map((e, idx) => {
+        const coordId = e.MadeByCoordinatorID;
+        const staff = coordId ? staffById.get(String(coordId)) : null;
+        const coord = coordId ? coordById.get(String(coordId)) : null;
+        const stakeholderId = e.MadeByStakeholderID || e.stakeholder;
+        const stakeholder = stakeholderId ? stakeholderById.get(String(stakeholderId)) : null;
+
+        const coordinatorName = staff
+          ? `${staff.First_Name || ''} ${staff.Middle_Name || ''} ${staff.Last_Name || ''}`.trim()
+          : (coord ? (coord.Name || coord.Coordinator_Name || null) : null);
+
+        const category = categories[idx] || { type: 'Unknown', data: null };
+
+        return {
+          Event_ID: e.Event_ID,
+          Event_Title: e.Event_Title,
+          Location: e.Location,
+          Start_Date: e.Start_Date,
+          End_Date: e.End_Date,
+          Status: e.Status,
+          MadeByCoordinatorID: e.MadeByCoordinatorID,
+          MadeByStakeholderID: e.MadeByStakeholderID || e.stakeholder,
+          coordinator: {
+            id: coordId || null,
+            name: coordinatorName || null,
+            district_number: coord ? (coord.District_Number || null) : null,
+            district_name: coord ? (coord.District_Name || null) : null
+          },
+          stakeholder: stakeholder ? ({
+            id: stakeholder.Stakeholder_ID || stakeholder._id,
+            name: `${stakeholder.First_Name || stakeholder.firstName || ''} ${stakeholder.Last_Name || stakeholder.lastName || ''}`.trim()
+          }) : null,
+          category: category.type,
+          categoryData: category.data || null,
+          Email: e.Email,
+          Phone_Number: e.Phone_Number,
+          raw: e
+        };
+      });
+
+      return { success: true, events: mapped };
+
+    } catch (error) {
+      throw new Error(`Failed to get events batch: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new EventDetailsService();
