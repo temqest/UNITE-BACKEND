@@ -98,6 +98,19 @@ router.get('/events/:eventId', async (req, res, next) => {
 });
 
 /**
+ * @route   POST /api/events/batch
+ * @desc    Get multiple events by IDs in a single request
+ * @access  Private/Public (depends on how the caller authenticates)
+ */
+router.post('/events/batch', async (req, res, next) => {
+  try {
+    await eventDetailsController.getEventsBatch(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/events/:eventId/category
  * @desc    Get event category type and data
  * @access  Private
