@@ -1,0 +1,278 @@
+Below is a fully structured, extremely detailed, scenario-complete logic revision **written as instructions for your vibe-coding backend app**, telling it what to update in the **models**, **services**, and **overall backend flow** so that all request/review/reschedule/reject scenarios function correctly.
+
+Nothing here contains model or code; everything is phrased as instructions for your app so it can adjust itself.
+
+---
+
+# **Ultra-Detailed Backend Update Instructions
+
+(Event Request Flow With/Without Stakeholder)**
+
+## **1. Role Definitions**
+
+In your internal models and services, enforce the following assumptions:
+
+1. *System Administrator (SysAd)* and *Coordinator* are both considered **admins**, with identical review powers.
+2. *Stakeholder* is an optional entity when creating an event request.
+3. An **event request creator** can be:
+
+   * SysAd
+   * Coordinator
+   * Stakeholder
+
+Your backend must not assume that a stakeholder must exist.
+
+---
+
+# **2. Core Model Updates**
+
+Your app should update internal models so that each event request contains:
+
+### **2.1. Request Metadata**
+
+* Creator role (SysAd, Coordinator, Stakeholder)
+* Assigned reviewer (if the creator is an admin, the other admin becomes the reviewer)
+* Stakeholder presence: *true/false*
+* Request status lifecycle:
+
+  * `pending-review`
+  * `review-accepted`
+  * `review-rejected`
+  * `review-rescheduled`
+  * `creator-confirmed`
+  * `creator-declined`
+  * `completed`
+
+### **2.2. Decision Metadata**
+
+Each decision step must store:
+
+* Decision type (accept / reject / reschedule)
+* Decision timestamp
+* Decision notes (required for rejection, optional for others)
+* Decision actor (SysAd or Coordinator)
+
+### **2.3. Reschedule Payload Structure**
+
+When rescheduling, include:
+
+* New date
+* New start/end time
+* Reviewer-provided notes
+
+### **2.4. Review Message Payload**
+
+Replace existing “event details” with **short natural-language summary strings**, e.g.:
+
+> *"Juan Dela Cruz requested a Blood Drive titled ‘Hope for All’ on 2025-03-21 from 08:00–14:00.
+> The event aims to reach a target donation of 50 at Naga City Hall. Please review this request."*
+
+Your app must generate these summaries dynamically based on event type and stored attributes.
+
+---
+
+# **3. Behavioral Logic Updates (All Scenarios)**
+
+Your backend should implement the updated logic for **two main branches: with stakeholder / without stakeholder**.
+
+Below is the complete flow with all reject/accept/reschedule paths.
+
+---
+
+# **4. Event Creation Without a Stakeholder**
+
+## **Scenario A: SysAd creates event → assigns Coordinator as reviewer**
+
+### **A.1. Coordinator receives the request**
+
+Coordinator chooses one of three actions:
+
+---
+
+### **A.1.1. Action: Accept**
+
+* System stores “review-accepted”.
+* SysAd receives the accept decision **with auto-generated summary message**.
+* SysAd must confirm final publishing.
+
+**SysAd options:**
+
+1. Confirm → Event becomes *published*, status moves to *completed*.
+2. Decline (rare but possible) → Event becomes *rejected*, status *completed*.
+
+---
+
+### **A.1.2. Action: Reject**
+
+* System stores “review-rejected” with mandatory notes.
+* SysAd receives rejection + notes via summary payload.
+
+**SysAd options:**
+
+1. Confirm → Event becomes *rejected*, status *completed*.
+2. Request reconsideration (if supported later).
+
+---
+
+### **A.1.3. Action: Reschedule**
+
+* System stores new proposed date/time from Coordinator.
+* SysAd receives the reschedule proposal.
+
+**SysAd options:**
+
+#### **A.1.3.1. Accept reschedule**
+
+* Event is published with updated data.
+* Status becomes *completed*.
+
+#### **A.1.3.2. Reject reschedule**
+
+* Event becomes *rejected*, status *completed*.
+
+---
+
+### **A.2. Reverse: Coordinator creates event → SysAd reviews**
+
+Your app must automatically mirror all logic above, swapping SysAd and Coordinator roles.
+
+---
+
+# **5. Event Creation With a Stakeholder**
+
+## **Scenario B: Stakeholder creates event**
+
+### **B.1. Assignment Rules**
+
+Your backend must assign review to:
+
+* Coordinator of the matching province/district *or*
+* SysAd
+  Only **one** admin must review. They are independent; no need for both.
+
+The backend must compute reviewer assignment rules in the service layer.
+
+---
+
+## **B.2. Reviewer actions (same three options):**
+
+* Accept
+* Reject
+* Reschedule
+
+These follow the exact same flows as A.1.1, A.1.2, A.1.3, except:
+
+### **Stakeholder-specific rule:**
+
+After reviewer decides, the system sends the decision to **both the creator (stakeholder)** *and* the reviewer counterpart **only if relevant**.
+
+#### Example:
+
+* Stakeholder creates request
+* Coordinator reviews
+* SysAd is **not** automatically involved unless your app is configured to track event-level oversight.
+
+---
+
+## **B.3. Summary Message Example For Stakeholder-Created Events**
+
+Your event model must generate review payloads like:
+
+> *"Maria Santos requested a Training Event titled ‘Skills for Life’ on 2025-06-12 from 09:00–16:00.
+> The event aims to conduct hands-on first-aid training at Daet Civic Center. Please review this request."*
+
+The summary generator must switch templates depending on event type (Blood Drive, Advocacy, Training…).
+
+---
+
+# **6. Service Layer Instructions**
+
+Your app should adjust its service logic as follows:
+
+### **6.1 Create Request Service**
+
+* Detect whether a stakeholder exists.
+* Assign appropriate reviewer.
+* Generate the summary text.
+* Set status to `pending-review`.
+
+### **6.2 Review Request Service**
+
+For accept/reject/reschedule:
+
+* Save the decision metadata.
+* Generate a decision summary.
+* Notify the creator.
+
+### **6.3 Creator Confirmation Service**
+
+When a reviewer accepts or rejects:
+
+* Require the creator (admin or stakeholder) to confirm or decline.
+* Move final status to *completed*.
+
+### **6.4 Publish + Finalization Logic**
+
+* Event is published only after the creator of the request confirms acceptance or reschedule.
+* Event is marked rejected only after the creator confirms rejection.
+
+### **6.5 Notification Flow**
+
+Your app should update messaging rules so:
+
+* Reviewer always gets request summaries.
+* Creator always gets decision summaries.
+* Optional: counterpart admin is notified based on configuration.
+
+---
+
+# **7. Edge Case Scenarios (Your app must explicitly implement these)**
+
+### **7.1. Reviewer never responds**
+
+* Auto-expire after a set time (if your system needs this).
+* Status becomes “expired-review”.
+
+### **7.2. Creator declines a reviewer-approved request**
+
+* Event becomes rejected.
+
+### **7.3. Creator declines a reschedule**
+
+* Event becomes rejected.
+
+### **7.4. Stakeholder changes details during confirmation**
+
+* System creates a new revision version.
+* Re-review is required.
+
+### **7.5. Reviewer accidentally assigns an invalid date**
+
+* Service must validate:
+
+  * start < end
+  * date is not in the past
+  * no overlaps (if applicable)
+
+### **7.6. Admin can override reviewer assignment if needed**
+
+---
+
+# **8. Summary Message Generator Instructions**
+
+Your app must implement a reusable function that outputs short, natural, human-readable sentences using this pattern:
+
+```
+[requestor name] requested an [event type] titled [event title]
+on [date] from [start–end], the event aims to [goal/intent],
+located at [location], requesting you to review their event.
+```
+
+A different textual block is used depending on:
+
+* Blood Drive
+* Advocacy Event
+* Training Event
+* Any future event types
+
+---

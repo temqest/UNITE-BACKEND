@@ -9,8 +9,17 @@ const {
   Training,
   EventStaff,
   Notification,
-  District
+  District,
+  Stakeholder,
+  BloodbankStaff
 } = require('../../models/index');
+const {
+  REQUEST_STATUSES,
+  REVIEW_DECISIONS,
+  CREATOR_ACTIONS,
+  buildReviewSummary,
+  buildDecisionSummary
+} = require('./requestFlow.helpers');
 const systemSettings = require('./systemSettings.service');
 
 class EventRequestService {
@@ -93,6 +102,479 @@ class EventRequestService {
       // ignore invalid ObjectId errors
     }
     return null;
+  }
+
+  _normalizeRole(role) {
+    if (!role) return null;
+    const normalized = String(role).toLowerCase();
+    if (normalized === 'admin' || normalized === 'systemadmin' || normalized === 'sysadmin' || normalized === 'sysad') {
+      return 'SystemAdmin';
+    }
+    if (normalized === 'coordinator') return 'Coordinator';
+    if (normalized === 'stakeholder') return 'Stakeholder';
+    return role;
+  }
+
+  async _fetchBloodbankStaffName(staffId) {
+    if (!staffId) return null;
+    const staff = await BloodbankStaff.findOne({ ID: staffId }).lean().exec();
+    if (!staff) return null;
+    const first = staff.First_Name || staff.firstName || '';
+    const last = staff.Last_Name || staff.lastName || '';
+    return `${first} ${last}`.trim() || staff.FullName || null;
+  }
+
+  async _fetchStakeholderName(stakeholderId) {
+    if (!stakeholderId) return null;
+    const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+    if (!stakeholder) return null;
+    const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+    const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+    return `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+  }
+
+  async _buildActorSnapshot(role, id) {
+    if (!role || !id) return null;
+    const normalizedRole = this._normalizeRole(role);
+    let name = null;
+    if (normalizedRole === 'Stakeholder') {
+      name = await this._fetchStakeholderName(id);
+    } else {
+      name = await this._fetchBloodbankStaffName(id);
+    }
+    return {
+      role: normalizedRole,
+      id,
+      name: name || null
+    };
+  }
+
+  async _resolveCoordinatorName(coordinatorId) {
+    return this._fetchBloodbankStaffName(coordinatorId);
+  }
+
+  _getReviewExpiryHours() {
+    const hours = Number(systemSettings.getSetting('reviewAutoExpireHours'));
+    return Number.isFinite(hours) && hours > 0 ? hours : 72;
+  }
+
+  _getConfirmationWindowHours() {
+    const hours = Number(systemSettings.getSetting('reviewConfirmationWindowHours'));
+    return Number.isFinite(hours) && hours > 0 ? hours : 48;
+  }
+
+  _computeExpiryDate(hours) {
+    const expiry = new Date();
+    expiry.setHours(expiry.getHours() + (hours || this._getReviewExpiryHours()));
+    return expiry;
+  }
+
+  async _assignReviewerContext({ creatorRole, coordinatorId, stakeholderId, province, district }) {
+    const normalizedCreator = this._normalizeRole(creatorRole);
+
+    if (normalizedCreator === 'SystemAdmin') {
+      if (!coordinatorId) {
+        throw new Error('SystemAdmin-created requests must specify a coordinator reviewer');
+      }
+      const name = await this._resolveCoordinatorName(coordinatorId);
+      return {
+        id: coordinatorId,
+        role: 'Coordinator',
+        name: name || null,
+        autoAssigned: true
+      };
+    }
+
+    if (normalizedCreator === 'Coordinator') {
+      const admin = await SystemAdmin.findOne().lean().exec();
+      if (!admin) {
+        throw new Error('No system administrator available to review requests');
+      }
+      const name = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+      return {
+        id: admin.Admin_ID,
+        role: 'SystemAdmin',
+        name: name || null,
+        autoAssigned: true
+      };
+    }
+
+    // Stakeholder-created request: prefer coordinator from district or assigned coordinator
+    let targetCoordinatorId = coordinatorId;
+    let resolvedProvince = province;
+    let resolvedDistrict = district;
+
+    if (!targetCoordinatorId && stakeholderId) {
+      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+      if (stakeholder) {
+        targetCoordinatorId = stakeholder.Coordinator_ID || stakeholder.coordinator_id || targetCoordinatorId;
+        resolvedProvince = resolvedProvince || stakeholder.province;
+        resolvedDistrict = resolvedDistrict || stakeholder.district;
+      }
+    }
+
+    if (!targetCoordinatorId && resolvedDistrict) {
+      const coordinator = await Coordinator.findOne({ district: resolvedDistrict }).lean().exec();
+      if (coordinator) {
+        targetCoordinatorId = coordinator.Coordinator_ID;
+      }
+    }
+
+    if (targetCoordinatorId) {
+      const name = await this._resolveCoordinatorName(targetCoordinatorId);
+      return {
+        id: targetCoordinatorId,
+        role: 'Coordinator',
+        name: name || null,
+        autoAssigned: true
+      };
+    }
+
+    const admin = await SystemAdmin.findOne().lean().exec();
+    if (!admin) {
+      throw new Error('No reviewer available to process this request');
+    }
+
+    const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+    return {
+      id: admin.Admin_ID,
+      role: 'SystemAdmin',
+      name: adminName || null,
+      autoAssigned: true
+    };
+  }
+
+  async _recordStatus(request, newStatus, actorSnapshot, note, metadata = {}, options = {}) {
+    request.statusHistory = Array.isArray(request.statusHistory) ? request.statusHistory : [];
+    request.statusHistory.push({
+      status: newStatus,
+      note: note || null,
+      changedAt: new Date(),
+      actor: actorSnapshot || null
+    });
+    const previousStatus = request.Status;
+    request.Status = newStatus;
+    if (!options.skipHistory) {
+      await EventRequestHistory.logStatusChange({
+        requestId: request.Request_ID,
+        eventId: request.Event_ID,
+        previousStatus,
+        newStatus,
+        actor: actorSnapshot || null,
+        note: note || null,
+        metadata
+      });
+    }
+  }
+
+  async _recordDecision(request, decisionPayload, actorSnapshot, nextStatus) {
+    const resultStatus = nextStatus || decisionPayload.resultStatus || request.Status;
+    request.decisionHistory = Array.isArray(request.decisionHistory) ? request.decisionHistory : [];
+    request.decisionHistory.push(Object.assign(
+      {
+        decidedAt: new Date(),
+        actor: actorSnapshot,
+        resultStatus
+      },
+      decisionPayload
+    ));
+
+    await EventRequestHistory.logReviewDecision({
+      requestId: request.Request_ID,
+      eventId: request.Event_ID,
+      decisionType: decisionPayload.type,
+      actor: actorSnapshot,
+      notes: decisionPayload.notes,
+      previousStatus: request.Status,
+      newStatus: resultStatus,
+      metadata: decisionPayload.payload || {}
+    });
+  }
+
+  async _markExpired(request, reason = 'Reviewer did not respond in time') {
+    request.expiredAt = new Date();
+    request.finalResolution = {
+      outcome: 'expired',
+      completedAt: request.expiredAt,
+      reason
+    };
+    await this._recordStatus(request, REQUEST_STATUSES.EXPIRED, null, reason);
+    await request.save();
+    await EventRequestHistory.logExpiry({
+      requestId: request.Request_ID,
+      eventId: request.Event_ID,
+      previousStatus: REQUEST_STATUSES.PENDING_REVIEW,
+      note: reason
+    });
+  }
+
+  async _expireStaleRequests() {
+    const now = new Date();
+    const staleRequests = await EventRequest.find({
+      Status: REQUEST_STATUSES.PENDING_REVIEW,
+      expiresAt: { $lte: now }
+    });
+
+    for (const request of staleRequests) {
+      await this._markExpired(request);
+    }
+  }
+
+  _validateReschedulePayload(payload) {
+    if (!payload) {
+      throw new Error('Reschedule payload is required');
+    }
+    const proposedDate = new Date(payload.proposedDate || payload.rescheduledDate || payload.newDate);
+    if (Number.isNaN(proposedDate.getTime())) {
+      throw new Error('Invalid reschedule date');
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (proposedDate.getTime() < today.getTime()) {
+      throw new Error('Reschedule date cannot be in the past');
+    }
+
+    const proposedStartTime = payload.proposedStartTime || payload.newStartTime;
+    const proposedEndTime = payload.proposedEndTime || payload.newEndTime;
+    if (!proposedStartTime || !proposedEndTime) {
+      throw new Error('Reschedule requires both start and end times');
+    }
+    if (proposedStartTime >= proposedEndTime) {
+      throw new Error('Reschedule end time must be later than start time');
+    }
+
+    return {
+      proposedDate,
+      proposedStartTime,
+      proposedEndTime
+    };
+  }
+
+  async _notifyCreatorOfDecision(request, decision, note, reschedulePayload) {
+    try {
+      const recipientId = request.made_by_id;
+      if (!recipientId) return;
+      let recipientType = request.creator?.role || 'Coordinator';
+      if (recipientType === 'SystemAdmin') recipientType = 'Admin';
+      const actionMap = {
+        [REVIEW_DECISIONS.ACCEPT]: 'Accepted',
+        [REVIEW_DECISIONS.REJECT]: 'Rejected',
+        [REVIEW_DECISIONS.RESCHEDULE]: 'Rescheduled'
+      };
+      await Notification.createAdminActionNotification(
+        recipientId,
+        request.Request_ID,
+        request.Event_ID,
+        actionMap[decision] || 'Accepted',
+        note || null,
+        reschedulePayload?.proposedDate || null,
+        recipientType
+      );
+    } catch (e) {
+      // swallow notification errors to avoid blocking flow
+    }
+  }
+
+  async _notifyReviewerOfConfirmation(request, action) {
+    try {
+      if (!request.reviewer || !request.reviewer.id) return;
+      await Notification.createCoordinatorActionNotification(
+        request.reviewer.id,
+        request.Request_ID,
+        request.Event_ID,
+        action === CREATOR_ACTIONS.CONFIRM ? 'Approved' : 'Rejected'
+      );
+    } catch (e) {
+      // ignore notification errors
+    }
+  }
+
+  async _finalizeRequest(request, event, outcome, actorSnapshot, note, { applyReschedule = false } = {}) {
+    if (applyReschedule && request.rescheduleProposal) {
+      const proposed = request.rescheduleProposal;
+      const newDate = new Date(proposed.proposedDate);
+      if (!Number.isNaN(newDate.getTime())) {
+        const start = new Date(event.Start_Date);
+        start.setFullYear(newDate.getFullYear(), newDate.getMonth(), newDate.getDate());
+        event.Start_Date = start;
+        if (event.End_Date) {
+          const end = new Date(event.End_Date);
+          end.setFullYear(newDate.getFullYear(), newDate.getMonth(), newDate.getDate());
+          event.End_Date = end;
+        }
+      }
+    }
+
+    if (outcome === 'approved') {
+      event.Status = 'Completed';
+    } else if (outcome === 'rejected' || outcome === 'cancelled') {
+      event.Status = 'Rejected';
+    }
+    await event.save();
+
+    request.finalResolution = {
+      outcome,
+      completedAt: new Date(),
+      reason: note || null,
+      publishedEventStatus: event.Status
+    };
+    if (applyReschedule) {
+      request.rescheduleProposal = null;
+    }
+    request.confirmationDueAt = null;
+    await this._recordStatus(request, REQUEST_STATUSES.COMPLETED, actorSnapshot, note);
+    await request.save();
+    await EventRequestHistory.logFinalization({
+      requestId: request.Request_ID,
+      eventId: request.Event_ID,
+      actor: actorSnapshot,
+      outcome,
+      notes: note || null
+    });
+  }
+
+  async _handleReviewerDecision(request, event, actorSnapshot, decisionInput) {
+    const action = String(decisionInput.action || '').toLowerCase();
+    let decisionType;
+    if (action === 'accept' || action === 'accepted' || action === 'approve') {
+      decisionType = REVIEW_DECISIONS.ACCEPT;
+    } else if (action === 'reject' || action === 'rejected' || action === 'deny') {
+      decisionType = REVIEW_DECISIONS.REJECT;
+    } else if (action === 'reschedule' || action === 'rescheduled' || action === 'propose') {
+      decisionType = REVIEW_DECISIONS.RESCHEDULE;
+    } else {
+      throw new Error('Invalid reviewer action');
+    }
+
+    if ((decisionType === REVIEW_DECISIONS.REJECT || decisionType === REVIEW_DECISIONS.RESCHEDULE) && !decisionInput.note) {
+      throw new Error('Decision notes are required for rejection or reschedule');
+    }
+
+    let reschedulePayload = null;
+    if (decisionType === REVIEW_DECISIONS.RESCHEDULE) {
+      reschedulePayload = this._validateReschedulePayload(decisionInput.reschedulePayload || decisionInput);
+    }
+
+    const nextStatusMap = {
+      [REVIEW_DECISIONS.ACCEPT]: REQUEST_STATUSES.REVIEW_ACCEPTED,
+      [REVIEW_DECISIONS.REJECT]: REQUEST_STATUSES.REVIEW_REJECTED,
+      [REVIEW_DECISIONS.RESCHEDULE]: REQUEST_STATUSES.REVIEW_RESCHEDULED
+    };
+    const nextStatus = nextStatusMap[decisionType];
+
+    await this._recordDecision(
+      request,
+      {
+        type: decisionType,
+        notes: decisionInput.note || null,
+        payload: reschedulePayload ? { ...reschedulePayload } : undefined
+      },
+      actorSnapshot,
+      nextStatus
+    );
+
+    if (decisionType === REVIEW_DECISIONS.RESCHEDULE) {
+      request.rescheduleProposal = {
+        ...reschedulePayload,
+        reviewerNotes: decisionInput.note || null,
+        proposedAt: new Date(),
+        proposedBy: actorSnapshot
+      };
+    } else {
+      request.rescheduleProposal = null;
+    }
+
+    request.decisionSummary = buildDecisionSummary({
+      reviewerName: actorSnapshot?.name || 'Reviewer',
+      decision: decisionType,
+      eventTitle: event.Event_Title,
+      reschedulePayload: request.rescheduleProposal
+    });
+
+    request.creatorConfirmation = null;
+    request.confirmationDueAt = this._computeExpiryDate(this._getConfirmationWindowHours());
+    await this._recordStatus(request, nextStatus, actorSnapshot, decisionInput.note || null, {}, { skipHistory: true });
+    await request.save();
+    await this._notifyCreatorOfDecision(request, decisionType, decisionInput.note || null, reschedulePayload);
+
+    return {
+      success: true,
+      message: `Request ${decisionType}ed successfully`,
+      request: request.toObject()
+    };
+  }
+
+  async _handleCreatorResponse(request, event, actorSnapshot, actionInput) {
+    const action = String(actionInput.action || '').toLowerCase();
+    if (action === CREATOR_ACTIONS.REVISE) {
+      request.revision = request.revision || { number: 1, supersedes: [] };
+      request.revision.number = (request.revision.number || 1) + 1;
+      request.revision.lastRevisedAt = new Date();
+      request.revision.supersedes = Array.isArray(request.revision.supersedes) ? request.revision.supersedes : [];
+      request.revision.supersedes.push(`${request.Status}:${request.revision.number}`);
+      request.creatorConfirmation = {
+        action: 'revise',
+        notes: actionInput.note || null,
+        confirmedAt: new Date(),
+        actor: actorSnapshot
+      };
+      request.decisionSummary = null;
+      request.confirmationDueAt = null;
+      await this._recordStatus(request, REQUEST_STATUSES.PENDING_REVIEW, actorSnapshot, actionInput.note || null);
+      await EventRequestHistory.logRevision({
+        requestId: request.Request_ID,
+        eventId: request.Event_ID,
+        actor: actorSnapshot,
+        revisionNumber: request.revision.number,
+        note: actionInput.note || null
+      });
+      await request.save();
+      return {
+        success: true,
+        message: 'Request sent back for re-review',
+        request: request.toObject()
+      };
+    }
+
+    if (action !== CREATOR_ACTIONS.CONFIRM && action !== CREATOR_ACTIONS.DECLINE) {
+      throw new Error('Creator action must be confirm, decline, or revise');
+    }
+
+    const resolutionStatus = action === CREATOR_ACTIONS.CONFIRM
+      ? REQUEST_STATUSES.CREATOR_CONFIRMED
+      : REQUEST_STATUSES.CREATOR_DECLINED;
+    await this._recordStatus(request, resolutionStatus, actorSnapshot, actionInput.note || null);
+    request.creatorConfirmation = {
+      action,
+      notes: actionInput.note || null,
+      confirmedAt: new Date(),
+      actor: actorSnapshot
+    };
+
+    const isRescheduleAcceptance = request.Status === REQUEST_STATUSES.CREATOR_CONFIRMED
+      && request.rescheduleProposal
+      && action === CREATOR_ACTIONS.CONFIRM;
+
+    const outcome = action === CREATOR_ACTIONS.CONFIRM && request.decisionHistory?.length
+      ? (request.decisionHistory[request.decisionHistory.length - 1].type === REVIEW_DECISIONS.REJECT ? 'rejected' : 'approved')
+      : (action === CREATOR_ACTIONS.CONFIRM ? 'approved' : 'rejected');
+
+    await request.save();
+    await this._notifyReviewerOfConfirmation(request, action);
+    await this._finalizeRequest(
+      request,
+      event,
+      outcome,
+      actorSnapshot,
+      actionInput.note || null,
+      { applyReschedule: isRescheduleAcceptance }
+    );
+
+    return {
+      success: true,
+      message: 'Creator response recorded',
+      request: request.toObject()
+    };
   }
 
   /**
@@ -518,65 +1000,55 @@ class EventRequestService {
   }
 
   /**
-   * Coordinator submits event request
-   * @param {string} coordinatorId 
-   * @param {Object} eventData 
-   * @returns {Object} Created request
+   * Create an event request following the unified review flow
    */
   async createEventRequest(coordinatorId, eventData) {
     try {
-      // Validate coordinator exists
       const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
       if (!coordinator) {
         throw new Error('Coordinator not found');
       }
 
-  // Validate all scheduling rules. Allow callers to pass an optional excludeRequestId
-  // when creating a change request for an existing request so validation can ignore
-  // the original request/event (avoids false-positive overlaps/double-booking).
-  const excludeRequestId = eventData && (eventData.excludeRequestId || eventData.exclude_request_id || null);
-  const validation = await this.validateSchedulingRules(coordinatorId, eventData, excludeRequestId);
+      const excludeRequestId = eventData && (eventData.excludeRequestId || eventData.exclude_request_id || null);
+      const normalizedCreatorRole = this._normalizeRole(eventData?._actorRole || eventData?.made_by_role || 'Coordinator');
+      const creatorId = eventData?._actorId || eventData?.made_by_id || coordinatorId;
+
+      const validation = await this.validateSchedulingRules(
+        coordinatorId,
+        eventData,
+        excludeRequestId,
+        { actorRole: normalizedCreatorRole, actorId: creatorId }
+      );
       if (!validation.isValid) {
         throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
       }
 
-      // Generate IDs
       const eventId = this.generateEventID();
       const requestId = this.generateRequestID();
 
-      // Determine category type. If not provided (change-request case) try to infer
-      // from the existing request/event referenced by excludeRequestId.
       let categoryType = eventData.categoryType || eventData.Category || null;
       if (!categoryType && excludeRequestId) {
-        try {
-          const existingReq = await this._findRequest(excludeRequestId);
-          if (existingReq && existingReq.Event_ID) {
-            const existingEvent = await Event.findOne({ Event_ID: existingReq.Event_ID }).catch(() => null);
-            categoryType = existingEvent?.Category || existingReq.Category || categoryType;
-          }
-        } catch (e) {
-          // ignore inference failures
+        const existingReq = await this._findRequest(excludeRequestId);
+        if (existingReq && existingReq.Event_ID) {
+          const existingEvent = await Event.findOne({ Event_ID: existingReq.Event_ID }).catch(() => null);
+          categoryType = existingEvent?.Category || existingReq.Category || categoryType;
         }
       }
+      if (!categoryType) {
+        throw new Error('Event category type is required');
+      }
 
-      // Determine creator information from eventData._actorRole and _actorId
-      const creatorRole = eventData._actorRole || 'Coordinator'; // Default to Coordinator if not specified
-      const creatorId = eventData._actorId || coordinatorId; // Default to coordinatorId if not specified
-
-      // Create event category-specific data
       let categoryData = null;
-      if (categoryType === 'BloodDrive' || eventData.categoryType === 'BloodDrive') {
+      if (categoryType === 'BloodDrive') {
         categoryData = new BloodDrive({
           BloodDrive_ID: eventId,
           Target_Donation: eventData.Target_Donation,
           VenueType: eventData.VenueType
         });
         await categoryData.save();
-      } else if (categoryType === 'Advocacy' || eventData.categoryType === 'Advocacy') {
-        // Normalize expected audience size from multiple possible input names
+      } else if (categoryType === 'Advocacy') {
         const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
         const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
-
         categoryData = new Advocacy({
           Advocacy_ID: eventId,
           Topic: eventData.Topic,
@@ -585,7 +1057,7 @@ class EventRequestService {
           PartnerOrganization: eventData.PartnerOrganization
         });
         await categoryData.save();
-      } else if (categoryType === 'Training' || eventData.categoryType === 'Training') {
+      } else if (categoryType === 'Training') {
         categoryData = new Training({
           Training_ID: eventId,
           TrainingType: eventData.TrainingType,
@@ -593,108 +1065,95 @@ class EventRequestService {
         });
         await categoryData.save();
       } else {
-        throw new Error('Invalid event category type');
+        throw new Error('Unsupported event category type');
       }
 
-      // Create main event with new simplified structure
+      const stakeholderId = eventData.stakeholder_id || eventData.Stakeholder_ID || null;
+      const stakeholderPresent = !!stakeholderId;
+
       const event = new Event({
         Event_ID: eventId,
         Event_Title: eventData.Event_Title,
         Location: eventData.Location,
-        // Persist description when provided (accept multiple possible input names)
         Event_Description: eventData.Event_Description || eventData.eventDescription || eventData.Description || undefined,
         Start_Date: new Date(eventData.Start_Date),
         End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
-        // Required fields for Event model
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
-        // New simplified structure
         coordinator_id: coordinatorId,
-        stakeholder_id: eventData.stakeholder_id || eventData.Stakeholder_ID || undefined,
+        stakeholder_id: stakeholderId || undefined,
         made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist category type so frontend can display the event type
-        Category: categoryType || eventData.categoryType || eventData.Category || undefined,
+        made_by_role: normalizedCreatorRole,
+        Category: categoryType,
         Status: 'Pending'
       });
       await event.save();
 
-      // Create event request with new simplified structure
+      const creatorSnapshot = await this._buildActorSnapshot(normalizedCreatorRole, creatorId);
+      const reviewer = await this._assignReviewerContext({
+        creatorRole: normalizedCreatorRole,
+        coordinatorId,
+        stakeholderId,
+        province: eventData.province || coordinator.province,
+        district: eventData.district || coordinator.district
+      });
+
+      const eventForSummary = event.toObject();
+      eventForSummary.categoryDoc = categoryData ? categoryData.toObject ? categoryData.toObject() : categoryData : null;
+      const reviewSummary = buildReviewSummary({
+        requestorName: creatorSnapshot?.name || 'The creator',
+        event: eventForSummary
+      });
+
+      const expiresAt = this._computeExpiryDate(this._getReviewExpiryHours());
       const request = new EventRequest({
         Request_ID: requestId,
         Event_ID: eventId,
-        // New simplified structure
         coordinator_id: coordinatorId,
-        stakeholder_id: eventData.stakeholder_id || eventData.Stakeholder_ID || undefined,
+        stakeholder_id: stakeholderId || undefined,
         made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist event category/type on the request to aid UI and audits
-        Category: categoryType || eventData.categoryType || eventData.Category || undefined,
-        Status: 'Pending_Admin_Review'
+        made_by_role: normalizedCreatorRole,
+        creator: creatorSnapshot,
+        reviewer,
+        stakeholderPresent,
+        province: eventData.province || coordinator.province || null,
+        district: eventData.district || coordinator.district || null,
+        municipality: eventData.municipality || coordinator.municipality || null,
+        Category: categoryType,
+        Status: REQUEST_STATUSES.PENDING_REVIEW,
+        statusHistory: [{
+          status: REQUEST_STATUSES.PENDING_REVIEW,
+          changedAt: new Date(),
+          actor: creatorSnapshot
+        }],
+        reviewSummary,
+        reviewDeadlineHours: this._getReviewExpiryHours(),
+        expiresAt,
+        summaryTemplate: categoryType
       });
+
       await request.save();
-
-      // Create history entry
-      const models = require('../../models/index');
-      const bloodbankStaff = await models.BloodbankStaff.findOne({ ID: coordinatorId }).catch(() => null);
-      const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
-
-      // If this request was created by a stakeholder, prefer using the stakeholder's
-      // full name as the "created by" label so coordinators can easily see who
-      // submitted the request. Otherwise use the coordinator/staff name.
-      let createdByName = coordinatorName;
-      if (eventData.stakeholder_id) {
-        try {
-          const stakeholder = await models.Stakeholder.findOne({ Stakeholder_ID: eventData.stakeholder_id ? eventData.stakeholder_id.toString().trim() : eventData.stakeholder_id }).catch(() => null);
-          if (stakeholder) {
-            const sfirst = stakeholder.First_Name || stakeholder.FirstName || stakeholder.First || '';
-            const slast = stakeholder.Last_Name || stakeholder.LastName || stakeholder.Last || '';
-            const full = `${(sfirst || '').toString().trim()} ${(slast || '').toString().trim()}`.trim();
-            if (full) createdByName = full;
-          }
-        } catch (e) {
-          // ignore lookup failures and fall back to coordinatorName
-        }
-      }
-
-      await EventRequestHistory.createRequestHistory(
+      await EventRequestHistory.logCreation({
         requestId,
         eventId,
-        coordinatorId,
-        createdByName
-      );
+        actor: creatorSnapshot,
+        note: 'Event request submitted'
+      });
 
-      // Send notification to admin
-      // Get all admins
-      const admins = await SystemAdmin.find();
-      for (const admin of admins) {
+      if (reviewer && reviewer.id) {
         await Notification.createNewRequestNotification(
-          admin.Admin_ID,
+          reviewer.id,
           requestId,
           eventId,
           coordinatorId
         );
       }
 
-      // Attach createdByName to returned payloads so frontend can display creator
-      const returnedRequest = {
-        Request_ID: request.Request_ID,
-        Event_ID: event.Event_ID,
-        Status: request.Status,
-        created_at: request.createdAt,
-        createdByName: createdByName || null,
-        stakeholder_id: request.stakeholder_id || null
-      };
-
-      // Do not modify persisted schemas here (avoid adding ad-hoc properties to DB records),
-      // but include createdByName on the returned event object for UI convenience.
-      const returnedEvent = event.toObject ? { ...event.toObject(), createdByName: createdByName || null } : { ...event, createdByName: createdByName || null };
-
       return {
         success: true,
         message: 'Event request submitted successfully',
-        request: returnedRequest,
-        event: returnedEvent,
+        request: request.toObject(),
+        event: eventForSummary,
         category: categoryData,
         warnings: validation.warnings
       };
@@ -710,215 +1169,25 @@ class EventRequestService {
    */
   async createImmediateEvent(creatorId, creatorRole, eventData) {
     try {
-      // Validate creator (admin or coordinator)
-      if (creatorRole !== 'SystemAdmin' && creatorRole !== 'Coordinator') {
-        throw new Error('Unauthorized: Only Admin or Coordinator can create events');
+      const normalizedRole = this._normalizeRole(creatorRole);
+      if (normalizedRole !== 'SystemAdmin' && normalizedRole !== 'Coordinator') {
+        throw new Error('Unauthorized: Only admins or coordinators can perform direct creation');
       }
 
-      const coordinatorId = creatorRole === 'Coordinator' ? creatorId : (eventData.coordinator_id || eventData.MadeByCoordinatorID || null);
-      if (creatorRole === 'Coordinator') {
-        const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
-        if (!coordinator) throw new Error('Coordinator not found');
+      const coordinatorId = normalizedRole === 'Coordinator'
+        ? creatorId
+        : (eventData.coordinator_id || eventData.MadeByCoordinatorID || null);
+
+      if (!coordinatorId) {
+        throw new Error('Coordinator ID is required for direct event creation');
       }
 
-      // Tag actor info (so validateSchedulingRules can skip checks for admin/coordinator)
-      eventData._actorRole = creatorRole;
-      eventData._actorId = creatorId;
-      // Validate scheduling rules (validateSchedulingRules will bypass for admin/coordinator)
-      const validation = await this.validateSchedulingRules(coordinatorId || 'ADMIN', eventData);
-      if (!validation.isValid) {
-        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
-      }
-
-      // Generate event ID
-      const eventId = this.generateEventID();
-
-      // Create category-specific data
-      let categoryData = null;
-      if (eventData.categoryType === 'BloodDrive') {
-        categoryData = new BloodDrive({
-          BloodDrive_ID: eventId,
-          Target_Donation: eventData.Target_Donation,
-          VenueType: eventData.VenueType
-        });
-        await categoryData.save();
-      } else if (eventData.categoryType === 'Advocacy') {
-        const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
-        const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
-
-        categoryData = new Advocacy({
-          Advocacy_ID: eventId,
-          Topic: eventData.Topic,
-          TargetAudience: eventData.TargetAudience,
-          ExpectedAudienceSize: expectedSize,
-          PartnerOrganization: eventData.PartnerOrganization
-        });
-        await categoryData.save();
-      } else if (eventData.categoryType === 'Training') {
-        categoryData = new Training({
-          Training_ID: eventId,
-          TrainingType: eventData.TrainingType,
-          MaxParticipants: eventData.MaxParticipants
-        });
-        await categoryData.save();
-      } else {
-        throw new Error('Invalid event category type');
-      }
-
-      // Determine initial status based on the new approval workflow
-      const stakeholderId = eventData.stakeholder_id || eventData.Stakeholder_ID || null;
-      let requestInitialStatus = 'Pending_Admin_Review';
-
-      // Apply the new approval workflow logic:
-      // 1. If stakeholder creates event: needs admin review first
-      // 2. If sys admin creates event with stakeholder: needs stakeholder acceptance first
-      // 3. If sys admin creates event without stakeholder: needs coordinator approval
-      // 4. If coordinator creates event with stakeholder: needs stakeholder acceptance first
-      // 5. If coordinator creates event without stakeholder: needs admin approval
-
-      if (stakeholderId) {
-        // Events with stakeholders: stakeholder review first (unless created by stakeholder)
-        if (creatorRole === 'Stakeholder') {
-          requestInitialStatus = 'Pending_Admin_Review'; // Stakeholder created: admin review first
-        } else {
-          requestInitialStatus = 'Pending_Stakeholder_Review'; // Admin/Coordinator created with stakeholder: stakeholder review first
-        }
-      } else {
-        // Events without stakeholders: depends on creator role
-        if (creatorRole === 'SystemAdmin') {
-          requestInitialStatus = 'Pending_Coordinator_Review'; // Admin created without stakeholder: coordinator review
-        } else if (creatorRole === 'Coordinator') {
-          requestInitialStatus = 'Pending_Admin_Review'; // Coordinator created without stakeholder: admin review
-        }
-      }
-
-      // Create main event with Approved/Completed status (auto-publish) based on workflow
-      const event = new Event({
-        Event_ID: eventId,
-        Event_Title: eventData.Event_Title,
-        Location: eventData.Location,
-        // Persist description when provided (accept multiple possible input names)
-        Event_Description: eventData.Event_Description || eventData.eventDescription || eventData.Description || undefined,
-        Start_Date: new Date(eventData.Start_Date),
-        End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
-        // Required fields for Event model
-        Email: eventData.Email,
-        Phone_Number: eventData.Phone_Number,
-        // New simplified structure
-        coordinator_id: coordinatorId,
-        stakeholder_id: stakeholderId,
-        made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist category so frontend can read the event type
-        Category: eventData.categoryType || eventData.Category || undefined,
-        Status: 'Pending' // Event status is always 'Pending' initially - approval happens at request level
-      });
-      await event.save();
-
-      // Create an EventRequest record for audit/history and notifications
-      // Even though the event may be auto-published, keep a request trail
-      const requestId = this.generateRequestID();
-
-      const request = new EventRequest({
-        Request_ID: requestId,
-        Event_ID: eventId,
-        // New simplified structure
-        coordinator_id: coordinatorId,
-        stakeholder_id: stakeholderId,
-        made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist category on auto-approved requests as well
-        Category: eventData.categoryType || eventData.Category || undefined,
-        Status: requestInitialStatus
+      const enrichedData = Object.assign({}, eventData, {
+        _actorRole: normalizedRole,
+        _actorId: creatorId
       });
 
-      await request.save();
-
-      // Create history entries: admin action + coordinator approval (auto)
-      try {
-        // Admin history (actor = Admin)
-        await EventRequestHistory.createAdminActionHistory(
-          requestId,
-          eventId,
-          creatorId,
-          null,
-          'Accepted',
-          null,
-          event.Start_Date
-        );
-
-        // Coordinator approval history (actor = Coordinator)
-        const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: coordinatorId }).catch(() => null);
-        const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
-        await EventRequestHistory.createCoordinatorActionHistory(
-          requestId,
-          eventId,
-          coordinatorId,
-          coordinatorName,
-          'Completed',
-          'Accepted_By_Admin'
-        );
-      } catch (e) {
-        // Swallow history creation failures to avoid blocking event creation
-      }
-
-      // Notify the appropriate recipient based on the workflow
-      try {
-        let recipientId = null;
-        let recipientType = null;
-
-        if (requestInitialStatus === 'Pending_Stakeholder_Review') {
-          // Notify stakeholder
-          recipientId = stakeholderId;
-          recipientType = 'Stakeholder';
-        } else if (requestInitialStatus === 'Pending_Coordinator_Review') {
-          // Notify coordinator
-          recipientId = coordinatorId;
-          recipientType = 'Coordinator';
-        } else if (requestInitialStatus === 'Pending_Admin_Review') {
-          // Notify all admins
-          const admins = await SystemAdmin.find();
-          for (const admin of admins) {
-            await Notification.createNewRequestNotification(
-              admin.Admin_ID,
-              requestId,
-              eventId,
-              coordinatorId
-            );
-          }
-          // Skip the general notification below since we handled admins specifically
-          recipientId = null;
-        }
-
-        // Send notification for stakeholder/coordinator review
-        if (recipientId && recipientType) {
-          await Notification.createAdminActionNotification(
-            recipientId,
-            requestId,
-            eventId,
-            'Submitted', // Action type for new requests
-            null,
-            null,
-            recipientType
-          );
-        }
-      } catch (e) {
-        // swallow notification errors
-      }
-
-      return {
-        success: true,
-        message: 'Event request submitted successfully and awaits approval',
-        request: {
-          Request_ID: request.Request_ID,
-          Event_ID: event.Event_ID,
-          Status: request.Status,
-          created_at: request.createdAt
-        },
-        event,
-        category: categoryData,
-        warnings: validation.warnings
-      };
+      return this.createEventRequest(coordinatorId, enrichedData);
     } catch (error) {
       throw new Error(`Failed to create event: ${error.message}`);
     }

@@ -1,5 +1,75 @@
 const mongoose = require('mongoose');
 
+const actorSnapshotSchema = new mongoose.Schema({
+  id: { type: String, trim: true },
+  role: { type: String, enum: ['SystemAdmin', 'Coordinator', 'Stakeholder'], trim: true },
+  name: { type: String, trim: true }
+}, { _id: false });
+
+const reviewerSchema = new mongoose.Schema({
+  id: { type: String, trim: true, required: true },
+  role: { type: String, enum: ['SystemAdmin', 'Coordinator'], required: true },
+  name: { type: String, trim: true },
+  assignedAt: { type: Date, default: Date.now },
+  autoAssigned: { type: Boolean, default: true },
+  overriddenAt: { type: Date },
+  overriddenBy: actorSnapshotSchema
+}, { _id: false });
+
+const statusHistorySchema = new mongoose.Schema({
+  status: { type: String, required: true, trim: true },
+  note: { type: String, trim: true },
+  changedAt: { type: Date, default: Date.now },
+  actor: actorSnapshotSchema
+}, { _id: false });
+
+const decisionSchema = new mongoose.Schema({
+  type: { type: String, enum: ['accept', 'reject', 'reschedule'], required: true },
+  notes: { type: String, trim: true },
+  decidedAt: { type: Date, default: Date.now },
+  resultStatus: { type: String, trim: true },
+  actor: {
+    id: { type: String, trim: true, required: true },
+    role: { type: String, enum: ['SystemAdmin', 'Coordinator'], required: true },
+    name: { type: String, trim: true }
+  },
+  payload: {
+    proposedDate: { type: Date },
+    proposedStartTime: { type: String, trim: true },
+    proposedEndTime: { type: String, trim: true }
+  }
+}, { _id: false });
+
+const rescheduleSchema = new mongoose.Schema({
+  proposedDate: { type: Date },
+  proposedStartTime: { type: String, trim: true },
+  proposedEndTime: { type: String, trim: true },
+  reviewerNotes: { type: String, trim: true },
+  proposedAt: { type: Date },
+  proposedBy: actorSnapshotSchema
+}, { _id: false });
+
+const confirmationSchema = new mongoose.Schema({
+  action: { type: String, enum: ['confirm', 'decline', 'revise'] },
+  notes: { type: String, trim: true },
+  confirmedAt: { type: Date },
+  actor: actorSnapshotSchema
+}, { _id: false });
+
+const finalResolutionSchema = new mongoose.Schema({
+  outcome: { type: String, enum: ['approved', 'rejected', 'expired', 'cancelled', 'revision-requested'] },
+  completedAt: { type: Date },
+  reason: { type: String, trim: true },
+  publishedEventStatus: { type: String, trim: true }
+}, { _id: false });
+
+const revisionSchema = new mongoose.Schema({
+  number: { type: Number, default: 1 },
+  parentRequestId: { type: String, trim: true },
+  supersedes: { type: [String], default: [] },
+  lastRevisedAt: { type: Date }
+}, { _id: false });
+
 const eventRequestSchema = new mongoose.Schema({
   Request_ID: {
     type: String,
@@ -13,7 +83,6 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Event'
   },
-  // Simplified structure as requested
   coordinator_id: {
     type: String,
     required: true,
@@ -22,7 +91,6 @@ const eventRequestSchema = new mongoose.Schema({
   },
   stakeholder_id: {
     type: String,
-    required: false,
     trim: true,
     ref: 'Stakeholder'
   },
@@ -30,137 +98,96 @@ const eventRequestSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    refPath: 'made_by_role' // Dynamic reference based on role
+    refPath: 'made_by_role'
   },
   made_by_role: {
     type: String,
     required: true,
     enum: ['SystemAdmin', 'Coordinator', 'Stakeholder']
   },
-  // New hierarchical references to support Province -> District -> Municipality
+  creator: {
+    type: actorSnapshotSchema,
+    default: null
+  },
+  reviewer: reviewerSchema,
+  stakeholderPresent: {
+    type: Boolean,
+    default: false
+  },
   province: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Province',
-    required: false
+    ref: 'Province'
   },
   district: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'District',
-    required: false
+    ref: 'District'
   },
   municipality: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Municipality',
-    required: false
+    ref: 'Municipality'
   },
-  // Optional explicit stakeholder reference as ObjectId
   stakeholder: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Stakeholder',
-    required: false
+    ref: 'Stakeholder'
   },
-  // Category/type of the event (e.g., 'BloodDrive', 'Training', 'Advocacy')
   Category: {
     type: String,
-    required: false,
     trim: true
   },
-  Admin_ID: {
-    type: String,
-    trim: true,
-    ref: 'SystemAdmin'
-  },
-  // Admin's decision
-  AdminAction: {
-    type: String,
-    enum: ['Accepted', 'Rescheduled', 'Rejected', 'Cancelled', null],
-    default: null
-  },
-  AdminNote: {
-    type: String,
-    trim: true,
-    validate: {
-      validator: function(note) {
-        // If admin rescheduled, rejected, or cancelled, note is required
-        if (this.AdminAction === 'Rescheduled' || this.AdminAction === 'Rejected' || this.AdminAction === 'Cancelled') {
-          return note && note.trim().length > 0;
-        }
-        // If admin accepted, note is optional
-        return true;
-      },
-      message: 'Note is required when admin reschedules, rejects, or cancels the request'
-    }
-  },
-  // New date if admin rescheduled
-  RescheduledDate: {
-    type: Date,
-    validate: {
-      validator: function(date) {
-        // RescheduledDate is required if AdminAction is 'Rescheduled'
-        if (this.AdminAction === 'Rescheduled') {
-          return date !== null && date !== undefined;
-        }
-        return true;
-      },
-      message: 'Rescheduled date is required when admin reschedules the request'
-    }
-  },
-  AdminActionDate: {
-    type: Date
-  },
-  // Coordinator's final decision after admin review
-  CoordinatorFinalAction: {
-    type: String,
-    enum: ['Approved', 'Accepted', 'Rejected', 'Rescheduled', null],
-    default: null
-  },
-  CoordinatorFinalActionDate: {
-    type: Date
-  },
-  // Stakeholder's final confirmation after admin/coordinator review
-  StakeholderFinalAction: {
-    type: String,
-    enum: ['Accepted', 'Rejected', 'Rescheduled', null],
-    default: null
-  },
-  StakeholderNote: {
-    type: String,
-    trim: true,
-    validate: {
-      validator: function(note) {
-        // If stakeholder rescheduled, note is required
-        if (this.StakeholderFinalAction === 'Rescheduled') {
-          return note && note.trim().length > 0;
-        }
-        // If stakeholder accepted or rejected, note is optional
-        return true;
-      },
-      message: 'Note is required when stakeholder reschedules the request'
-    }
-  },
-  StakeholderFinalActionDate: {
-    type: Date
-  },
-  // Overall status tracking the workflow
   Status: {
     type: String,
     enum: [
-      'Pending_Admin_Review',
-      'Pending_Coordinator_Review',
-      'Pending_Stakeholder_Review',
-      'Accepted_By_Admin',
-      'Rescheduled_By_Admin',
-      'Rescheduled_By_Coordinator',
-      'Rescheduled_By_Stakeholder',
-      'Rejected_By_Admin',
-      'Completed',
-      'Rejected',
-      'Cancelled'
+      'pending-review',
+      'review-accepted',
+      'review-rejected',
+      'review-rescheduled',
+      'creator-confirmed',
+      'creator-declined',
+      'completed',
+      'expired-review'
     ],
     required: true,
-    default: 'Pending_Admin_Review'
+    default: 'pending-review'
   },
-  // For edit requests, store the original event data to show changes
+  statusHistory: {
+    type: [statusHistorySchema],
+    default: []
+  },
+  decisionHistory: {
+    type: [decisionSchema],
+    default: []
+  },
+  rescheduleProposal: rescheduleSchema,
+  creatorConfirmation: confirmationSchema,
+  finalResolution: finalResolutionSchema,
+  reviewSummary: {
+    type: String,
+    trim: true
+  },
+  decisionSummary: {
+    type: String,
+    trim: true
+  },
+  expiresAt: {
+    type: Date
+  },
+  confirmationDueAt: {
+    type: Date
+  },
+  expiredAt: {
+    type: Date
+  },
+  reviewDeadlineHours: {
+    type: Number
+  },
+  summaryTemplate: {
+    type: String,
+    trim: true
+  },
+  revision: {
+    type: revisionSchema,
+    default: () => ({ number: 1, supersedes: [] })
+  },
   originalData: {
     type: Object,
     default: null
@@ -169,63 +196,11 @@ const eventRequestSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Pre-save hook to update status based on actions
-eventRequestSchema.pre('save', function(next) {
-  // Don't override if status is already set to a final state
-  if (this.Status === 'Cancelled' || this.Status === 'Rejected') {
-    return next();
-  }
-
-  // Update status based on admin action
-  if (this.AdminAction && !this.CoordinatorFinalAction) {
-    if (this.AdminAction === 'Accepted') {
-      this.Status = 'Accepted_By_Admin';
-    } else if (this.AdminAction === 'Rescheduled') {
-      this.Status = 'Rescheduled_By_Admin';
-    } else if (this.AdminAction === 'Rejected') {
-      this.Status = 'Rejected_By_Admin';
-    } else if (this.AdminAction === 'Cancelled') {
-      this.Status = 'Cancelled';
-    }
-  }
-
-  // Update status based on coordinator final action
-  if (this.CoordinatorFinalAction) {
-    if (this.CoordinatorFinalAction === 'Approved' || this.CoordinatorFinalAction === 'Accepted') {
-      this.Status = 'Completed';
-    } else if (this.CoordinatorFinalAction === 'Rejected') {
-      this.Status = 'Rejected';
-    } else if (this.CoordinatorFinalAction === 'Rescheduled') {
-      this.Status = 'Rescheduled_By_Coordinator';
-    }
-  }
-
-  // Update status based on stakeholder final action
-  if (this.StakeholderFinalAction) {
-    if (this.StakeholderFinalAction === 'Accepted') {
-      this.Status = 'Completed';
-    } else if (this.StakeholderFinalAction === 'Rejected') {
-      this.Status = 'Rejected';
-    } else if (this.StakeholderFinalAction === 'Rescheduled') {
-      this.Status = 'Rescheduled_By_Stakeholder';
-    }
-  }
-
-  // Set action dates
-  if (this.AdminAction && !this.AdminActionDate) {
-    this.AdminActionDate = new Date();
-  }
-
-  if (this.CoordinatorFinalAction && !this.CoordinatorFinalActionDate) {
-    this.CoordinatorFinalActionDate = new Date();
-  }
-
-  if (this.StakeholderFinalAction && !this.StakeholderFinalActionDate) {
-    this.StakeholderFinalActionDate = new Date();
-  }
-
-  next();
-});
+eventRequestSchema.index({ Status: 1 });
+eventRequestSchema.index({ coordinator_id: 1, Status: 1 });
+eventRequestSchema.index({ stakeholder_id: 1, Status: 1 });
+eventRequestSchema.index({ expiresAt: 1 });
+eventRequestSchema.index({ 'reviewer.id': 1, Status: 1 });
 
 const EventRequest = mongoose.model('EventRequest', eventRequestSchema);
 

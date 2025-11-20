@@ -12,7 +12,10 @@ const SystemSettingsSchema = new mongoose.Schema({
   allowCoordinatorStaffAssignment: { type: Boolean, default: false },
   requireStaffAssignment: { type: Boolean, default: false },
   blockedWeekdays: { type: [Number], default: [] }, // 0..6 (Sun..Sat)
-  blockedDates: { type: [String], default: [] } // ISO date strings (YYYY-MM-DD)
+  blockedDates: { type: [String], default: [] }, // ISO date strings (YYYY-MM-DD)
+  reviewAutoExpireHours: { type: Number, default: 72 },
+  reviewConfirmationWindowHours: { type: Number, default: 48 },
+  notifyCounterpartAdmins: { type: Boolean, default: true }
 }, { timestamps: true });
 
 // We'll keep a single document storing global settings. Use model name 'SystemSettings'.
