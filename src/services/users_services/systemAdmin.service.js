@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const { BloodbankStaff, SystemAdmin, Coordinator, District, EventRequest, Event, Notification } = require('../../models/index');
+const { REQUEST_STATUSES } = require('../request_services/requestFlow.helpers');
 const coordinatorService = require('./coordinator.service');
 const notificationService = require('../utility_services/notification.service');
 
@@ -301,7 +302,7 @@ class SystemAdminService {
       const acceptedCount = await EventRequest.countDocuments({ Status: 'Accepted_By_Admin' });
       const rescheduledCount = await EventRequest.countDocuments({ Status: 'Rescheduled_By_Admin' });
       const rejectedCount = await EventRequest.countDocuments({ Status: 'Rejected_By_Admin' });
-      const completedCount = await EventRequest.countDocuments({ Status: 'Completed' });
+      const completedCount = await EventRequest.countDocuments({ Status: REQUEST_STATUSES.COMPLETED });
       const finallyRejectedCount = await EventRequest.countDocuments({ Status: 'Rejected' });
 
       // Get upcoming events (next 7 days)
@@ -309,7 +310,7 @@ class SystemAdminService {
       sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
 
       const upcomingEvents = await EventRequest.find({
-        Status: 'Completed',
+        Status: REQUEST_STATUSES.COMPLETED,
         'CoordinatorFinalActionDate': { $gte: new Date(), $lte: sevenDaysFromNow }
       })
       .sort({ 'CoordinatorFinalActionDate': 1 })
@@ -329,7 +330,7 @@ class SystemAdminService {
       tomorrow.setDate(tomorrow.getDate() + 1);
 
       const todayEvents = await EventRequest.countDocuments({
-        Status: 'Completed',
+        Status: REQUEST_STATUSES.COMPLETED,
         'CoordinatorFinalActionDate': { $gte: today, $lt: tomorrow }
       });
 
@@ -392,7 +393,7 @@ class SystemAdminService {
         accepted: await EventRequest.countDocuments({ Status: 'Accepted_By_Admin' }),
         rescheduled: await EventRequest.countDocuments({ Status: 'Rescheduled_By_Admin' }),
         rejected: await EventRequest.countDocuments({ Status: 'Rejected_By_Admin' }),
-        completed: await EventRequest.countDocuments({ Status: 'Completed' }),
+        completed: await EventRequest.countDocuments({ Status: REQUEST_STATUSES.COMPLETED }),
         finally_rejected: await EventRequest.countDocuments({ Status: 'Rejected' })
       };
 

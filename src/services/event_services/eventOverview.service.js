@@ -274,7 +274,7 @@ class EventOverviewService {
         .skip(skip)
         .limit(limit)
         .sort({ Start_Date: 1 })
-        .select('Event_ID Event_Title Start_Date End_Date Category');
+        .select('Event_ID Event_Title Start_Date End_Date Category coordinator_id stakeholder_id made_by_role made_by_id');
 
       const total = await Event.countDocuments(query);
 
@@ -284,7 +284,11 @@ class EventOverviewService {
         Title: e.Event_Title,
         Start_Date: e.Start_Date,
         End_Date: e.End_Date,
-        Category: e.Category
+        Category: e.Category,
+        coordinator_id: e.coordinator_id,
+        stakeholder_id: e.stakeholder_id,
+        made_by_role: e.made_by_role,
+        made_by_id: e.made_by_id
       }));
 
       return {

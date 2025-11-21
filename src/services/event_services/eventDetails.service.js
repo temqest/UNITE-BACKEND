@@ -14,6 +14,51 @@ const {
 
 class EventDetailsService {
   /**
+   * Helper to extract district number from district name
+   * @param {string} districtName 
+   * @returns {number|null}
+   */
+  extractDistrictNumber(districtName) {
+    if (!districtName || typeof districtName !== "string") return null;
+
+    // Try to match "District X" where X is Roman numeral or number
+    const match = districtName.match(/^District\s+(.+)$/i);
+    if (!match) return null;
+
+    const districtPart = match[1].trim();
+
+    // Try to parse as number first
+    const num = parseInt(districtPart, 10);
+    if (!isNaN(num)) return num;
+
+    // Try to convert Roman numeral
+    try {
+      const romanMap = {
+        I: 1,
+        V: 5,
+        X: 10,
+        L: 50,
+        C: 100,
+        D: 500,
+        M: 1000,
+      };
+
+      let total = 0;
+      for (let i = 0; i < districtPart.length; i++) {
+        const current = romanMap[districtPart[i].toUpperCase()];
+        const next = romanMap[districtPart[i + 1]?.toUpperCase()];
+        if (current && next && current < next) {
+          total -= current;
+        } else if (current) {
+          total += current;
+        }
+      }
+      return total;
+    } catch {
+      return null;
+    }
+  }
+  /**
    * Get complete event details by ID
    * @param {string} eventId 
    * @returns {Object} Full event details
@@ -373,18 +418,18 @@ class EventDetailsService {
 
       // Fetch minimal event fields for requested ids
       const events = await Event.find({ Event_ID: { $in: ids } })
-        .select('Event_ID Event_Title Start_Date End_Date Location Status MadeByCoordinatorID MadeByStakeholderID stakeholder Email Phone_Number')
+        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role stakeholder Email Phone_Number')
         .lean();
 
       // Collect unique coordinator and stakeholder ids to resolve names in batch
-      const coordinatorIds = Array.from(new Set(events.map(e => e.MadeByCoordinatorID).filter(Boolean)));
-      const stakeholderIds = Array.from(new Set(events.map(e => e.MadeByStakeholderID || e.stakeholder).filter(Boolean)));
+      const coordinatorIds = Array.from(new Set(events.map(e => e.coordinator_id || (e.made_by_role !== 'Stakeholder' ? e.made_by_id : null)).filter(Boolean)));
+      const stakeholderIds = Array.from(new Set(events.map(e => e.stakeholder_id || e.stakeholder?.toString() || (e.made_by_role === 'Stakeholder' ? e.made_by_id : null)).filter(Boolean)));
 
       const [staffDocs, coordDocs, stakeholderDocs] = await Promise.all([
         // staff records may use ID
         coordinatorIds.length ? BloodbankStaff.find({ ID: { $in: coordinatorIds } }).select('ID First_Name Middle_Name Last_Name Email Phone_Number').lean() : Promise.resolve([]),
-        coordinatorIds.length ? Coordinator.find({ Coordinator_ID: { $in: coordinatorIds } }).select('Coordinator_ID District_ID District_Name District_Number').lean() : Promise.resolve([]),
-        stakeholderIds.length ? Stakeholder.find({ Stakeholder_ID: { $in: stakeholderIds } }).select('Stakeholder_ID First_Name Last_Name').lean() : Promise.resolve([])
+        coordinatorIds.length ? Coordinator.find({ Coordinator_ID: { $in: coordinatorIds } }).populate('district', 'name code').lean() : Promise.resolve([]),
+        stakeholderIds.length ? Stakeholder.find({ Stakeholder_ID: { $in: stakeholderIds } }).select('Stakeholder_ID firstName lastName').populate('district', 'name code').lean() : Promise.resolve([])
       ]);
 
       const staffById = new Map();
@@ -400,10 +445,17 @@ class EventDetailsService {
       const categories = await Promise.all(events.map(ev => this.getEventCategory(ev.Event_ID)));
 
       const mapped = events.map((e, idx) => {
-        const coordId = e.MadeByCoordinatorID;
+        let coordId = e.coordinator_id;
+        let stakeholderId = e.stakeholder_id || e.stakeholder?.toString();
+        if (!coordId && !stakeholderId) {
+          if (e.made_by_role === 'Stakeholder') {
+            stakeholderId = e.made_by_id;
+          } else {
+            coordId = e.made_by_id;
+          }
+        }
         const staff = coordId ? staffById.get(String(coordId)) : null;
         const coord = coordId ? coordById.get(String(coordId)) : null;
-        const stakeholderId = e.MadeByStakeholderID || e.stakeholder;
         const stakeholder = stakeholderId ? stakeholderById.get(String(stakeholderId)) : null;
 
         const coordinatorName = staff
@@ -419,17 +471,18 @@ class EventDetailsService {
           Start_Date: e.Start_Date,
           End_Date: e.End_Date,
           Status: e.Status,
-          MadeByCoordinatorID: e.MadeByCoordinatorID,
-          MadeByStakeholderID: e.MadeByStakeholderID || e.stakeholder,
+          MadeByCoordinatorID: coordId,
+          MadeByStakeholderID: stakeholderId,
           coordinator: {
             id: coordId || null,
             name: coordinatorName || null,
-            district_number: coord ? (coord.District_Number || null) : null,
+            district_number: coord ? (coord.district?.code || this.extractDistrictNumber(coord.district?.name) || null) : null,
             district_name: coord ? (coord.District_Name || null) : null
           },
           stakeholder: stakeholder ? ({
             id: stakeholder.Stakeholder_ID || stakeholder._id,
-            name: `${stakeholder.First_Name || stakeholder.firstName || ''} ${stakeholder.Last_Name || stakeholder.lastName || ''}`.trim()
+            name: `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim(),
+            district_number: stakeholder.district?.code || this.extractDistrictNumber(stakeholder.district?.name) || null
           }) : null,
           category: category.type,
           categoryData: category.data || null,

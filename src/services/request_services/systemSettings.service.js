@@ -23,7 +23,10 @@ const DEFAULTS = {
   allowCoordinatorStaffAssignment: false,
   requireStaffAssignment: false,
   blockedWeekdays: [],
-  blockedDates: []
+  blockedDates: [],
+  reviewAutoExpireHours: 72,
+  reviewConfirmationWindowHours: 48,
+  notifyCounterpartAdmins: true
 };
 
 let cachedSettings = Object.assign({}, DEFAULTS);

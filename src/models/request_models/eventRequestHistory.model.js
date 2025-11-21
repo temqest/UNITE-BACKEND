@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 
+const actorSchema = new mongoose.Schema({
+  id: { type: String, trim: true },
+  role: { type: String, trim: true },
+  name: { type: String, trim: true }
+}, { _id: false });
+
 const eventRequestHistorySchema = new mongoose.Schema({
   History_ID: {
     type: String,
@@ -19,69 +25,37 @@ const eventRequestHistorySchema = new mongoose.Schema({
     trim: true,
     ref: 'Event'
   },
-  // Action information
   Action: {
     type: String,
     enum: [
-      'Created',              // Request created by coordinator
-      'AdminAccepted',        // Admin accepted the request
-      'AdminRescheduled',    // Admin rescheduled the request
-      'AdminRejected',       // Admin rejected the request
-      'AdminCancelled',      // Admin cancelled approved event
-      'CoordinatorApproved', // Coordinator approved admin's acceptance
-      'CoordinatorAccepted', // Coordinator accepted admin's reschedule/rejection
-      'CoordinatorRejected', // Coordinator rejected after admin action
-      'StakeholderCancelled', // Stakeholder cancelled approved event
-      'Completed',           // Request completed
-      'Rejected'             // Request finally rejected
+      'created',
+      'review-assigned',
+      'review-decision',
+      'review-expired',
+      'creator-response',
+      'status-updated',
+      'finalized',
+      'revision-requested'
     ],
     required: true
   },
-  // Who performed the action
-  Actor_ID: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  ActorType: {
-    type: String,
-    enum: ['Coordinator', 'Admin'],
-    required: true
-  },
-  // Actor name for display (optional, can be populated from other models)
-  ActorName: {
-    type: String,
-    trim: true
-  },
-  // Note/comment associated with the action
+  Actor: actorSchema,
   Note: {
     type: String,
     trim: true
   },
-  // Previous status before this action
   PreviousStatus: {
     type: String,
     trim: true
   },
-  // New status after this action
   NewStatus: {
     type: String,
     trim: true
   },
-  // Rescheduled date (if applicable)
-  RescheduledDate: {
-    type: Date
-  },
-  // Original date (before reschedule)
-  OriginalDate: {
-    type: Date
-  },
-  // Additional metadata
   Metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  // Action timestamp (when the action was performed)
   ActionDate: {
     type: Date,
     required: true,
@@ -91,152 +65,105 @@ const eventRequestHistorySchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for efficient querying
 eventRequestHistorySchema.index({ Request_ID: 1, ActionDate: -1 });
-eventRequestHistorySchema.index({ Actor_ID: 1, ActorType: 1 });
-eventRequestHistorySchema.index({ Event_ID: 1 });
+eventRequestHistorySchema.index({ 'Actor.id': 1, ActionDate: -1 });
+eventRequestHistorySchema.index({ Event_ID: 1, ActionDate: -1 });
 
-// Static method to create history entry when request is created
-eventRequestHistorySchema.statics.createRequestHistory = function(requestId, eventId, coordinatorId, coordinatorName) {
+eventRequestHistorySchema.statics._create = function(payload) {
   return this.create({
     History_ID: `HIST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    ...payload
+  });
+};
+
+eventRequestHistorySchema.statics.logCreation = function({ requestId, eventId, actor, note }) {
+  return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
-    Action: 'Created',
-    Actor_ID: coordinatorId,
-    ActorType: 'Coordinator',
-    ActorName: coordinatorName || null,
+    Action: 'created',
+    Actor: actor || null,
+    Note: note || 'Event request created',
     PreviousStatus: null,
-    NewStatus: 'Pending_Admin_Review',
-    Note: 'Event request created by coordinator'
+    NewStatus: 'pending-review'
   });
 };
 
-// Static method to create history entry when admin takes action
-eventRequestHistorySchema.statics.createAdminActionHistory = function(
-  requestId,
-  eventId,
-  adminId,
-  adminName,
-  action,
-  note,
-  rescheduledDate,
-  originalDate
-) {
-  let newStatus;
-  switch(action) {
-    case 'Accepted':
-      newStatus = 'Accepted_By_Admin';
-      break;
-    case 'Rescheduled':
-      newStatus = 'Rescheduled_By_Admin';
-      break;
-    case 'Rejected':
-      newStatus = 'Rejected_By_Admin';
-      break;
-    case 'Cancelled':
-      newStatus = 'Cancelled';
-      break;
-    default:
-      newStatus = 'Pending_Admin_Review';
-  }
-
-  return this.create({
-    History_ID: `HIST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+eventRequestHistorySchema.statics.logStatusChange = function({ requestId, eventId, previousStatus, newStatus, actor, note, metadata }) {
+  return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
-    Action: `Admin${action}`,
-    Actor_ID: adminId,
-    ActorType: 'Admin',
-    ActorName: adminName || null,
-    PreviousStatus: 'Completed', // For cancellations, previous status was Completed
-    NewStatus: newStatus,
+    Action: 'status-updated',
+    Actor: actor || null,
+    PreviousStatus: previousStatus || null,
+    NewStatus: newStatus || null,
     Note: note || null,
-    RescheduledDate: rescheduledDate || null,
-    OriginalDate: originalDate || null
+    Metadata: metadata || {}
   });
 };
 
-// Static method to create history entry when coordinator takes final action
-eventRequestHistorySchema.statics.createCoordinatorActionHistory = function(
-  requestId,
-  eventId,
-  coordinatorId,
-  coordinatorName,
-  action,
-  previousStatus,
-  note
-) {
-  let newStatus;
-  let actionType;
-  
-  switch(action) {
-    case 'Approved':
-      actionType = 'CoordinatorApproved';
-      newStatus = 'Completed';
-      break;
-    case 'Accepted':
-      actionType = 'CoordinatorAccepted';
-      newStatus = 'Completed';
-      break;
-    case 'Rejected':
-      actionType = 'CoordinatorRejected';
-      newStatus = 'Rejected';
-      break;
-    case 'Cancelled':
-      actionType = 'StakeholderCancelled';
-      newStatus = 'Cancelled';
-      break;
-    default:
-      actionType = 'CoordinatorApproved';
-      newStatus = 'Completed';
-  }
-
-  return this.create({
-    History_ID: `HIST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+eventRequestHistorySchema.statics.logReviewDecision = function({ requestId, eventId, decisionType, actor, notes, previousStatus, newStatus, metadata }) {
+  return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
-    Action: actionType,
-    Actor_ID: coordinatorId,
-    ActorType: 'Coordinator',
-    ActorName: coordinatorName || null,
-    PreviousStatus: previousStatus,
-    NewStatus: newStatus,
-    Note: note || null
+    Action: 'review-decision',
+    Actor: actor || null,
+    PreviousStatus: previousStatus || null,
+    NewStatus: newStatus || null,
+    Note: notes || null,
+    Metadata: Object.assign({ decisionType }, metadata)
   });
 };
 
-// Instance method to get formatted history description
-eventRequestHistorySchema.methods.getFormattedDescription = function() {
-  const actor = this.ActorName || this.Actor_ID;
-  const date = new Date(this.ActionDate).toLocaleString();
-  
-  switch(this.Action) {
-    case 'Created':
-      return `${actor} created this event request on ${date}`;
-    case 'AdminAccepted':
-      return `Admin ${actor} accepted this request on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
-    case 'AdminRescheduled':
-      return `Admin ${actor} rescheduled this request on ${date}${this.RescheduledDate ? ` to ${new Date(this.RescheduledDate).toLocaleDateString()}` : ''}${this.Note ? ` - ${this.Note}` : ''}`;
-    case 'AdminRejected':
-      return `Admin ${actor} rejected this request on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
-    case 'AdminCancelled':
-      return `Admin ${actor} cancelled this event on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
-    case 'CoordinatorApproved':
-      return `Coordinator ${actor} approved this request on ${date}`;
-    case 'CoordinatorAccepted':
-      return `Coordinator ${actor} accepted the admin's decision on ${date}`;
-    case 'CoordinatorRejected':
-      return `Coordinator ${actor} rejected this request on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
-    case 'StakeholderCancelled':
-      return `Stakeholder ${actor} cancelled this event on ${date}${this.Note ? ` - ${this.Note}` : ''}`;
-    case 'Completed':
-      return `Request completed on ${date}`;
-    case 'Rejected':
-      return `Request rejected on ${date}`;
-    default:
-      return `Action ${this.Action} performed by ${actor} on ${date}`;
-  }
+eventRequestHistorySchema.statics.logCreatorResponse = function({ requestId, eventId, actor, action, previousStatus, newStatus, notes }) {
+  return this._create({
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Action: 'creator-response',
+    Actor: actor || null,
+    PreviousStatus: previousStatus || null,
+    NewStatus: newStatus || null,
+    Note: notes || null,
+    Metadata: { action }
+  });
+};
+
+eventRequestHistorySchema.statics.logFinalization = function({ requestId, eventId, actor, outcome, notes }) {
+  return this._create({
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Action: 'finalized',
+    Actor: actor || null,
+    PreviousStatus: null,
+    NewStatus: outcome || null,
+    Note: notes || null,
+    Metadata: { outcome }
+  });
+};
+
+eventRequestHistorySchema.statics.logRevision = function({ requestId, eventId, actor, revisionNumber, note }) {
+  return this._create({
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Action: 'revision-requested',
+    Actor: actor || null,
+    PreviousStatus: null,
+    NewStatus: null,
+    Note: note || null,
+    Metadata: { revisionNumber }
+  });
+};
+
+eventRequestHistorySchema.statics.logExpiry = function({ requestId, eventId, previousStatus, note }) {
+  return this._create({
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Action: 'review-expired',
+    Actor: null,
+    PreviousStatus: previousStatus || null,
+    NewStatus: 'expired-review',
+    Note: note || 'Request expired',
+    Metadata: {}
+  });
 };
 
 const EventRequestHistory = mongoose.model('EventRequestHistory', eventRequestHistorySchema);

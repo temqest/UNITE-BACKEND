@@ -9,8 +9,17 @@ const {
   Training,
   EventStaff,
   Notification,
-  District
+  District,
+  Stakeholder,
+  BloodbankStaff
 } = require('../../models/index');
+const {
+  REQUEST_STATUSES,
+  REVIEW_DECISIONS,
+  CREATOR_ACTIONS,
+  buildReviewSummary,
+  buildDecisionSummary
+} = require('./requestFlow.helpers');
 const systemSettings = require('./systemSettings.service');
 
 class EventRequestService {
@@ -93,6 +102,480 @@ class EventRequestService {
       // ignore invalid ObjectId errors
     }
     return null;
+  }
+
+  _normalizeRole(role) {
+    if (!role) return null;
+    const normalized = String(role).toLowerCase();
+    if (normalized === 'admin' || normalized === 'systemadmin' || normalized === 'sysadmin' || normalized === 'sysad') {
+      return 'SystemAdmin';
+    }
+    if (normalized === 'coordinator') return 'Coordinator';
+    if (normalized === 'stakeholder') return 'Stakeholder';
+    return role;
+  }
+
+  async _fetchBloodbankStaffName(staffId) {
+    if (!staffId) return null;
+    const staff = await BloodbankStaff.findOne({ ID: staffId }).lean().exec();
+    if (!staff) return null;
+    const first = staff.First_Name || staff.firstName || '';
+    const last = staff.Last_Name || staff.lastName || '';
+    return `${first} ${last}`.trim() || staff.FullName || null;
+  }
+
+  async _fetchStakeholderName(stakeholderId) {
+    if (!stakeholderId) return null;
+    const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+    if (!stakeholder) return null;
+    const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+    const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+    return `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+  }
+
+  async _buildActorSnapshot(role, id) {
+    if (!role || !id) return null;
+    const normalizedRole = this._normalizeRole(role);
+    let name = null;
+    if (normalizedRole === 'Stakeholder') {
+      name = await this._fetchStakeholderName(id);
+    } else {
+      name = await this._fetchBloodbankStaffName(id);
+    }
+    return {
+      role: normalizedRole,
+      id,
+      name: name || null
+    };
+  }
+
+  async _resolveCoordinatorName(coordinatorId) {
+    return this._fetchBloodbankStaffName(coordinatorId);
+  }
+
+  _getReviewExpiryHours() {
+    const hours = Number(systemSettings.getSetting('reviewAutoExpireHours'));
+    return Number.isFinite(hours) && hours > 0 ? hours : 72;
+  }
+
+  _getConfirmationWindowHours() {
+    const hours = Number(systemSettings.getSetting('reviewConfirmationWindowHours'));
+    return Number.isFinite(hours) && hours > 0 ? hours : 48;
+  }
+
+  _computeExpiryDate(hours) {
+    const expiry = new Date();
+    expiry.setHours(expiry.getHours() + (hours || this._getReviewExpiryHours()));
+    return expiry;
+  }
+
+  async _assignReviewerContext({ creatorRole, coordinatorId, stakeholderId, province, district }) {
+    const normalizedCreator = this._normalizeRole(creatorRole);
+
+    if (normalizedCreator === 'SystemAdmin') {
+      if (!coordinatorId) {
+        throw new Error('SystemAdmin-created requests must specify a coordinator reviewer');
+      }
+      const name = await this._resolveCoordinatorName(coordinatorId);
+      return {
+        id: coordinatorId,
+        role: 'Coordinator',
+        name: name || null,
+        autoAssigned: true
+      };
+    }
+
+    if (normalizedCreator === 'Coordinator') {
+      const admin = await SystemAdmin.findOne().lean().exec();
+      if (!admin) {
+        throw new Error('No system administrator available to review requests');
+      }
+      const name = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+      return {
+        id: admin.Admin_ID,
+        role: 'SystemAdmin',
+        name: name || null,
+        autoAssigned: true
+      };
+    }
+
+    // Stakeholder-created request: prefer coordinator from district or assigned coordinator
+    let targetCoordinatorId = coordinatorId;
+    let resolvedProvince = province;
+    let resolvedDistrict = district;
+
+    if (!targetCoordinatorId && stakeholderId) {
+      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+      if (stakeholder) {
+        targetCoordinatorId = stakeholder.Coordinator_ID || stakeholder.coordinator_id || targetCoordinatorId;
+        resolvedProvince = resolvedProvince || stakeholder.province;
+        resolvedDistrict = resolvedDistrict || stakeholder.district;
+      }
+    }
+
+    if (!targetCoordinatorId && resolvedDistrict) {
+      const coordinator = await Coordinator.findOne({ district: resolvedDistrict }).lean().exec();
+      if (coordinator) {
+        targetCoordinatorId = coordinator.Coordinator_ID;
+      }
+    }
+
+    if (targetCoordinatorId) {
+      const name = await this._resolveCoordinatorName(targetCoordinatorId);
+      return {
+        id: targetCoordinatorId,
+        role: 'Coordinator',
+        name: name || null,
+        autoAssigned: true
+      };
+    }
+
+    const admin = await SystemAdmin.findOne().lean().exec();
+    if (!admin) {
+      throw new Error('No reviewer available to process this request');
+    }
+
+    const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+    return {
+      id: admin.Admin_ID,
+      role: 'SystemAdmin',
+      name: adminName || null,
+      autoAssigned: true
+    };
+  }
+
+  async _recordStatus(request, newStatus, actorSnapshot, note, metadata = {}, options = {}) {
+    request.statusHistory = Array.isArray(request.statusHistory) ? request.statusHistory : [];
+    request.statusHistory.push({
+      status: newStatus,
+      note: note || null,
+      changedAt: new Date(),
+      actor: actorSnapshot || null
+    });
+    const previousStatus = request.Status;
+    request.Status = newStatus;
+    if (!options.skipHistory) {
+      await EventRequestHistory.logStatusChange({
+        requestId: request.Request_ID,
+        eventId: request.Event_ID,
+        previousStatus,
+        newStatus,
+        actor: actorSnapshot || null,
+        note: note || null,
+        metadata
+      });
+    }
+  }
+
+  async _recordDecision(request, decisionPayload, actorSnapshot, nextStatus) {
+    const resultStatus = nextStatus || decisionPayload.resultStatus || request.Status;
+    request.decisionHistory = Array.isArray(request.decisionHistory) ? request.decisionHistory : [];
+    request.decisionHistory.push(Object.assign(
+      {
+        decidedAt: new Date(),
+        actor: actorSnapshot,
+        resultStatus
+      },
+      decisionPayload
+    ));
+
+    await EventRequestHistory.logReviewDecision({
+      requestId: request.Request_ID,
+      eventId: request.Event_ID,
+      decisionType: decisionPayload.type,
+      actor: actorSnapshot,
+      notes: decisionPayload.notes,
+      previousStatus: request.Status,
+      newStatus: resultStatus,
+      metadata: decisionPayload.payload || {}
+    });
+  }
+
+  async _markExpired(request, reason = 'Reviewer did not respond in time') {
+    request.expiredAt = new Date();
+    request.finalResolution = {
+      outcome: 'expired',
+      completedAt: request.expiredAt,
+      reason
+    };
+    await this._recordStatus(request, REQUEST_STATUSES.EXPIRED, null, reason);
+    await request.save();
+    await EventRequestHistory.logExpiry({
+      requestId: request.Request_ID,
+      eventId: request.Event_ID,
+      previousStatus: REQUEST_STATUSES.PENDING_REVIEW,
+      note: reason
+    });
+  }
+
+  async _expireStaleRequests() {
+    const now = new Date();
+    const staleRequests = await EventRequest.find({
+      Status: REQUEST_STATUSES.PENDING_REVIEW,
+      expiresAt: { $lte: now }
+    });
+
+    for (const request of staleRequests) {
+      await this._markExpired(request);
+    }
+  }
+
+  _validateReschedulePayload(payload) {
+    if (!payload) {
+      throw new Error('Reschedule payload is required');
+    }
+    const proposedDate = new Date(payload.proposedDate || payload.rescheduledDate || payload.newDate);
+    if (Number.isNaN(proposedDate.getTime())) {
+      throw new Error('Invalid reschedule date');
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (proposedDate.getTime() < today.getTime()) {
+      throw new Error('Reschedule date cannot be in the past');
+    }
+
+    const proposedStartTime = payload.proposedStartTime || payload.newStartTime;
+    const proposedEndTime = payload.proposedEndTime || payload.newEndTime;
+    if (!proposedStartTime || !proposedEndTime) {
+      throw new Error('Reschedule requires both start and end times');
+    }
+    if (proposedStartTime >= proposedEndTime) {
+      throw new Error('Reschedule end time must be later than start time');
+    }
+
+    return {
+      proposedDate,
+      proposedStartTime,
+      proposedEndTime
+    };
+  }
+
+  async _notifyCreatorOfDecision(request, decision, note, reschedulePayload) {
+    try {
+      const recipientId = request.made_by_id;
+      if (!recipientId) return;
+      let recipientType = request.creator?.role || 'Coordinator';
+      if (recipientType === 'SystemAdmin') recipientType = 'Admin';
+      const actionMap = {
+        [REVIEW_DECISIONS.ACCEPT]: 'Accepted',
+        [REVIEW_DECISIONS.REJECT]: 'Rejected',
+        [REVIEW_DECISIONS.RESCHEDULE]: 'Rescheduled'
+      };
+      await Notification.createAdminActionNotification(
+        recipientId,
+        request.Request_ID,
+        request.Event_ID,
+        actionMap[decision] || 'Accepted',
+        note || null,
+        reschedulePayload?.proposedDate || null,
+        recipientType
+      );
+    } catch (e) {
+      // swallow notification errors to avoid blocking flow
+    }
+  }
+
+  async _notifyReviewerOfConfirmation(request, action) {
+    try {
+      if (!request.reviewer || !request.reviewer.id) return;
+      await Notification.createCoordinatorActionNotification(
+        request.reviewer.id,
+        request.Request_ID,
+        request.Event_ID,
+        action === CREATOR_ACTIONS.CONFIRM ? 'Approved' : 'Rejected'
+      );
+    } catch (e) {
+      // ignore notification errors
+    }
+  }
+
+  async _finalizeRequest(request, event, outcome, actorSnapshot, note, { applyReschedule = false } = {}) {
+    if (applyReschedule && request.rescheduleProposal) {
+      const proposed = request.rescheduleProposal;
+      const newDate = new Date(proposed.proposedDate);
+      if (!Number.isNaN(newDate.getTime())) {
+        const start = new Date(event.Start_Date);
+        start.setFullYear(newDate.getFullYear(), newDate.getMonth(), newDate.getDate());
+        event.Start_Date = start;
+        if (event.End_Date) {
+          const end = new Date(event.End_Date);
+          end.setFullYear(newDate.getFullYear(), newDate.getMonth(), newDate.getDate());
+          event.End_Date = end;
+        }
+      }
+    }
+
+    if (outcome === 'approved') {
+      event.Status = 'Completed';
+    } else if (outcome === 'rejected' || outcome === 'cancelled') {
+      event.Status = 'Rejected';
+    }
+    await event.save();
+
+    request.finalResolution = {
+      outcome,
+      completedAt: new Date(),
+      reason: note || null,
+      publishedEventStatus: event.Status
+    };
+    if (applyReschedule) {
+      request.rescheduleProposal = null;
+    }
+    request.confirmationDueAt = null;
+    await this._recordStatus(request, REQUEST_STATUSES.COMPLETED, actorSnapshot, note);
+    await request.save();
+    await EventRequestHistory.logFinalization({
+      requestId: request.Request_ID,
+      eventId: request.Event_ID,
+      actor: actorSnapshot,
+      outcome,
+      notes: note || null
+    });
+  }
+
+  async _handleReviewerDecision(request, event, actorSnapshot, decisionInput) {
+    const action = String(decisionInput.action || '').toLowerCase();
+    let decisionType;
+    if (action === 'accept' || action === 'accepted' || action === 'approve') {
+      decisionType = REVIEW_DECISIONS.ACCEPT;
+    } else if (action === 'reject' || action === 'rejected' || action === 'deny') {
+      decisionType = REVIEW_DECISIONS.REJECT;
+    } else if (action === 'reschedule' || action === 'rescheduled' || action === 'propose') {
+      decisionType = REVIEW_DECISIONS.RESCHEDULE;
+    } else {
+      throw new Error('Invalid reviewer action');
+    }
+
+    if ((decisionType === REVIEW_DECISIONS.REJECT || decisionType === REVIEW_DECISIONS.RESCHEDULE) && !decisionInput.note) {
+      throw new Error('Decision notes are required for rejection or reschedule');
+    }
+
+    let reschedulePayload = null;
+    if (decisionType === REVIEW_DECISIONS.RESCHEDULE) {
+      reschedulePayload = this._validateReschedulePayload(decisionInput.reschedulePayload || decisionInput);
+    }
+
+    const nextStatusMap = {
+      [REVIEW_DECISIONS.ACCEPT]: REQUEST_STATUSES.REVIEW_ACCEPTED,
+      [REVIEW_DECISIONS.REJECT]: REQUEST_STATUSES.REVIEW_REJECTED,
+      [REVIEW_DECISIONS.RESCHEDULE]: REQUEST_STATUSES.REVIEW_RESCHEDULED
+    };
+    const nextStatus = nextStatusMap[decisionType];
+
+    await this._recordDecision(
+      request,
+      {
+        type: decisionType,
+        notes: decisionInput.note || null,
+        payload: reschedulePayload ? { ...reschedulePayload } : undefined
+      },
+      actorSnapshot,
+      nextStatus
+    );
+
+    if (decisionType === REVIEW_DECISIONS.RESCHEDULE) {
+      request.rescheduleProposal = {
+        ...reschedulePayload,
+        reviewerNotes: decisionInput.note || null,
+        proposedAt: new Date(),
+        proposedBy: actorSnapshot
+      };
+    } else {
+      request.rescheduleProposal = null;
+    }
+
+    request.decisionSummary = buildDecisionSummary({
+      reviewerName: actorSnapshot?.name || 'Reviewer',
+      decision: decisionType,
+      eventTitle: event.Event_Title,
+      reschedulePayload: request.rescheduleProposal,
+      notes: decisionInput.note || null
+    });
+
+    request.creatorConfirmation = null;
+    request.confirmationDueAt = this._computeExpiryDate(this._getConfirmationWindowHours());
+    await this._recordStatus(request, nextStatus, actorSnapshot, decisionInput.note || null, {}, { skipHistory: true });
+    await request.save();
+    await this._notifyCreatorOfDecision(request, decisionType, decisionInput.note || null, reschedulePayload);
+
+    return {
+      success: true,
+      message: `Request ${decisionType}ed successfully`,
+      request: request.toObject()
+    };
+  }
+
+  async _handleCreatorResponse(request, event, actorSnapshot, actionInput) {
+    const action = String(actionInput.action || '').toLowerCase();
+    if (action === CREATOR_ACTIONS.REVISE) {
+      request.revision = request.revision || { number: 1, supersedes: [] };
+      request.revision.number = (request.revision.number || 1) + 1;
+      request.revision.lastRevisedAt = new Date();
+      request.revision.supersedes = Array.isArray(request.revision.supersedes) ? request.revision.supersedes : [];
+      request.revision.supersedes.push(`${request.Status}:${request.revision.number}`);
+      request.creatorConfirmation = {
+        action: 'revise',
+        notes: actionInput.note || null,
+        confirmedAt: new Date(),
+        actor: actorSnapshot
+      };
+      request.decisionSummary = null;
+      request.confirmationDueAt = null;
+      await this._recordStatus(request, REQUEST_STATUSES.PENDING_REVIEW, actorSnapshot, actionInput.note || null);
+      await EventRequestHistory.logRevision({
+        requestId: request.Request_ID,
+        eventId: request.Event_ID,
+        actor: actorSnapshot,
+        revisionNumber: request.revision.number,
+        note: actionInput.note || null
+      });
+      await request.save();
+      return {
+        success: true,
+        message: 'Request sent back for re-review',
+        request: request.toObject()
+      };
+    }
+
+    if (action !== CREATOR_ACTIONS.CONFIRM && action !== CREATOR_ACTIONS.DECLINE) {
+      throw new Error('Creator action must be confirm, decline, or revise');
+    }
+
+    const resolutionStatus = action === CREATOR_ACTIONS.CONFIRM
+      ? REQUEST_STATUSES.CREATOR_CONFIRMED
+      : REQUEST_STATUSES.CREATOR_DECLINED;
+    await this._recordStatus(request, resolutionStatus, actorSnapshot, actionInput.note || null);
+    request.creatorConfirmation = {
+      action,
+      notes: actionInput.note || null,
+      confirmedAt: new Date(),
+      actor: actorSnapshot
+    };
+
+    const isRescheduleAcceptance = request.Status === REQUEST_STATUSES.CREATOR_CONFIRMED
+      && request.rescheduleProposal
+      && action === CREATOR_ACTIONS.CONFIRM;
+
+    const outcome = action === CREATOR_ACTIONS.CONFIRM && request.decisionHistory?.length
+      ? (request.decisionHistory[request.decisionHistory.length - 1].type === REVIEW_DECISIONS.REJECT ? 'rejected' : 'approved')
+      : (action === CREATOR_ACTIONS.CONFIRM ? 'approved' : 'rejected');
+
+    await request.save();
+    await this._notifyReviewerOfConfirmation(request, action);
+    await this._finalizeRequest(
+      request,
+      event,
+      outcome,
+      actorSnapshot,
+      actionInput.note || null,
+      { applyReschedule: isRescheduleAcceptance }
+    );
+
+    return {
+      success: true,
+      message: 'Creator response recorded',
+      request: request.toObject()
+    };
   }
 
   /**
@@ -215,13 +698,13 @@ class EventRequestService {
         if (actorRole && String(actorRole).toLowerCase() === 'stakeholder' && actorId) {
           pendingCount = await EventRequest.countDocuments({
             stakeholder_id: actorId,
-            Status: 'Pending_Admin_Review'
+            Status: REQUEST_STATUSES.PENDING_REVIEW
           });
         } else {
           // Default: count pending for the coordinator
           pendingCount = await EventRequest.countDocuments({
             coordinator_id: coordinatorId,
-            Status: 'Pending_Admin_Review'
+            Status: REQUEST_STATUSES.PENDING_REVIEW
           });
         }
         const pendingCheck = systemSettings.validatePendingRequestsLimit(pendingCount);
@@ -377,31 +860,100 @@ class EventRequestService {
         return actions;
       }
 
-      // Handle different pending statuses based on workflow
+      // Handle pending-review workflow. The request model uses a unified
+      // `pending-review` status; use the `reviewer` field to determine who may act.
       const status = String(req.Status || '').toLowerCase();
+      if (status.includes('pending') || status.includes('review')) {
+        const reviewerRole = req.reviewer && req.reviewer.role ? String(req.reviewer.role).toLowerCase() : null;
 
-      if (status === 'pending_stakeholder_review') {
-        // Only stakeholders can act on stakeholder review requests
-        if (role === 'stakeholder' && req.stakeholder_id === actorId) {
-          return ['view', 'accept', 'reject'];
+        const isReviewAccepted = status.includes('review') && status.includes('accepted');
+        const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled');
+
+        // Special case: if the request is review-accepted (admin accepted a
+        // coordinator-created request), only the assigned coordinator/reviewer
+        // should be able to confirm; admins should no longer have accept/reject/resched.
+        if (isReviewAccepted) {
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view'];
+          }
+          if (role === 'coordinator') {
+              const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
+              const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
+              // In review-accepted state, allow the assigned coordinator to confirm
+              // even if they are the original creator. This is the final confirmation step.
+              if (isReviewer || isAssigned) {
+                return ['view', 'confirm', 'reject'];
+              }
+            return ['view'];
+          }
+          // Everyone else: view only
+          return ['view'];
         }
-        return ['view']; // Others can only view
-      }
 
-      if (status === 'pending_coordinator_review') {
-        // Only coordinators can act on coordinator review requests
-        if (role === 'coordinator' && req.coordinator_id === actorId) {
-          return ['view', 'accept', 'reject'];
+        // If this is a reschedule flow, limit coordinator actions to accept/reject only
+        if (isRescheduled) {
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'resched', 'accept', 'reject'];
+          }
+          if (role === 'coordinator') {
+            const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
+            const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
+            // Only assigned/reviewer coordinators may act; they may accept or reject but not reschedule
+            if (isReviewer || isAssigned) {
+              return ['view', 'accept', 'reject'];
+            }
+            return ['view'];
+          }
+          // stakeholders: treat as view unless stakeholder reviewer
+          if (role === 'stakeholder' && req.stakeholder_id && String(req.stakeholder_id) === String(actorId)) {
+            return ['view', 'accept', 'reject'];
+          }
+          return ['view'];
         }
-        return ['view']; // Others can only view
-      }
 
-      if (status === 'pending_admin_review') {
-        // Admins and coordinators can act on admin review requests
-        if (role === 'admin' || role === 'systemadmin' || role === 'coordinator') {
+        // If reviewer is stakeholder (or request has stakeholder), allow the
+        // stakeholder and system admins to act. System admins should be able
+        // to accept, reject, or propose a reschedule on stakeholder-created
+        // requests (they act as a reviewer in that flow). Coordinators may
+        // only act when explicitly assigned.
+        if (reviewerRole === 'stakeholder' || (!reviewerRole && req.stakeholder_id && req.made_by_role === 'Stakeholder')) {
+          // System admins/full admins can act on stakeholder requests
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'resched', 'accept', 'reject'];
+          }
+          // Stakeholder who created the request may act on their own request
+          if (role === 'stakeholder' && req.stakeholder_id === actorId) {
+            return ['view', 'accept', 'reject'];
+          }
+          return ['view'];
+        }
+
+        // If reviewer is coordinator, only coordinator may act
+        if (reviewerRole === 'coordinator' || (!reviewerRole && req.coordinator_id)) {
+          // Allow coordinator if they are the assigned coordinator or the reviewer
+          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
+          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
+          const isCreator = String(req.made_by_role || '').toLowerCase() === 'coordinator' && req.made_by_id && String(req.made_by_id) === String(actorId);
+          if (role === 'coordinator' && (isReviewer || (isAssigned && !isCreator))) {
+            return ['view', 'accept', 'reject'];
+          }
+          return ['view'];
+        }
+
+        // Default pending/review: admins may act. Coordinators may act only when
+        // they are the assigned coordinator or the assigned reviewer.
+        if (role === 'admin' || role === 'systemadmin') {
           return ['view', 'resched', 'accept', 'reject'];
         }
-        return ['view']; // Others can only view
+        if (role === 'coordinator') {
+          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
+          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
+          const isCreator = String(req.made_by_role || '').toLowerCase() === 'coordinator' && req.made_by_id && String(req.made_by_id) === String(actorId);
+          if (isReviewer || (isAssigned && !isCreator)) {
+            return ['view', 'resched', 'accept', 'reject'];
+          }
+        }
+        return ['view'];
       }
 
       // Check for cancelled status
@@ -466,9 +1018,12 @@ class EventRequestService {
         canManageStaff: has('manage-staff'),
         canReschedule: has('resched') || has('reschedule') || has('resched'),
         canAccept: has('accept') || has('Accepted') || has('approve'),
-        canReject: has('reject') || has('reject') === true,
-        // convenience: any admin-like controls
-        canAdminAction: has('accept') || has('reject') || has('resched') || has('cancel')
+        canReject: has('reject'),
+        canConfirm: has('confirm'),
+        // convenience: admin-level controls (reschedule/cancel/delete). Do
+        // not treat accept/reject as admin-only controls to avoid showing
+        // cancel in coordinator-only accept/reject flows.
+        canAdminAction: has('resched') || has('cancel') || has('delete')
       };
     } catch (e) {
       return {
@@ -478,6 +1033,7 @@ class EventRequestService {
         canReschedule: false,
         canAccept: false,
         canReject: false,
+        canConfirm: false,
         canAdminAction: false
       };
     }
@@ -518,65 +1074,55 @@ class EventRequestService {
   }
 
   /**
-   * Coordinator submits event request
-   * @param {string} coordinatorId 
-   * @param {Object} eventData 
-   * @returns {Object} Created request
+   * Create an event request following the unified review flow
    */
   async createEventRequest(coordinatorId, eventData) {
     try {
-      // Validate coordinator exists
       const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
       if (!coordinator) {
         throw new Error('Coordinator not found');
       }
 
-  // Validate all scheduling rules. Allow callers to pass an optional excludeRequestId
-  // when creating a change request for an existing request so validation can ignore
-  // the original request/event (avoids false-positive overlaps/double-booking).
-  const excludeRequestId = eventData && (eventData.excludeRequestId || eventData.exclude_request_id || null);
-  const validation = await this.validateSchedulingRules(coordinatorId, eventData, excludeRequestId);
+      const excludeRequestId = eventData && (eventData.excludeRequestId || eventData.exclude_request_id || null);
+      const normalizedCreatorRole = this._normalizeRole(eventData?._actorRole || eventData?.made_by_role || 'Coordinator');
+      const creatorId = eventData?._actorId || eventData?.made_by_id || coordinatorId;
+
+      const validation = await this.validateSchedulingRules(
+        coordinatorId,
+        eventData,
+        excludeRequestId,
+        { actorRole: normalizedCreatorRole, actorId: creatorId }
+      );
       if (!validation.isValid) {
         throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
       }
 
-      // Generate IDs
       const eventId = this.generateEventID();
       const requestId = this.generateRequestID();
 
-      // Determine category type. If not provided (change-request case) try to infer
-      // from the existing request/event referenced by excludeRequestId.
       let categoryType = eventData.categoryType || eventData.Category || null;
       if (!categoryType && excludeRequestId) {
-        try {
-          const existingReq = await this._findRequest(excludeRequestId);
-          if (existingReq && existingReq.Event_ID) {
-            const existingEvent = await Event.findOne({ Event_ID: existingReq.Event_ID }).catch(() => null);
-            categoryType = existingEvent?.Category || existingReq.Category || categoryType;
-          }
-        } catch (e) {
-          // ignore inference failures
+        const existingReq = await this._findRequest(excludeRequestId);
+        if (existingReq && existingReq.Event_ID) {
+          const existingEvent = await Event.findOne({ Event_ID: existingReq.Event_ID }).catch(() => null);
+          categoryType = existingEvent?.Category || existingReq.Category || categoryType;
         }
       }
+      if (!categoryType) {
+        throw new Error('Event category type is required');
+      }
 
-      // Determine creator information from eventData._actorRole and _actorId
-      const creatorRole = eventData._actorRole || 'Coordinator'; // Default to Coordinator if not specified
-      const creatorId = eventData._actorId || coordinatorId; // Default to coordinatorId if not specified
-
-      // Create event category-specific data
       let categoryData = null;
-      if (categoryType === 'BloodDrive' || eventData.categoryType === 'BloodDrive') {
+      if (categoryType === 'BloodDrive') {
         categoryData = new BloodDrive({
           BloodDrive_ID: eventId,
           Target_Donation: eventData.Target_Donation,
           VenueType: eventData.VenueType
         });
         await categoryData.save();
-      } else if (categoryType === 'Advocacy' || eventData.categoryType === 'Advocacy') {
-        // Normalize expected audience size from multiple possible input names
+      } else if (categoryType === 'Advocacy') {
         const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
         const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
-
         categoryData = new Advocacy({
           Advocacy_ID: eventId,
           Topic: eventData.Topic,
@@ -585,7 +1131,7 @@ class EventRequestService {
           PartnerOrganization: eventData.PartnerOrganization
         });
         await categoryData.save();
-      } else if (categoryType === 'Training' || eventData.categoryType === 'Training') {
+      } else if (categoryType === 'Training') {
         categoryData = new Training({
           Training_ID: eventId,
           TrainingType: eventData.TrainingType,
@@ -593,108 +1139,95 @@ class EventRequestService {
         });
         await categoryData.save();
       } else {
-        throw new Error('Invalid event category type');
+        throw new Error('Unsupported event category type');
       }
 
-      // Create main event with new simplified structure
+      const stakeholderId = eventData.stakeholder_id || eventData.Stakeholder_ID || null;
+      const stakeholderPresent = !!stakeholderId;
+
       const event = new Event({
         Event_ID: eventId,
         Event_Title: eventData.Event_Title,
         Location: eventData.Location,
-        // Persist description when provided (accept multiple possible input names)
         Event_Description: eventData.Event_Description || eventData.eventDescription || eventData.Description || undefined,
         Start_Date: new Date(eventData.Start_Date),
         End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
-        // Required fields for Event model
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
-        // New simplified structure
         coordinator_id: coordinatorId,
-        stakeholder_id: eventData.stakeholder_id || eventData.Stakeholder_ID || undefined,
+        stakeholder_id: stakeholderId || undefined,
         made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist category type so frontend can display the event type
-        Category: categoryType || eventData.categoryType || eventData.Category || undefined,
+        made_by_role: normalizedCreatorRole,
+        Category: categoryType,
         Status: 'Pending'
       });
       await event.save();
 
-      // Create event request with new simplified structure
+      const creatorSnapshot = await this._buildActorSnapshot(normalizedCreatorRole, creatorId);
+      const reviewer = await this._assignReviewerContext({
+        creatorRole: normalizedCreatorRole,
+        coordinatorId,
+        stakeholderId,
+        province: eventData.province || coordinator.province,
+        district: eventData.district || coordinator.district
+      });
+
+      const eventForSummary = event.toObject();
+      eventForSummary.categoryDoc = categoryData ? categoryData.toObject ? categoryData.toObject() : categoryData : null;
+      const reviewSummary = buildReviewSummary({
+        requestorName: creatorSnapshot?.name || 'The creator',
+        event: eventForSummary
+      });
+
+      const expiresAt = this._computeExpiryDate(this._getReviewExpiryHours());
       const request = new EventRequest({
         Request_ID: requestId,
         Event_ID: eventId,
-        // New simplified structure
         coordinator_id: coordinatorId,
-        stakeholder_id: eventData.stakeholder_id || eventData.Stakeholder_ID || undefined,
+        stakeholder_id: stakeholderId || undefined,
         made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist event category/type on the request to aid UI and audits
-        Category: categoryType || eventData.categoryType || eventData.Category || undefined,
-        Status: 'Pending_Admin_Review'
+        made_by_role: normalizedCreatorRole,
+        creator: creatorSnapshot,
+        reviewer,
+        stakeholderPresent,
+        province: eventData.province || coordinator.province || null,
+        district: eventData.district || coordinator.district || null,
+        municipality: eventData.municipality || coordinator.municipality || null,
+        Category: categoryType,
+        Status: REQUEST_STATUSES.PENDING_REVIEW,
+        statusHistory: [{
+          status: REQUEST_STATUSES.PENDING_REVIEW,
+          changedAt: new Date(),
+          actor: creatorSnapshot
+        }],
+        reviewSummary,
+        reviewDeadlineHours: this._getReviewExpiryHours(),
+        expiresAt,
+        summaryTemplate: categoryType
       });
+
       await request.save();
-
-      // Create history entry
-      const models = require('../../models/index');
-      const bloodbankStaff = await models.BloodbankStaff.findOne({ ID: coordinatorId }).catch(() => null);
-      const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
-
-      // If this request was created by a stakeholder, prefer using the stakeholder's
-      // full name as the "created by" label so coordinators can easily see who
-      // submitted the request. Otherwise use the coordinator/staff name.
-      let createdByName = coordinatorName;
-      if (eventData.stakeholder_id) {
-        try {
-          const stakeholder = await models.Stakeholder.findOne({ Stakeholder_ID: eventData.stakeholder_id ? eventData.stakeholder_id.toString().trim() : eventData.stakeholder_id }).catch(() => null);
-          if (stakeholder) {
-            const sfirst = stakeholder.First_Name || stakeholder.FirstName || stakeholder.First || '';
-            const slast = stakeholder.Last_Name || stakeholder.LastName || stakeholder.Last || '';
-            const full = `${(sfirst || '').toString().trim()} ${(slast || '').toString().trim()}`.trim();
-            if (full) createdByName = full;
-          }
-        } catch (e) {
-          // ignore lookup failures and fall back to coordinatorName
-        }
-      }
-
-      await EventRequestHistory.createRequestHistory(
+      await EventRequestHistory.logCreation({
         requestId,
         eventId,
-        coordinatorId,
-        createdByName
-      );
+        actor: creatorSnapshot,
+        note: 'Event request submitted'
+      });
 
-      // Send notification to admin
-      // Get all admins
-      const admins = await SystemAdmin.find();
-      for (const admin of admins) {
+      if (reviewer && reviewer.id) {
         await Notification.createNewRequestNotification(
-          admin.Admin_ID,
+          reviewer.id,
           requestId,
           eventId,
           coordinatorId
         );
       }
 
-      // Attach createdByName to returned payloads so frontend can display creator
-      const returnedRequest = {
-        Request_ID: request.Request_ID,
-        Event_ID: event.Event_ID,
-        Status: request.Status,
-        created_at: request.createdAt,
-        createdByName: createdByName || null,
-        stakeholder_id: request.stakeholder_id || null
-      };
-
-      // Do not modify persisted schemas here (avoid adding ad-hoc properties to DB records),
-      // but include createdByName on the returned event object for UI convenience.
-      const returnedEvent = event.toObject ? { ...event.toObject(), createdByName: createdByName || null } : { ...event, createdByName: createdByName || null };
-
       return {
         success: true,
         message: 'Event request submitted successfully',
-        request: returnedRequest,
-        event: returnedEvent,
+        request: request.toObject(),
+        event: eventForSummary,
         category: categoryData,
         warnings: validation.warnings
       };
@@ -710,215 +1243,25 @@ class EventRequestService {
    */
   async createImmediateEvent(creatorId, creatorRole, eventData) {
     try {
-      // Validate creator (admin or coordinator)
-      if (creatorRole !== 'SystemAdmin' && creatorRole !== 'Coordinator') {
-        throw new Error('Unauthorized: Only Admin or Coordinator can create events');
+      const normalizedRole = this._normalizeRole(creatorRole);
+      if (normalizedRole !== 'SystemAdmin' && normalizedRole !== 'Coordinator') {
+        throw new Error('Unauthorized: Only admins or coordinators can perform direct creation');
       }
 
-      const coordinatorId = creatorRole === 'Coordinator' ? creatorId : (eventData.coordinator_id || eventData.MadeByCoordinatorID || null);
-      if (creatorRole === 'Coordinator') {
-        const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
-        if (!coordinator) throw new Error('Coordinator not found');
+      const coordinatorId = normalizedRole === 'Coordinator'
+        ? creatorId
+        : (eventData.coordinator_id || eventData.MadeByCoordinatorID || null);
+
+      if (!coordinatorId) {
+        throw new Error('Coordinator ID is required for direct event creation');
       }
 
-      // Tag actor info (so validateSchedulingRules can skip checks for admin/coordinator)
-      eventData._actorRole = creatorRole;
-      eventData._actorId = creatorId;
-      // Validate scheduling rules (validateSchedulingRules will bypass for admin/coordinator)
-      const validation = await this.validateSchedulingRules(coordinatorId || 'ADMIN', eventData);
-      if (!validation.isValid) {
-        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
-      }
-
-      // Generate event ID
-      const eventId = this.generateEventID();
-
-      // Create category-specific data
-      let categoryData = null;
-      if (eventData.categoryType === 'BloodDrive') {
-        categoryData = new BloodDrive({
-          BloodDrive_ID: eventId,
-          Target_Donation: eventData.Target_Donation,
-          VenueType: eventData.VenueType
-        });
-        await categoryData.save();
-      } else if (eventData.categoryType === 'Advocacy') {
-        const expectedSizeRaw = eventData.ExpectedAudienceSize || eventData.numberOfParticipants || eventData.Expected_Audience_Size || eventData.expectedAudienceSize;
-        const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' ? parseInt(expectedSizeRaw, 10) : undefined;
-
-        categoryData = new Advocacy({
-          Advocacy_ID: eventId,
-          Topic: eventData.Topic,
-          TargetAudience: eventData.TargetAudience,
-          ExpectedAudienceSize: expectedSize,
-          PartnerOrganization: eventData.PartnerOrganization
-        });
-        await categoryData.save();
-      } else if (eventData.categoryType === 'Training') {
-        categoryData = new Training({
-          Training_ID: eventId,
-          TrainingType: eventData.TrainingType,
-          MaxParticipants: eventData.MaxParticipants
-        });
-        await categoryData.save();
-      } else {
-        throw new Error('Invalid event category type');
-      }
-
-      // Determine initial status based on the new approval workflow
-      const stakeholderId = eventData.stakeholder_id || eventData.Stakeholder_ID || null;
-      let requestInitialStatus = 'Pending_Admin_Review';
-
-      // Apply the new approval workflow logic:
-      // 1. If stakeholder creates event: needs admin review first
-      // 2. If sys admin creates event with stakeholder: needs stakeholder acceptance first
-      // 3. If sys admin creates event without stakeholder: needs coordinator approval
-      // 4. If coordinator creates event with stakeholder: needs stakeholder acceptance first
-      // 5. If coordinator creates event without stakeholder: needs admin approval
-
-      if (stakeholderId) {
-        // Events with stakeholders: stakeholder review first (unless created by stakeholder)
-        if (creatorRole === 'Stakeholder') {
-          requestInitialStatus = 'Pending_Admin_Review'; // Stakeholder created: admin review first
-        } else {
-          requestInitialStatus = 'Pending_Stakeholder_Review'; // Admin/Coordinator created with stakeholder: stakeholder review first
-        }
-      } else {
-        // Events without stakeholders: depends on creator role
-        if (creatorRole === 'SystemAdmin') {
-          requestInitialStatus = 'Pending_Coordinator_Review'; // Admin created without stakeholder: coordinator review
-        } else if (creatorRole === 'Coordinator') {
-          requestInitialStatus = 'Pending_Admin_Review'; // Coordinator created without stakeholder: admin review
-        }
-      }
-
-      // Create main event with Approved/Completed status (auto-publish) based on workflow
-      const event = new Event({
-        Event_ID: eventId,
-        Event_Title: eventData.Event_Title,
-        Location: eventData.Location,
-        // Persist description when provided (accept multiple possible input names)
-        Event_Description: eventData.Event_Description || eventData.eventDescription || eventData.Description || undefined,
-        Start_Date: new Date(eventData.Start_Date),
-        End_Date: eventData.End_Date ? new Date(eventData.End_Date) : undefined,
-        // Required fields for Event model
-        Email: eventData.Email,
-        Phone_Number: eventData.Phone_Number,
-        // New simplified structure
-        coordinator_id: coordinatorId,
-        stakeholder_id: stakeholderId,
-        made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist category so frontend can read the event type
-        Category: eventData.categoryType || eventData.Category || undefined,
-        Status: 'Pending' // Event status is always 'Pending' initially - approval happens at request level
-      });
-      await event.save();
-
-      // Create an EventRequest record for audit/history and notifications
-      // Even though the event may be auto-published, keep a request trail
-      const requestId = this.generateRequestID();
-
-      const request = new EventRequest({
-        Request_ID: requestId,
-        Event_ID: eventId,
-        // New simplified structure
-        coordinator_id: coordinatorId,
-        stakeholder_id: stakeholderId,
-        made_by_id: creatorId,
-        made_by_role: creatorRole,
-        // Persist category on auto-approved requests as well
-        Category: eventData.categoryType || eventData.Category || undefined,
-        Status: requestInitialStatus
+      const enrichedData = Object.assign({}, eventData, {
+        _actorRole: normalizedRole,
+        _actorId: creatorId
       });
 
-      await request.save();
-
-      // Create history entries: admin action + coordinator approval (auto)
-      try {
-        // Admin history (actor = Admin)
-        await EventRequestHistory.createAdminActionHistory(
-          requestId,
-          eventId,
-          creatorId,
-          null,
-          'Accepted',
-          null,
-          event.Start_Date
-        );
-
-        // Coordinator approval history (actor = Coordinator)
-        const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: coordinatorId }).catch(() => null);
-        const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
-        await EventRequestHistory.createCoordinatorActionHistory(
-          requestId,
-          eventId,
-          coordinatorId,
-          coordinatorName,
-          'Completed',
-          'Accepted_By_Admin'
-        );
-      } catch (e) {
-        // Swallow history creation failures to avoid blocking event creation
-      }
-
-      // Notify the appropriate recipient based on the workflow
-      try {
-        let recipientId = null;
-        let recipientType = null;
-
-        if (requestInitialStatus === 'Pending_Stakeholder_Review') {
-          // Notify stakeholder
-          recipientId = stakeholderId;
-          recipientType = 'Stakeholder';
-        } else if (requestInitialStatus === 'Pending_Coordinator_Review') {
-          // Notify coordinator
-          recipientId = coordinatorId;
-          recipientType = 'Coordinator';
-        } else if (requestInitialStatus === 'Pending_Admin_Review') {
-          // Notify all admins
-          const admins = await SystemAdmin.find();
-          for (const admin of admins) {
-            await Notification.createNewRequestNotification(
-              admin.Admin_ID,
-              requestId,
-              eventId,
-              coordinatorId
-            );
-          }
-          // Skip the general notification below since we handled admins specifically
-          recipientId = null;
-        }
-
-        // Send notification for stakeholder/coordinator review
-        if (recipientId && recipientType) {
-          await Notification.createAdminActionNotification(
-            recipientId,
-            requestId,
-            eventId,
-            'Submitted', // Action type for new requests
-            null,
-            null,
-            recipientType
-          );
-        }
-      } catch (e) {
-        // swallow notification errors
-      }
-
-      return {
-        success: true,
-        message: 'Event request submitted successfully and awaits approval',
-        request: {
-          Request_ID: request.Request_ID,
-          Event_ID: event.Event_ID,
-          Status: request.Status,
-          created_at: request.createdAt
-        },
-        event,
-        category: categoryData,
-        warnings: validation.warnings
-      };
+      return this.createEventRequest(coordinatorId, enrichedData);
     } catch (error) {
       throw new Error(`Failed to create event: ${error.message}`);
     }
@@ -988,10 +1331,12 @@ class EventRequestService {
         staffAssignments = [];
       }
 
+      const humanLabel = require('./requestFlow.helpers').getHumanStatusLabel(request.Status, request);
       return {
         success: true,
         request: {
           ...request.toObject(),
+          statusLabel: humanLabel,
           event: event.toObject(),
           category: categoryData,
           coordinator: coordinator ? {
@@ -1064,8 +1409,8 @@ class EventRequestService {
         
         // Only reset status to pending review if this edit requires review
         if (requiresReview) {
-          const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
-          if (!pendingStatuses.includes(request.Status)) {
+          const isCurrentlyPending = String(request.Status || '').toLowerCase().includes('pending');
+          if (!isCurrentlyPending) {
             request.AdminAction = null;
             request.AdminNote = null;
             request.RescheduledDate = null;
@@ -1077,13 +1422,8 @@ class EventRequestService {
             // Reset to the initial status based on the workflow
             const stakeholderId = request.stakeholder_id;
             const madeByRole = request.made_by_role;
-            if (stakeholderId && madeByRole !== 'Stakeholder') {
-              request.Status = 'Pending_Stakeholder_Review';
-            } else if (!stakeholderId && madeByRole === 'SystemAdmin') {
-              request.Status = 'Pending_Coordinator_Review';
-            } else {
-              request.Status = 'Pending_Admin_Review';
-            }
+            // Set unified pending-review status; reviewer assignment determines who will act next
+            request.Status = REQUEST_STATUSES.PENDING_REVIEW;
           }
         }
 
@@ -1230,26 +1570,32 @@ class EventRequestService {
       // request was created by a stakeholder, admins/coordinators must not
       // finalize it — the stakeholder must confirm any reschedule/changes.
       // Also skip auto-approval for coordinator review requests where coordinator is acting
-      if ((actorIsAdmin || actorIsCoordinator) && !(actorIsCoordinator && request.Status === 'Pending_Coordinator_Review')) {
+      if ((actorIsAdmin || actorIsCoordinator) && !(actorIsCoordinator && request.reviewer && request.reviewer.role === 'Coordinator')) {
         try {
           const approverId = actorId;
           if (freshEvent) {
             // If stakeholder created the request, do not auto-publish the event
             const createdByStakeholder = !!request.stakeholder_id;
+            const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
             if (createdByStakeholder) {
               freshEvent.Status = 'Pending';
+            } else if (createdByCoordinator) {
+              // Admin updated a coordinator-created request: keep pending so coordinator can confirm
+              freshEvent.Status = 'Pending';
             } else {
+              // Non-stakeholder, non-coordinator created events may be auto-published
               freshEvent.Status = 'Completed';
             }
             freshEvent.ApprovedByAdminID = approverId;
             await freshEvent.save();
           }
-          // mark request as completed only when not stakeholder-created
+          // mark request status appropriately
           const createdByStakeholder = !!request.stakeholder_id;
-          if (!createdByStakeholder) {
-            request.Status = 'Completed';
-            // Note: CoordinatorFinalAction should remain null since this is auto-approval
-            // Only set CoordinatorFinalAction when coordinator actually performs an action
+          const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
+          if (!createdByStakeholder && !createdByCoordinator) {
+            request.Status = REQUEST_STATUSES.COMPLETED;
+          } else if (createdByCoordinator) {
+            request.Status = REQUEST_STATUSES.REVIEW_ACCEPTED;
           }
           request.Admin_ID = approverId;
           await request.save();
@@ -1287,7 +1633,10 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
+      const previousStatus = request.Status;
+
       const action = actionData.action || 'Accepted'; // Accepted, Rejected, Rescheduled
+      const normalizedAction = String(action || '').toLowerCase();
       const note = actionData.note || null;
       const rescheduledDate = actionData.rescheduledDate || null;
 
@@ -1296,41 +1645,68 @@ class EventRequestService {
       console.log('processRequestAction: actorRole=', actorRole, 'status=', status);
       let isAuthorized = false;
 
-    if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
-      // Admins can act on admin review requests, stakeholder reschedules, and cancel any event
-      isAuthorized = status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || action === 'Cancelled';
-    } else if (actorRole === 'Coordinator') {
-      // Coordinators can act on coordinator review requests, admin review requests, stakeholder reschedules, and cancel any event
-      isAuthorized = status === 'Pending_Coordinator_Review' || status === 'Pending_Admin_Review' || status === 'Rescheduled_By_Stakeholder' || status === 'Rescheduled_By_Admin' || action === 'Cancelled';
-      // For coordinator review, verify ownership
-      if (status === 'Pending_Coordinator_Review' && request.coordinator_id !== actorId) {
-        throw new Error('Unauthorized: Coordinator does not own this request');
+      // Normalize status for comparisons (handle legacy variants like Pending_Admin_Review etc.)
+      const lowerStatus = String(status || '').toLowerCase();
+
+      if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+        // Admins can act on any pending review or reschedule flows, and cancel
+        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || action === 'Cancelled';
+      } else if (actorRole === 'Coordinator') {
+        // Coordinators can act on pending, review, or reschedule flows, and cancel
+        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled';
+
+        // For pending or review statuses, verify ownership / assignment. Allow if:
+        // - request.coordinator_id matches actorId
+        // - request.reviewer is a coordinator and matches actorId
+        // - stakeholder (if present) is linked to this coordinator (legacy linkage)
+        if (lowerStatus.includes('pending') || lowerStatus.includes('review')) {
+          let owns = false;
+          // Direct coordinator assignment on the request
+          if (request.coordinator_id && String(request.coordinator_id) === String(actorId)) owns = true;
+          // Reviewer assignment (snapshot)
+          if (!owns && request.reviewer && request.reviewer.role && String(request.reviewer.role).toLowerCase() === 'coordinator' && String(request.reviewer.id) === String(actorId)) owns = true;
+          // Stakeholder belongs to this coordinator (legacy linkage)
+          if (!owns && request.stakeholder_id) {
+            try {
+              const Stakeholder = require('../../models/index').Stakeholder;
+              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
+              if (stakeholder && (String(stakeholder.Coordinator_ID) === String(actorId) || String(stakeholder.coordinator_id) === String(actorId))) owns = true;
+            } catch (e) {
+              // ignore lookup errors
+            }
+          }
+          if (!owns) {
+            throw new Error('Unauthorized: Coordinator does not own this request');
+          }
+        }
+
+        // Prevent coordinators from acting twice if they've already set a final action (except when rescheduling)
+        if (request.CoordinatorFinalAction && !String(request.CoordinatorFinalAction).toLowerCase().includes('resched') && action !== 'Rescheduled') {
+          throw new Error('Coordinator has already acted on this request');
+        }
+      } else if (actorRole === 'Stakeholder') {
+        // Stakeholders can act when the request is pending or accepted-by-admin flows, and may reschedule/cancel their own requests
+        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('accepted') || lowerStatus.includes('resched') || (action === 'Cancelled' && request.stakeholder_id === actorId);
+        // Also allow reschedule on completed/approved requests if they own the request
+        if (action === 'Rescheduled' && request.stakeholder_id === actorId) {
+          isAuthorized = true;
+        }
+        // Verify ownership
+        console.log('Stakeholder check: request.stakeholder_id=', request.stakeholder_id, 'actorId=', actorId);
+        if (request.stakeholder_id && String(request.stakeholder_id) !== String(actorId)) {
+          throw new Error('Unauthorized: Stakeholder does not own this request');
+        }
       }
-      // Prevent coordinators from acting on requests they already reviewed (system admin workflow)
-      // But allow them to act on Pending_Admin_Review if they haven't already acted on this specific request
-      if (status === 'Pending_Admin_Review' && request.CoordinatorFinalAction && request.CoordinatorFinalAction !== 'Rescheduled') {
-        throw new Error('Coordinator has already acted on this request');
-      }
-    } else if (actorRole === 'Stakeholder') {
-      // Stakeholders can act on stakeholder review requests, accepted admin actions, reschedule or cancel their own completed events
-      isAuthorized = status === 'Pending_Stakeholder_Review' || status === 'Accepted_By_Admin' || (action === 'Rescheduled' && request.stakeholder_id === actorId) || (action === 'Cancelled' && request.stakeholder_id === actorId);
-      // Also allow reschedule on completed/approved requests if they own the request
-      if (action === 'Rescheduled' && request.stakeholder_id === actorId) {
-        isAuthorized = true;
-      }
-      // Verify ownership
-      console.log('Stakeholder check: request.stakeholder_id=', request.stakeholder_id, 'actorId=', actorId);
-      if (request.stakeholder_id !== actorId) {
-        throw new Error('Unauthorized: Stakeholder does not own this request');
-      }
-    }      if (!isAuthorized) {
+
+      if (!isAuthorized) {
         throw new Error(`Unauthorized: ${actorRole} cannot act on requests with status ${status}`);
       }
 
-      // Only block non-reschedule and non-cancel actions when the request is not in a pending state or rescheduled by stakeholder
-      const pendingStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'];
-      const allowedStatusesForActions = [...pendingStatuses, 'Rescheduled_By_Stakeholder', 'Rescheduled_By_Admin'];
-      if (action !== 'Rescheduled' && action !== 'Cancelled' && !allowedStatusesForActions.includes(request.Status)) {
+      // Only block non-reschedule and non-cancel actions when the request is not in a pending state or rescheduled
+      const lowerReqStatus = String(request.Status || '').toLowerCase();
+      const isPendingStatus = lowerReqStatus.includes('pending');
+      const isRescheduleStatus = lowerReqStatus.includes('resched');
+      if (action !== 'Rescheduled' && action !== 'Cancelled' && !isPendingStatus && !isRescheduleStatus) {
         throw new Error('Request is not pending review');
       }
 
@@ -1342,9 +1718,32 @@ class EventRequestService {
         request.AdminNote = note;
         request.RescheduledDate = rescheduledDate;
         request.AdminActionDate = new Date();
+        // Compose a decision summary for admin actions (include note)
+        try {
+          let actorName = null;
+          try {
+            const admin = await SystemAdmin.findOne().lean().exec();
+            if (admin) actorName = `${admin.First_Name || ''} ${admin.Last_Name || ''}`.trim();
+          } catch (e) {}
+          const decisionKind = (normalizedAction.includes('resched') || normalizedAction.includes('reschedule') || normalizedAction.includes('rescheduled')) ? REVIEW_DECISIONS.RESCHEDULE : (normalizedAction.includes('reject') ? REVIEW_DECISIONS.REJECT : (normalizedAction.includes('accept') ? REVIEW_DECISIONS.ACCEPT : null));
+          const reschedulePayload = (decisionKind === REVIEW_DECISIONS.RESCHEDULE) ? ({ proposedDate: rescheduledDate, reviewerNotes: note }) : null;
+          if (decisionKind) {
+            request.decisionSummary = buildDecisionSummary({
+              reviewerName: actorName || (actorRole || 'Reviewer'),
+              decision: decisionKind,
+              eventTitle: event ? event.Event_Title : (request.Event_Title || ''),
+              reschedulePayload,
+              notes: note || null
+            });
+          }
+        } catch (e) {
+          // ignore
+        }
       } else if (actorRole === 'Coordinator') {
         // Coordinator action
-        if (status === 'Pending_Coordinator_Review') {
+        // If this is a coordinator-review request (reviewer is coordinator and status is pending)
+        const isCoordinatorReview = String(status || '').toLowerCase().includes('pending') && request.reviewer && request.reviewer.role === 'Coordinator';
+        if (isCoordinatorReview) {
           request.CoordinatorFinalAction = action;
           request.CoordinatorFinalActionDate = new Date();
         } else {
@@ -1354,6 +1753,25 @@ class EventRequestService {
           request.AdminNote = note;
           request.RescheduledDate = rescheduledDate;
           request.AdminActionDate = new Date();
+          // Compose decision summary when coordinator acts as admin
+          try {
+            let actorName = null;
+            try {
+              const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId }).lean().exec();
+              if (staff) actorName = `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim();
+            } catch (e) {}
+            const decisionKind = (normalizedAction.includes('resched') || normalizedAction.includes('reschedule') || normalizedAction.includes('rescheduled')) ? REVIEW_DECISIONS.RESCHEDULE : (normalizedAction.includes('reject') ? REVIEW_DECISIONS.REJECT : (normalizedAction.includes('accept') ? REVIEW_DECISIONS.ACCEPT : null));
+            const reschedulePayload = (decisionKind === REVIEW_DECISIONS.RESCHEDULE) ? ({ proposedDate: rescheduledDate, reviewerNotes: note }) : null;
+            if (decisionKind) {
+              request.decisionSummary = buildDecisionSummary({
+                reviewerName: actorName || (actorRole || 'Reviewer'),
+                decision: decisionKind,
+                eventTitle: event ? event.Event_Title : (request.Event_Title || ''),
+                reschedulePayload,
+                notes: note || null
+              });
+            }
+          } catch (e) {}
         }
       } else if (actorRole === 'Stakeholder') {
         // Stakeholder action - they can accept, reschedule, or cancel approved events
@@ -1449,21 +1867,21 @@ class EventRequestService {
           if (actorRole === 'Stakeholder') {
             // Stakeholder accepted: event is approved
             event.Status = 'Completed';
-            request.Status = 'Completed';
-          } else if (status === 'Rescheduled_By_Stakeholder') {
-            // Admin/Coordinator accepted stakeholder reschedule: event is approved
+            request.Status = REQUEST_STATUSES.COMPLETED;
+          } else if (lowerStatus.includes('resched')) {
+            // Admin/Coordinator accepted reschedule: event is approved
             event.Status = 'Completed';
-            request.Status = 'Completed';
-          } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
-            // Coordinator accepted system admin's request: event publishes immediately
+            request.Status = REQUEST_STATUSES.COMPLETED;
+          } else if (lowerStatus.includes('pending') && request.reviewer && request.reviewer.role === 'Coordinator' && actorRole === 'Coordinator') {
+            // Coordinator accepted system admin's request (coordinator-review): event publishes immediately
             event.Status = 'Completed';
-          } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
+          } else if (lowerStatus.includes('pending') && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
             // Admin accepted coordinator's reschedule: event publishes
             event.Status = 'Completed';
-          } else if (status === 'Pending_Admin_Review' && actorRole === 'Coordinator') {
+          } else if (lowerStatus.includes('pending') && actorRole === 'Coordinator') {
             // Coordinator accepted admin's request: event publishes immediately
             event.Status = 'Completed';
-          } else if (status === 'Rescheduled_By_Admin' && actorRole === 'Coordinator') {
+          } else if (lowerStatus.includes('resched') && actorRole === 'Coordinator') {
             // Coordinator accepted admin's reschedule: event is approved
             event.Status = 'Completed';
           } else {
@@ -1478,11 +1896,11 @@ class EventRequestService {
         // Handle request completion for admin/coordinator actions
         if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
           const createdByStakeholder = !!request.stakeholder_id;
-          if (status === 'Rescheduled_By_Stakeholder' && action === 'Accepted') {
-            // Accepting stakeholder reschedule: complete the request
-            request.Status = 'Completed';
-            // Note: CoordinatorFinalAction should remain null since coordinator didn't act
-            // Only set CoordinatorFinalAction when coordinator actually performs an action
+          const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
+
+          if (lowerStatus.includes('resched') && action === 'Accepted') {
+            // Accepting reschedule: complete the request
+            request.Status = REQUEST_STATUSES.COMPLETED;
           } else if (action === 'Rejected') {
             // Admin/coordinator rejected: request is rejected regardless of creator
             request.Status = 'Rejected';
@@ -1492,28 +1910,22 @@ class EventRequestService {
             }
           } else if (action === 'Cancelled') {
             // Admin/coordinator cancelled: request is cancelled
-            console.log('=== PROCESS REQUEST ACTION DEBUG: Setting status to Cancelled ===');
-            console.log('Request ID:', requestId);
-            console.log('Actor Role:', actorRole);
-            console.log('Action:', action);
-            console.log('Previous Status:', request.Status);
             request.Status = 'Cancelled';
-            console.log('New Status:', request.Status);
-          } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
-            // Coordinator acting on system admin's request
+          } else if (lowerStatus.includes('pending') && request.reviewer && request.reviewer.role === 'Coordinator' && actorRole === 'Coordinator') {
+            // Coordinator acting on system admin's request (coordinator-review)
             if (action === 'Accepted') {
               // Coordinator accepted: event publishes immediately
-              request.Status = 'Completed';
+              request.Status = REQUEST_STATUSES.COMPLETED;
               request.CoordinatorFinalAction = 'Accepted';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rejected') {
               // Coordinator rejected: send back to sys admin to accept the rejection
-              request.Status = 'Pending_Admin_Review';
+              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
               // Coordinator rescheduled: sys admin reviews the reschedule date
-              request.Status = 'Pending_Admin_Review';
+              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
               request.CoordinatorFinalAction = 'Rescheduled';
               request.CoordinatorFinalActionDate = new Date();
             }
@@ -1523,53 +1935,97 @@ class EventRequestService {
           } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
             // Sys admin reviewing coordinator's reschedule
             if (action === 'Accepted') {
-              request.Status = 'Completed';
+              request.Status = REQUEST_STATUSES.COMPLETED;
             } else if (action === 'Rejected') {
               request.Status = 'Rejected';
             }
-          } else if (status === 'Pending_Admin_Review' && actorRole === 'Coordinator') {
-            // Coordinator acting on admin's request (coordinator-created without stakeholder)
+          } else if (lowerStatus.includes('pending') && actorRole === 'Coordinator') {
+            // Coordinator acting on admin's request
             if (action === 'Accepted') {
-              // Coordinator accepted: event publishes immediately
-              request.Status = 'Completed';
+              request.Status = REQUEST_STATUSES.COMPLETED;
               request.CoordinatorFinalAction = 'Accepted';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rejected') {
-              // Coordinator rejected: send back to sys admin to accept the rejection
-              request.Status = 'Pending_Admin_Review';
+              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
-              // Coordinator rescheduled: sys admin reviews the reschedule date
-              request.Status = 'Pending_Admin_Review';
+              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
               request.CoordinatorFinalAction = 'Rescheduled';
               request.CoordinatorFinalActionDate = new Date();
             }
-          } else if (status === 'Rescheduled_By_Admin' && actorRole === 'Coordinator') {
+          } else if ((String(status || '').toLowerCase().includes('resched') || status === 'Rescheduled_By_Admin') && actorRole === 'Coordinator') {
             // Coordinator acting on admin's reschedule
+            // Coordinators may only Accept or Reject an admin reschedule; they
+            // may not propose another reschedule when admin already rescheduled.
             if (action === 'Accepted') {
-              // Coordinator accepted: event publishes immediately
-              request.Status = 'Completed';
+              request.Status = REQUEST_STATUSES.COMPLETED;
               request.CoordinatorFinalAction = 'Accepted';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rejected') {
-              // Coordinator rejected: send back to sys admin to accept the rejection
               request.Status = 'Pending_Admin_Review';
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
-              // Coordinator rescheduled: sys admin reviews the reschedule date
-              request.Status = 'Pending_Admin_Review';
-              request.CoordinatorFinalAction = 'Rescheduled';
-              request.CoordinatorFinalActionDate = new Date();
+              throw new Error('Coordinators may not propose a reschedule when admin has already rescheduled. Please Accept or Reject the proposed schedule.');
             }
           } else if (action === 'Rescheduled' && (actorRole === 'SystemAdmin' || actorRole === 'Admin')) {
-            // Admin rescheduling any request: set to rescheduled by admin status
-            request.Status = 'Rescheduled_By_Admin';
-          } else if (!createdByStakeholder && action !== 'Rescheduled' && status !== 'Pending_Coordinator_Review' && status !== 'Pending_Admin_Review') {
-            request.Status = 'Completed';
-            // Note: CoordinatorFinalAction should remain null since coordinator didn't act
-            // Only set CoordinatorFinalAction when coordinator actually performs an action
+            // Admin rescheduling any request: record a reschedule proposal and
+            // set canonical review-rescheduled status so reviewers (coordinators)
+            // see the correct human label and limited actions. Also assign the
+            // coordinator as the reviewer snapshot so the UI knows who must act.
+            const coordinatorReviewer = request.coordinator_id ? {
+              id: request.coordinator_id,
+              role: 'Coordinator',
+              name: await this._resolveCoordinatorName(request.coordinator_id),
+              autoAssigned: true
+            } : (request.reviewer || null);
+
+            request.rescheduleProposal = {
+              proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+              proposedStartTime: null,
+              proposedEndTime: null,
+              reviewerNotes: note || null,
+              proposedAt: new Date(),
+              proposedBy: { id: actorId, role: actorRole, name: null }
+            };
+
+            request.reviewer = coordinatorReviewer;
+            request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+
+            // Compose a human-readable decision summary so the frontend can
+            // display the admin's note and proposed schedule in the request message.
+            try {
+              const actorNameLookup = (async () => {
+                try {
+                  if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+                    const admin = await SystemAdmin.findOne().lean().exec();
+                    if (admin) return `${admin.First_Name || ''} ${admin.Last_Name || ''}`.trim();
+                  }
+                  if (actorRole === 'Coordinator') {
+                    const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId }).lean().exec();
+                    if (staff) return `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim();
+                  }
+                } catch (e) {}
+                return null;
+              })();
+              const actorName = await actorNameLookup;
+              request.decisionSummary = buildDecisionSummary({
+                reviewerName: actorName || (actorRole || 'Reviewer'),
+                decision: REVIEW_DECISIONS.RESCHEDULE,
+                eventTitle: event ? event.Event_Title : (request.Event_Title || ''),
+                reschedulePayload: request.rescheduleProposal,
+                notes: note || null
+              });
+            } catch (e) {
+              // ignore summary errors
+            }
+          } else if (createdByCoordinator && (actorRole === 'SystemAdmin' || actorRole === 'Admin') && (action === 'Accepted' || normalizedAction === 'accepted')) {
+            // Admin accepted a coordinator-created request: mark as review-accepted and wait for coordinator confirmation
+            request.Status = REQUEST_STATUSES.REVIEW_ACCEPTED;
+          } else if (!createdByStakeholder && !createdByCoordinator && action !== 'Rescheduled' && status !== 'Pending_Coordinator_Review' && status !== 'Pending_Admin_Review') {
+            // Non-stakeholder, non-coordinator created requests: admin/coordinator acceptance completes the request
+            request.Status = REQUEST_STATUSES.COMPLETED;
           } else if (createdByStakeholder && action !== 'Rescheduled' && action !== 'Rejected') {
             // Admin acted on stakeholder-created request: set to pending stakeholder review (only for acceptance)
             request.Status = 'Pending_Stakeholder_Review';
@@ -1583,30 +2039,28 @@ class EventRequestService {
         const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
         const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
         
-        await EventRequestHistory.createAdminActionHistory(
-          requestId,
-          request.Event_ID,
-          actorId,
-          actorName,
-          action,
-          note,
-          rescheduledDate,
-          event ? event.Start_Date : null
-        );
+        await EventRequestHistory.logStatusChange({
+          requestId: requestId,
+          eventId: request.Event_ID,
+          previousStatus: status || null,
+          newStatus: request.Status || null,
+          actor: { id: actorId, role: actorRole, name: actorName },
+          note: note || null,
+          metadata: { rescheduledDate: rescheduledDate || null, scheduledAt: event ? event.Start_Date : null }
+        });
       } else if (actorRole === 'Stakeholder') {
         const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
         const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
         try {
-          if (typeof EventRequestHistory.createCoordinatorActionHistory === 'function') {
-            await EventRequestHistory.createCoordinatorActionHistory(
-              requestId,
-              request.Event_ID,
-              actorId,
-              stakeholderName,
-              action,
-              request.Status
-            );
-          }
+          await EventRequestHistory.logCreatorResponse({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            actor: { id: actorId, role: actorRole, name: stakeholderName },
+            action: action,
+            previousStatus: status || null,
+            newStatus: request.Status || null,
+            notes: note || null
+          });
         } catch (e) {
           // ignore history creation failures
         }
@@ -1757,13 +2211,21 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
-      // Verify coordinator owns this request
-      if (request.coordinator_id !== coordinatorId) {
-        throw new Error('Unauthorized: Coordinator does not own this request');
+      // Verify coordinator owns this request or is the assigned reviewer
+      const isOwnerCoordinator = request.coordinator_id && String(request.coordinator_id) === String(coordinatorId);
+      const isReviewerCoordinator = request.reviewer && String(request.reviewer.id) === String(coordinatorId);
+      if (!isOwnerCoordinator && !isReviewerCoordinator) {
+        throw new Error('Unauthorized: Coordinator does not own or review this request');
       }
 
-      // Check if admin has already acted
-      if (!request.AdminAction) {
+      // Check if admin has already acted. Accept multiple signals of admin action:
+      // - explicit AdminAction field
+      // - Admin_ID or AdminActionDate set
+      // - request.Status set to REVIEW_ACCEPTED (admin accepted and awaiting coordinator confirmation)
+      const adminActed = Boolean(
+        request.AdminAction || request.Admin_ID || request.AdminActionDate || (String(request.Status || '').toLowerCase().includes('review') && String(request.Status || '').toLowerCase().includes('accepted'))
+      );
+      if (!adminActed) {
         throw new Error('Admin has not yet acted on this request');
       }
 
@@ -1779,6 +2241,7 @@ class EventRequestService {
       }
 
       // Update request
+      const previousStatus = request.Status;
       request.CoordinatorFinalAction = action;
       request.CoordinatorFinalActionDate = new Date();
       await request.save();
@@ -1786,15 +2249,56 @@ class EventRequestService {
       // Create history entry
       const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: coordinatorId });
       const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
-      
-      await EventRequestHistory.createCoordinatorActionHistory(
-        requestId,
-        request.Event_ID,
-        coordinatorId,
-        coordinatorName,
-        action,
-        request.Status
-      );
+      try {
+        const decisionType = (String(action || '').toLowerCase() === 'accepted') ? REVIEW_DECISIONS.ACCEPT : REVIEW_DECISIONS.REJECT;
+        await EventRequestHistory.logReviewDecision({
+          requestId: requestId,
+          eventId: request.Event_ID,
+          decisionType,
+          actor: { id: coordinatorId, role: 'Coordinator', name: coordinatorName },
+          notes: null,
+          previousStatus: previousStatus || null,
+          newStatus: request.Status || null,
+          metadata: {}
+        });
+      } catch (e) {
+        // ignore history creation failures
+      }
+
+      // If coordinator accepted, finalize the request and publish the event
+      if (String(action).toLowerCase() === 'accepted') {
+        try {
+          const actorSnapshot = await this._buildActorSnapshot('Coordinator', coordinatorId);
+          // Approve linked event
+          const event = await Event.findOne({ Event_ID: request.Event_ID });
+          if (event) {
+            event.Status = 'Completed';
+            event.ApprovedByAdminID = coordinatorId;
+            await event.save();
+          }
+
+          // Record status and finalize
+          await this._recordStatus(request, REQUEST_STATUSES.COMPLETED, actorSnapshot, null);
+          request.Status = REQUEST_STATUSES.COMPLETED;
+          await request.save();
+
+          // Log finalization
+          try {
+            await EventRequestHistory.logFinalization({
+              requestId: request.Request_ID,
+              eventId: request.Event_ID,
+              actor: actorSnapshot,
+              outcome: 'approved',
+              notes: null
+            });
+          } catch (e) {
+            // ignore history failures
+          }
+        } catch (e) {
+          // swallow finalization errors but keep the coordinator confirmation saved
+          console.warn('Failed to finalize request after coordinator confirmation:', e.message);
+        }
+      }
 
       // Send notification to admin
       if (request.Admin_ID) {
@@ -1859,7 +2363,7 @@ class EventRequestService {
         event.Status = 'Completed';
         await event.save();
       }
-      request.Status = 'Completed';
+      request.Status = REQUEST_STATUSES.COMPLETED;
 
       await request.save();
 
@@ -1867,16 +2371,15 @@ class EventRequestService {
       const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: stakeholderId }).catch(() => null);
       const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
       try {
-        if (typeof EventRequestHistory.createCoordinatorActionHistory === 'function') {
-          await EventRequestHistory.createCoordinatorActionHistory(
-            request.Request_ID,
-            request.Event_ID,
-            stakeholderId,
-            stakeholderName,
-            action,
-            request.Status
-          );
-        }
+        await EventRequestHistory.logCreatorResponse({
+          requestId: request.Request_ID,
+          eventId: request.Event_ID,
+          actor: { id: stakeholderId, role: 'Stakeholder', name: stakeholderName },
+          action: action,
+          previousStatus: null,
+          newStatus: request.Status || null,
+          notes: null
+        });
       } catch (e) {
         // ignore history creation failures
       }
@@ -2068,7 +2571,7 @@ class EventRequestService {
     try {
       const skip = (page - 1) * limit;
 
-      const query = { Status: { $in: ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'] } };
+      const query = { Status: REQUEST_STATUSES.PENDING_REVIEW };
 
       if (filters.date_from || filters.date_to) {
         query.createdAt = {};
@@ -2205,8 +2708,11 @@ class EventRequestService {
       }
 
       // Allow cancellation of pending requests or approved events
-      const allowedStatuses = ['Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review', 'Rescheduled_By_Admin', 'Completed'];
-      if (!allowedStatuses.includes(request.Status)) {
+      const lowerStatus = String(request.Status || '').toLowerCase();
+      const isPending = lowerStatus.includes('pending');
+      const isRescheduled = lowerStatus.includes('resched');
+      const isCompleted = lowerStatus.includes('completed') || lowerStatus === REQUEST_STATUSES.COMPLETED;
+      if (!isPending && !isRescheduled && !isCompleted) {
         throw new Error('Cannot cancel request. Request status does not allow cancellation.');
       }
 
@@ -2280,40 +2786,41 @@ class EventRequestService {
           const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
           const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
           
-          await EventRequestHistory.createAdminActionHistory(
-            requestId,
-            request.Event_ID,
-            actorId,
-            actorName,
-            'Cancelled',
-            note || 'Event cancelled by admin',
-            null,
-            event ? event.Start_Date : null
-          );
+          await EventRequestHistory.logStatusChange({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            previousStatus: previousStatus || null,
+            newStatus: request.Status || null,
+            actor: { id: actorId, role: actorRole, name: actorName },
+            note: note || 'Event cancelled by admin',
+            metadata: { scheduledAt: event ? event.Start_Date : null }
+          });
         } else if (actorRole === 'Coordinator') {
           const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
           const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
           
-          await EventRequestHistory.createCoordinatorActionHistory(
-            requestId,
-            request.Event_ID,
-            actorId,
-            coordinatorName,
-            'Cancelled',
-            request.Status
-          );
+          await EventRequestHistory.logStatusChange({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            previousStatus: previousStatus || null,
+            newStatus: request.Status || null,
+            actor: { id: actorId, role: actorRole, name: coordinatorName },
+            note: 'Cancelled',
+            metadata: {}
+          });
         } else if (actorRole === 'Stakeholder') {
           const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
           const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
           
-          await EventRequestHistory.createCoordinatorActionHistory(
-            requestId,
-            request.Event_ID,
-            actorId,
-            stakeholderName,
-            'Cancelled',
-            request.Status
-          );
+          await EventRequestHistory.logCreatorResponse({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            actor: { id: actorId, role: actorRole, name: stakeholderName },
+            action: 'Cancelled',
+            previousStatus: previousStatus || null,
+            newStatus: request.Status || null,
+            notes: note || null
+          });
         }
         
         // Send cancellation notifications
@@ -2368,40 +2875,41 @@ class EventRequestService {
           const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
           const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
           
-          await EventRequestHistory.createAdminActionHistory(
-            requestId,
-            request.Event_ID,
-            actorId,
-            actorName,
-            'Cancelled',
-            note || 'Request cancelled by admin',
-            null,
-            event ? event.Start_Date : null
-          );
+          await EventRequestHistory.logStatusChange({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            previousStatus: previousStatus || null,
+            newStatus: request.Status || null,
+            actor: { id: actorId, role: actorRole, name: actorName },
+            note: note || 'Request cancelled by admin',
+            metadata: { scheduledAt: event ? event.Start_Date : null }
+          });
         } else if (actorRole === 'Coordinator') {
           const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
           const coordinatorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
           
-          await EventRequestHistory.createCoordinatorActionHistory(
-            requestId,
-            request.Event_ID,
-            actorId,
-            coordinatorName,
-            'Cancelled',
-            request.Status
-          );
+          await EventRequestHistory.logStatusChange({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            previousStatus: previousStatus || null,
+            newStatus: request.Status || null,
+            actor: { id: actorId, role: actorRole, name: coordinatorName },
+            note: 'Cancelled',
+            metadata: {}
+          });
         } else if (actorRole === 'Stakeholder') {
           const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
           const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
           
-          await EventRequestHistory.createCoordinatorActionHistory(
-            requestId,
-            request.Event_ID,
-            actorId,
-            stakeholderName,
-            'Cancelled',
-            request.Status
-          );
+          await EventRequestHistory.logCreatorResponse({
+            requestId: requestId,
+            eventId: request.Event_ID,
+            actor: { id: actorId, role: actorRole, name: stakeholderName },
+            action: 'Cancelled',
+            previousStatus: previousStatus || null,
+            newStatus: request.Status || null,
+            notes: note || null
+          });
         }
         
         // Send cancellation notifications
