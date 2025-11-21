@@ -570,7 +570,7 @@ class EventRequestController {
 
       // Enrich each request with its event and coordinator/staff info for frontend convenience
       const enriched = await Promise.all(result.requests.map(async (r) => {
-        const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+        const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
         const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
         const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
         // Fetch district details if coordinator has District_ID
@@ -683,7 +683,7 @@ class EventRequestController {
         }
           // Enrich similar to getAllRequests controller behavior
         const enriched = await Promise.all(result.requests.map(async (r) => {
-          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
           const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
           const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
           let districtInfo = null;
@@ -701,6 +701,12 @@ class EventRequestController {
             if (stakeholder) {
               stakeholderDistrict = await require('../../models/index').District.findOne({ _id: stakeholder.district }).catch(() => null);
             }
+          }
+
+          // Populate request district if it's an ObjectId
+          if (r.district && typeof r.district === 'string') {
+            const district = await require('../../models/index').District.findById(r.district).catch(() => null);
+            if (district) r.district = district;
           }
 
           const plain = {
@@ -754,7 +760,7 @@ class EventRequestController {
         const result = await eventRequestService.getCoordinatorRequests(coordinatorId, filters, page, limit);
         // Enrich each request similar to getCoordinatorRequests
         const enriched = await Promise.all(result.requests.map(async (r) => {
-          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
           const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
           const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
           let districtInfo = null;
@@ -772,6 +778,12 @@ class EventRequestController {
             if (stakeholder) {
               stakeholderDistrict = await require('../../models/index').District.findOne({ _id: stakeholder.district }).catch(() => null);
             }
+          }
+
+          // Populate request district if it's an ObjectId
+          if (r.district && typeof r.district === 'string') {
+            const district = await require('../../models/index').District.findById(r.district).catch(() => null);
+            if (district) r.district = district;
           }
 
           const plain = {
@@ -821,7 +833,14 @@ class EventRequestController {
         const result = await eventRequestService.getRequestsByStakeholder(stakeholderId, page, limit);
         // Enrich each returned request with allowedActions for this stakeholder
         const enriched = await Promise.all(result.requests.map(async (r) => {
-          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
+
+          // Populate request district if it's an ObjectId
+          if (r.district && typeof r.district === 'string') {
+            const district = await require('../../models/index').District.findById(r.district).catch(() => null);
+            if (district) r.district = district;
+          }
+
           const plain = { ...toPlain(r), event: event ? toPlain(event) : null };
           
           // For stakeholder's own requests, populate stakeholder data
@@ -890,7 +909,14 @@ class EventRequestController {
 
       const enriched = await Promise.all(result.requests.map(async (r) => {
         try {
-          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+          const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
+
+          // Populate request district if it's an ObjectId
+          if (r.district && typeof r.district === 'string') {
+            const district = await require('../../models/index').District.findById(r.district).catch(() => null);
+            if (district) r.district = district;
+          }
+
           const plain = { ...toPlain(r), event: event ? toPlain(event) : null };
           
           // For stakeholder requests, populate stakeholder data
@@ -966,7 +992,14 @@ class EventRequestController {
         const actorId = user.Admin_ID || user.Coordinator_ID || user.Stakeholder_ID || user.id || null;
         const enriched = await Promise.all(result.requests.map(async (r) => {
           try {
-            const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+            const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
+
+            // Populate request district if it's an ObjectId
+            if (r.district && typeof r.district === 'string') {
+              const district = await require('../../models/index').District.findById(r.district).catch(() => null);
+              if (district) r.district = district;
+            }
+
             const plain = { ...toPlain(r), event: event ? toPlain(event) : null };
             plain.allowedActions = await eventRequestService.computeAllowedActions(actorRole, actorId, plain, plain.event);
             Object.assign(plain, await eventRequestService.computeActionFlags(actorRole, actorId, plain, plain.event));
@@ -1000,7 +1033,7 @@ class EventRequestController {
 
       // Enrich requests with event and coordinator/staff info
       const enriched = await Promise.all(result.requests.map(async (r) => {
-        const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).catch(() => null);
+        const event = await require('../../models/index').Event.findOne({ Event_ID: r.Event_ID }).populate('district').catch(() => null);
         const coordinator = await require('../../models/index').Coordinator.findOne({ Coordinator_ID: r.coordinator_id }).catch(() => null);
         const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
         let districtInfo = null;
@@ -1020,6 +1053,12 @@ class EventRequestController {
           if (stakeholder) {
             stakeholderDistrict = await require('../../models/index').District.findOne({ _id: stakeholder.district }).catch(() => null);
           }
+        }
+
+        // Populate request district if it's an ObjectId
+        if (r.district && typeof r.district === 'string') {
+          const district = await require('../../models/index').District.findById(r.district).catch(() => null);
+          if (district) r.district = district;
         }
 
           const plain = {
