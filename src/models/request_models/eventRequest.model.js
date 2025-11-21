@@ -2,13 +2,15 @@ const mongoose = require('mongoose');
 
 const actorSnapshotSchema = new mongoose.Schema({
   id: { type: String, trim: true },
-  role: { type: String, enum: ['SystemAdmin', 'Coordinator', 'Stakeholder'], trim: true },
+  // Accept legacy 'Admin' value alongside canonical 'SystemAdmin'
+  role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator', 'Stakeholder'], trim: true },
   name: { type: String, trim: true }
 }, { _id: false });
 
 const reviewerSchema = new mongoose.Schema({
   id: { type: String, trim: true, required: true },
-  role: { type: String, enum: ['SystemAdmin', 'Coordinator'], required: true },
+  // Accept legacy 'Admin' alongside 'SystemAdmin' for backward compatibility
+  role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator'], required: true },
   name: { type: String, trim: true },
   assignedAt: { type: Date, default: Date.now },
   autoAssigned: { type: Boolean, default: true },
@@ -30,7 +32,8 @@ const decisionSchema = new mongoose.Schema({
   resultStatus: { type: String, trim: true },
   actor: {
     id: { type: String, trim: true, required: true },
-    role: { type: String, enum: ['SystemAdmin', 'Coordinator'], required: true },
+    // Allow 'Admin' legacy value
+    role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator'], required: true },
     name: { type: String, trim: true }
   },
   payload: {
@@ -137,6 +140,7 @@ const eventRequestSchema = new mongoose.Schema({
   Status: {
     type: String,
     enum: [
+      // canonical (new) statuses
       'pending-review',
       'review-accepted',
       'review-rejected',
@@ -144,7 +148,20 @@ const eventRequestSchema = new mongoose.Schema({
       'creator-confirmed',
       'creator-declined',
       'completed',
-      'expired-review'
+      'expired-review',
+      // legacy / backwards-compatibility variants (uppercase / underscore)
+      'Pending',
+      'Pending_Admin_Review',
+      'Pending_Coordinator_Review',
+      'Pending_Stakeholder_Review',
+      'Accepted_By_Admin',
+      'Rescheduled_By_Admin',
+      'Rescheduled_By_Coordinator',
+      'Rescheduled_By_Stakeholder',
+      'Rejected_By_Admin',
+      'Rejected',
+      'Cancelled',
+      'Completed'
     ],
     required: true,
     default: 'pending-review'

@@ -6,6 +6,7 @@ const {
   Training,
   Coordinator
 } = require('../../models/index');
+const { REQUEST_STATUSES } = require('../request_services/requestFlow.helpers');
 const cache = require('../../utils/cache');
 
 class EventStatisticsService {
@@ -236,7 +237,7 @@ class EventStatisticsService {
       });
       const completedRequests = await EventRequest.countDocuments({
         ...dateFilter,
-        Status: 'Completed'
+        Status: REQUEST_STATUSES.COMPLETED
       });
 
       // Average time to admin action
@@ -259,7 +260,7 @@ class EventStatisticsService {
       // Average time to completion
       const completedReqs = await EventRequest.find({
         ...dateFilter,
-        Status: 'Completed',
+        Status: REQUEST_STATUSES.COMPLETED,
         CoordinatorFinalActionDate: { $exists: true }
       });
 

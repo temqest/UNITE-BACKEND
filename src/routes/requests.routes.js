@@ -124,6 +124,19 @@ router.post('/requests/:requestId/coordinator-action', authenticate, async (req,
 });
 
 /**
+ * @route   POST /api/requests/:requestId/coordinator-confirm
+ * @desc    Coordinator confirms admin's decision (finalize)
+ * @access  Private (Coordinator)
+ */
+router.post('/requests/:requestId/coordinator-confirm', authenticate, async (req, res, next) => {
+  try {
+    await eventRequestController.coordinatorConfirmRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   POST /api/requests/:requestId/stakeholder-action
  * @desc    Stakeholder accepts/rejects the request
  * @access  Private (Stakeholder)

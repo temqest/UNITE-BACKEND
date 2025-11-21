@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const { BloodbankStaff, Coordinator, District, Province, EventRequest, Event, Notification } = require('../../models/index');
+const { REQUEST_STATUSES } = require('../request_services/requestFlow.helpers');
 
 class CoordinatorService {
   /**
@@ -329,7 +330,7 @@ class CoordinatorService {
       // Get upcoming completed events
       const upcomingEvents = await EventRequest.find({
         Coordinator_ID: coordinatorId,
-        Status: 'Completed',
+        Status: REQUEST_STATUSES.COMPLETED,
         'AdminActionDate': { $gte: new Date() }
       })
       .sort({ 'AdminActionDate': 1 })
@@ -346,7 +347,7 @@ class CoordinatorService {
       const totalRequests = await EventRequest.countDocuments({ Coordinator_ID: coordinatorId });
       const completedEvents = await EventRequest.countDocuments({
         Coordinator_ID: coordinatorId,
-        Status: 'Completed'
+        Status: REQUEST_STATUSES.COMPLETED
       });
       const rejectedEvents = await EventRequest.countDocuments({
         Coordinator_ID: coordinatorId,
@@ -392,7 +393,7 @@ class CoordinatorService {
       // Check if coordinator has active events
       const activeEvents = await EventRequest.find({
         Coordinator_ID: coordinatorId,
-        Status: { $nin: ['Completed', 'Rejected'] }
+        Status: { $nin: [REQUEST_STATUSES.COMPLETED, 'Rejected'] }
       });
 
       if (activeEvents.length > 0) {

@@ -104,17 +104,29 @@ function buildReviewSummary({ requestorName, event }) {
   return `${requestorName} requested a ${typeLabel} titled ‘${event.Event_Title}’ on ${datePhrase}${timeBlock}. ${goalSentence} Located at ${event.Location}. Please review this request.`;
 }
 
-function buildDecisionSummary({ reviewerName, decision, eventTitle, reschedulePayload }) {
-  const base = `${reviewerName} ${decision === REVIEW_DECISIONS.ACCEPT ? 'accepted' : decision === REVIEW_DECISIONS.REJECT ? 'rejected' : 'proposed a reschedule for'} “${eventTitle}”.`;
+function buildDecisionSummary({ reviewerName, decision, eventTitle, reschedulePayload, notes }) {
+  const verb = decision === REVIEW_DECISIONS.ACCEPT ? 'accepted' : decision === REVIEW_DECISIONS.REJECT ? 'rejected' : 'proposed a reschedule for';
+  const base = `${reviewerName} ${verb} “${eventTitle}”.`;
+
+  let parts = [base];
+
   if (decision === REVIEW_DECISIONS.RESCHEDULE && reschedulePayload) {
     const date = reschedulePayload.proposedDate ? formatISO(reschedulePayload.proposedDate) : null;
     const time = reschedulePayload.proposedStartTime && reschedulePayload.proposedEndTime
       ? `${reschedulePayload.proposedStartTime}–${reschedulePayload.proposedEndTime}`
       : (reschedulePayload.proposedStartTime || reschedulePayload.proposedEndTime || '');
     const details = [date, time].filter(Boolean).join(' ');
-    return `${base} ${details ? `New schedule: ${details}.` : ''}`.trim();
+    if (details) parts.push(`New schedule: ${details}.`);
   }
-  return base;
+
+  // Prefer an explicit `notes` param, otherwise fall back to any reviewerNotes on the payload
+  const noteText = (typeof notes === 'string' && notes.trim()) ? notes.trim() : (reschedulePayload && reschedulePayload.reviewerNotes ? String(reschedulePayload.reviewerNotes).trim() : null);
+  if (noteText) {
+    // Put note on its own sentence for clarity
+    parts.push(`Note: ${noteText}`);
+  }
+
+  return parts.join(' ').trim();
 }
 
 module.exports = {
@@ -126,6 +138,35 @@ module.exports = {
   formatTimeRange,
   formatISO,
   buildReviewSummary,
-  buildDecisionSummary
+  buildDecisionSummary,
+  getHumanStatusLabel
 };
+
+function getHumanStatusLabel(status, request = {}) {
+  const s = String(status || '').toLowerCase();
+  const reviewerRole = request.reviewer && request.reviewer.role ? String(request.reviewer.role).toLowerCase() : null;
+
+  if (s.includes('pending')) {
+    if (reviewerRole === 'coordinator') return 'Waiting for Coordinator review';
+    if (reviewerRole === 'systemadmin' || reviewerRole === 'admin') return 'Waiting for Admin review';
+    return 'Waiting for Admin or Coordinator review';
+  }
+
+  if (s.includes('review')) {
+    // review-accepted / review-rescheduled etc.
+    if (s.includes('accepted')) return 'Waiting for Coordinator confirmation';
+    if (s.includes('resched') || s.includes('reschedule') || s.includes('rescheduled')) return (reviewerRole === 'coordinator') ? 'Waiting for Coordinator review (reschedule)' : 'Waiting for Admin review (reschedule)';
+    return 'Waiting for Admin or Coordinator review';
+  }
+
+  // Handle legacy or non-review rescheduled statuses like 'Rescheduled_By_Admin'
+  if (s.includes('resched') || s.includes('reschedule') || s.includes('rescheduled')) {
+    return (reviewerRole === 'coordinator') ? 'Waiting for Coordinator review (reschedule)' : 'Waiting for Admin review (reschedule)';
+  }
+
+  if (s.includes('completed')) return 'Completed';
+  if (s.includes('cancel')) return 'Cancelled';
+  if (s.includes('reject')) return 'Rejected';
+  return String(status || '') || 'Unknown';
+}
 
