@@ -911,8 +911,17 @@ class EventRequestService {
           return ['view'];
         }
 
-        // If reviewer is stakeholder (or request has stakeholder), only stakeholder may act
+        // If reviewer is stakeholder (or request has stakeholder), allow the
+        // stakeholder and system admins to act. System admins should be able
+        // to accept, reject, or propose a reschedule on stakeholder-created
+        // requests (they act as a reviewer in that flow). Coordinators may
+        // only act when explicitly assigned.
         if (reviewerRole === 'stakeholder' || (!reviewerRole && req.stakeholder_id && req.made_by_role === 'Stakeholder')) {
+          // System admins/full admins can act on stakeholder requests
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'resched', 'accept', 'reject'];
+          }
+          // Stakeholder who created the request may act on their own request
           if (role === 'stakeholder' && req.stakeholder_id === actorId) {
             return ['view', 'accept', 'reject'];
           }
