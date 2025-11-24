@@ -22,6 +22,7 @@ const Training = require('./events_models/training.model');
 // ============================================
 const EventRequest = require('./request_models/eventRequest.model');
 const EventRequestHistory = require('./request_models/eventRequestHistory.model');
+const BloodBagRequest = require('./request_models/bloodBagRequest.model');
 
 // ============================================
 // UTILITY MODELS
@@ -175,6 +176,7 @@ module.exports = {
   // Request Models
   EventRequest,
   EventRequestHistory,
+  BloodBagRequest,
   
   // Utility Models
   Province,
