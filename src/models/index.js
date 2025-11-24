@@ -33,6 +33,7 @@ const Notification = require('./utility_models/notifications.model');
 const RegistrationCode = require('./utility_models/registrationCode.model');
 const SystemSettings = require('./utility_models/systemSettings.model');
 const SignUpRequest = require('./utility_models/signupRequest.model');
+const BloodBag = require('./utility_models/bloodbag.model');
 
 // ============================================
 // MODEL RELATIONSHIPS & CONSTRAINTS
@@ -183,6 +184,7 @@ module.exports = {
   RegistrationCode,
   SystemSettings,
   SignUpRequest,
+  BloodBag,
   
   // Validation Helpers
   validateCoordinator,
