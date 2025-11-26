@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const compression = require('compression');
 const routes = require('./src/routes');
+const rateLimiter = require('./src/middleware/rateLimiter');
 
 // Initialize Express app
 const app = express();
@@ -176,6 +177,9 @@ app.get('/', (req, res) => {
 });
 
 // Mount all API routes
+// Apply a light global rate limiter (Redis-backed). Placed before routes so abusive requests are rejected early.
+app.use(rateLimiter.general);
+
 app.use('/', routes);
 
 // ==================== ERROR HANDLING ====================

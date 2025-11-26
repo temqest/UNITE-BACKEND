@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { bloodbankStaffController, stakeholderController } = require('../controller/users_controller');
 const authenticate = require('../middleware/authenticate');
+const rateLimiter = require('../middleware/rateLimiter');
 
 // Note: For authentication, you may want to create specific validators
 // For now, using basic validation
@@ -11,7 +12,7 @@ const authenticate = require('../middleware/authenticate');
  * @desc    Authenticate user (login)
  * @access  Public
  */
-router.post('/login', async (req, res, next) => {
+router.post('/login', rateLimiter.auth, async (req, res, next) => {
   try {
     // Basic validation
     if (!req.body.email || !req.body.password) {
@@ -72,7 +73,7 @@ module.exports = router;
 /**
  * Stakeholder auth endpoints
  */
-router.post('/stakeholders/login', async (req, res, next) => {
+router.post('/stakeholders/login', rateLimiter.auth, async (req, res, next) => {
   try {
     if (!req.body.email || !req.body.password) {
       return res.status(400).json({ success: false, message: 'Email and password are required' });
