@@ -17,6 +17,10 @@ class LocationService {
     return Municipality.find({ district: districtId }).sort({ name: 1 });
   }
 
+  async getAllMunicipalities() {
+    return Municipality.find().sort({ name: 1 });
+  }
+
   async sendVerificationEmail(data) {
     // Validate hierarchy: ensure province -> district -> municipality consistency
     const province = await Province.findById(data.province);

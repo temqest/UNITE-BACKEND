@@ -2,18 +2,95 @@
   {
     "name": "Camarines Sur",
     "districts": [
-      { "name": "District I", "municipalities": ["Cabusao", "Del Gallego", "Lupi", "Ragay", "Sipocot"] },
-      { "name": "District II", "municipalities": ["Gainza", "Libmanan", "Milaor", "Minalabac", "Pamplona", "Pasacao", "San Fernando"] },
-      { "name": "District III", "municipalities": ["Bombon", "Calabanga", "Camaligan", "Canaman", "Magarao", "Ocampo", "Pili"] },
-      { "name": "District IV", "municipalities": ["Caramoan", "Garchitorena", "Goa", "Lagonoy", "Presentacion", "Sagnay", "San Jose", "Siruma", "Tigaon", "Tinambac"] },
-      { "name": "District V", "municipalities": ["Baao", "Balatan", "Bato", "Buhi", "Bula", "Nabua"] }
+      {
+        "name": "District I",
+        "municipalities": [
+          "Cabusao",
+          "Del Gallego",
+          "Lupi",
+          "Ragay",
+          "Sipocot"
+        ]
+      },
+      {
+        "name": "District II",
+        "municipalities": [
+          "Gainza",
+          "Libmanan",
+          "Milaor",
+          "Minalabac",
+          "Pamplona",
+          "Pasacao",
+          "San Fernando"
+        ]
+      },
+      {
+        "name": "District III",
+        "municipalities": [
+          "Bombon",
+          "Calabanga",
+          "Camaligan",
+          "Canaman",
+          "Magarao",
+          "Ocampo",
+          "Pili",
+          "Naga City"
+        ]
+      },
+      {
+        "name": "District IV",
+        "municipalities": [
+          "Caramoan",
+          "Garchitorena",
+          "Goa",
+          "Lagonoy",
+          "Presentacion",
+          "Sagnay",
+          "San Jose",
+          "Siruma",
+          "Tigaon",
+          "Tinambac",
+          "Iriga City"
+        ]
+      },
+      {
+        "name": "District V",
+        "municipalities": [
+          "Baao",
+          "Balatan",
+          "Bato",
+          "Buhi",
+          "Bula",
+          "Nabua"
+        ]
+      }
     ]
   },
   {
     "name": "Camarines Norte",
     "districts": [
-      { "name": "District I", "municipalities": ["Capalonga", "Jose Panganiban", "Labo", "Paracale", "Sta. Elena"] },
-      { "name": "District II", "municipalities": ["Basud", "Daet", "Mercedes", "San Lorenzo Ruiz", "San Vicente", "Talisay", "Vinzons"] }
+      {
+        "name": "District I",
+        "municipalities": [
+          "Capalonga",
+          "Jose Panganiban",
+          "Labo",
+          "Paracale",
+          "Sta. Elena"
+        ]
+      },
+      {
+        "name": "District II",
+        "municipalities": [
+          "Basud",
+          "Daet",
+          "Mercedes",
+          "San Lorenzo Ruiz",
+          "San Vicente",
+          "Talisay",
+          "Vinzons"
+        ]
+      }
     ]
   }
 ]

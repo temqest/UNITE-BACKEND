@@ -443,6 +443,19 @@ router.get('/locations/districts/:districtId/municipalities', async (req, res, n
 });
 
 /**
+ * @route   GET /api/locations/municipalities
+ * @desc    Get all municipalities
+ * @access  Public
+ */
+router.get('/locations/municipalities', async (req, res, next) => {
+  try {
+    await locationController.getAllMunicipalities(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   POST /api/signup-requests
  * @desc    Submit a public signup request (province/district/municipality)
  * @access  Public

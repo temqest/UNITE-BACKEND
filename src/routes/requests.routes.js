@@ -4,6 +4,7 @@ const {
   eventRequestController,
   systemSettingsController
 } = require('../controller/request_controller');
+const { bloodBagRequestController } = require('../controller/request_controller');
 
 const authenticate = require('../middleware/authenticate');
 const { requireAdmin } = require('../middleware/requireRoles');
@@ -12,6 +13,7 @@ const {
   validateCreateEventRequest,
   validateUpdateEventRequest
 } = require('../validators/request_validators/eventRequest.validators');
+const { validateCreate: validateCreateBloodBagRequest, validateUpdate: validateUpdateBloodBagRequest } = require('../validators/request_validators/bloodBagRequest.validators');
 
 // ==================== EVENT REQUEST ROUTES ====================
 
@@ -198,6 +200,71 @@ router.post('/requests/validate', async (req, res, next) => {
 router.get('/requests/blood-bags/:date', async (req, res, next) => {
   try {
     await eventRequestController.getTotalBloodBagsForDate(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/requests/blood
+ * @desc    Create a blood bag request (requester -> requestee)
+ * @access  Private
+ */
+router.post('/requests/blood', authenticate, validateCreateBloodBagRequest, async (req, res, next) => {
+  try {
+    await bloodBagRequestController.createRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/blood
+ * @desc    List blood bag requests with optional filters
+ * @access  Private
+ */
+router.get('/requests/blood', authenticate, async (req, res, next) => {
+  try {
+    await bloodBagRequestController.getAllRequests(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/requests/blood/:requestId
+ * @desc    Get blood bag request by ID
+ * @access  Private
+ */
+router.get('/requests/blood/:requestId', authenticate, async (req, res, next) => {
+  try {
+    await bloodBagRequestController.getRequestById(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/requests/blood/:requestId
+ * @desc    Update a blood bag request
+ * @access  Private
+ */
+router.put('/requests/blood/:requestId', authenticate, validateUpdateBloodBagRequest, async (req, res, next) => {
+  try {
+    await bloodBagRequestController.updateRequest(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/requests/blood/:requestId
+ * @desc    Delete a blood bag request
+ * @access  Private
+ */
+router.delete('/requests/blood/:requestId', authenticate, async (req, res, next) => {
+  try {
+    await bloodBagRequestController.deleteRequest(req, res);
   } catch (error) {
     next(error);
   }

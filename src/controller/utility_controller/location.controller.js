@@ -29,6 +29,15 @@ exports.getMunicipalitiesByDistrict = async (req, res) => {
   }
 };
 
+exports.getAllMunicipalities = async (req, res) => {
+  try {
+    const municipalities = await locationService.getAllMunicipalities();
+    return res.status(200).json({ success: true, data: municipalities });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 exports.createSignUpRequest = async (req, res) => {
   try {
     const payload = req.body;

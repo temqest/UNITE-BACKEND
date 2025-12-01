@@ -22,6 +22,7 @@ const Training = require('./events_models/training.model');
 // ============================================
 const EventRequest = require('./request_models/eventRequest.model');
 const EventRequestHistory = require('./request_models/eventRequestHistory.model');
+const BloodBagRequest = require('./request_models/bloodBagRequest.model');
 
 // ============================================
 // UTILITY MODELS
@@ -33,6 +34,7 @@ const Notification = require('./utility_models/notifications.model');
 const RegistrationCode = require('./utility_models/registrationCode.model');
 const SystemSettings = require('./utility_models/systemSettings.model');
 const SignUpRequest = require('./utility_models/signupRequest.model');
+const BloodBag = require('./utility_models/bloodbag.model');
 
 // ============================================
 // MODEL RELATIONSHIPS & CONSTRAINTS
@@ -174,6 +176,7 @@ module.exports = {
   // Request Models
   EventRequest,
   EventRequestHistory,
+  BloodBagRequest,
   
   // Utility Models
   Province,
@@ -183,6 +186,7 @@ module.exports = {
   RegistrationCode,
   SystemSettings,
   SignUpRequest,
+  BloodBag,
   
   // Validation Helpers
   validateCoordinator,
