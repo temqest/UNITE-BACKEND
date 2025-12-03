@@ -890,23 +890,56 @@ class EventRequestService {
           return ['view'];
         }
 
-        // If this is a reschedule flow, limit coordinator actions to accept/reject only
+        // If this is a reschedule flow, determine who proposed the reschedule
+        // and restrict who may accept it according to business rules:
+        // - Admin proposed: coordinator assigned to the request must approve.
+        // - Coordinator proposed: if no stakeholder involved -> sysadmin must approve;
+        //   if stakeholder involved -> stakeholder must approve (sysadmin may also approve).
+        // - Stakeholder proposed: coordinator or sysadmin must approve.
         if (isRescheduled) {
-          if (role === 'admin' || role === 'systemadmin') {
-            return ['view', 'resched', 'accept', 'reject'];
-          }
-          if (role === 'coordinator') {
-            const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
-            const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
-            // Only assigned/reviewer coordinators may act; they may accept or reject but not reschedule
-            if (isReviewer || isAssigned) {
+          const proposerRoleRaw = req.rescheduleProposal && req.rescheduleProposal.proposedBy && req.rescheduleProposal.proposedBy.role ? String(req.rescheduleProposal.proposedBy.role).toLowerCase() : null;
+          const proposerRole = proposerRoleRaw || null;
+
+          // helper: check if actor is assigned/reviewer coordinator
+          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
+          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
+
+          // Admin proposed reschedule -> only assigned/reviewer coordinator may accept/reject
+          if (proposerRole === 'systemadmin' || proposerRole === 'admin') {
+            if (role === 'coordinator' && (isReviewer || isAssigned)) {
               return ['view', 'accept', 'reject'];
             }
+            // Admins may view or propose another reschedule but should not accept their own proposal
+            if (role === 'admin' || role === 'systemadmin') return ['view', 'resched'];
             return ['view'];
           }
-          // stakeholders: treat as view unless stakeholder reviewer
-          if (role === 'stakeholder' && req.stakeholder_id && String(req.stakeholder_id) === String(actorId)) {
-            return ['view', 'accept', 'reject'];
+
+          // Coordinator proposed reschedule
+          if (proposerRole === 'coordinator') {
+            const stakeholderPresent = !!req.stakeholder_id;
+            // If no stakeholder: sys admin must approve
+            if (!stakeholderPresent) {
+              if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
+              return ['view'];
+            }
+            // If stakeholder involved: stakeholder should approve, but sysadmin may also approve
+            if (role === 'stakeholder' && req.stakeholder_id && String(req.stakeholder_id) === String(actorId)) {
+              return ['view', 'accept', 'reject'];
+            }
+            if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
+            return ['view'];
+          }
+
+          // Stakeholder proposed reschedule -> coordinator or sysadmin may approve
+          if (proposerRole === 'stakeholder') {
+            if (role === 'coordinator' && (isReviewer || isAssigned)) return ['view', 'accept', 'reject'];
+            if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
+            return ['view'];
+          }
+
+          // Fallback: preserve previous permissive behavior for admins, otherwise view-only
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'resched', 'accept', 'reject'];
           }
           return ['view'];
         }
@@ -1649,8 +1682,22 @@ class EventRequestService {
       const lowerStatus = String(status || '').toLowerCase();
 
       if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
-        // Admins can act on any pending review or reschedule flows, and cancel
-        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || action === 'Cancelled';
+        // Admins can act on pending review flows and may propose reschedules.
+        // For reschedule flows, only allow admins to act when they are NOT the
+        // proposer of the reschedule (they should not accept their own proposal).
+        if (lowerStatus.includes('resched')) {
+          const proposerRole = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.role ? String(request.rescheduleProposal.proposedBy.role).toLowerCase() : null;
+          if (proposerRole === 'systemadmin' || proposerRole === 'admin') {
+            // Admin proposed this reschedule: allow proposing another reschedule or cancelling,
+            // but do not allow accept/reject here.
+            isAuthorized = normalizedAction.includes('resched') || action === 'Cancelled' || lowerStatus.includes('pending');
+          } else {
+            // Admin may act on reschedules proposed by others
+            isAuthorized = true;
+          }
+        } else {
+          isAuthorized = lowerStatus.includes('pending') || action === 'Cancelled' || normalizedAction.includes('resched');
+        }
       } else if (actorRole === 'Coordinator') {
         // Coordinators can act on pending, review, or reschedule flows, and cancel
         isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled';
@@ -1677,6 +1724,20 @@ class EventRequestService {
           }
           if (!owns) {
             throw new Error('Unauthorized: Coordinator does not own this request');
+          }
+        }
+
+        // Prevent coordinators from approving reschedules they themselves proposed
+        // especially when business rules require sysadmin approval (no stakeholder involved).
+        if (lowerStatus.includes('resched') && request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
+          try {
+            const proposerRole = String(request.rescheduleProposal.proposedBy.role || '').toLowerCase();
+            const proposerId = request.rescheduleProposal.proposedBy.id;
+            if (proposerRole === 'coordinator' && !request.stakeholder_id && String(proposerId) === String(actorId)) {
+              throw new Error('Unauthorized: Coordinator reschedule requires system admin approval');
+            }
+          } catch (e) {
+            // if anything odd, fall through to existing ownership checks
           }
         }
 
@@ -1824,19 +1885,14 @@ class EventRequestService {
       // Update event status
       const event = await Event.findOne({ Event_ID: request.Event_ID });
       if (event) {
-        if (action === 'Rescheduled') {
+          if (action === 'Rescheduled') {
           // Handle rescheduling logic
+          // When an admin or coordinator proposes a reschedule (including for
+          // already-approved/completed events), revert the event back to
+          // 'Pending' so the proposed schedule must be reviewed/confirmed.
           const createdByStakeholder = !!request.stakeholder_id;
-          const createdByCoordinator = request.made_by_role === 'Coordinator';
           if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
-            if (createdByStakeholder) {
-              event.Status = 'Pending';
-            } else if (createdByCoordinator && (actorRole === 'SystemAdmin' || actorRole === 'Admin')) {
-              // Coordinator-created request rescheduled by admin: keep pending for coordinator review
-              event.Status = 'Pending';
-            } else {
-              event.Status = 'Completed';
-            }
+            event.Status = 'Pending';
           } else {
             event.Status = 'Rescheduled';
           }
