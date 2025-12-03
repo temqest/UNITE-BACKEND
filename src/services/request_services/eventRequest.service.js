@@ -1708,32 +1708,46 @@ class EventRequestService {
             isAuthorized = true;
           }
         } else {
-          isAuthorized = lowerStatus.includes('pending') || action === 'Cancelled' || normalizedAction.includes('resched');
+          // Allow admin actions when pending, cancelled, or proposing reschedule.
+          // Additionally, if there's an outstanding rescheduleProposal (even when
+          // the request.Status is 'Completed'), allow admins to act on it provided
+          // they are not the proposer. This lets admins accept/reject reschedules
+          // submitted earlier without requiring the request status to have been
+          // updated to a resched state.
+          const hasReschedProposal = !!(request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id);
+          const proposerId = hasReschedProposal ? String(request.rescheduleProposal.proposedBy.id) : null;
+          const mayActOnProposal = hasReschedProposal && proposerId !== String(actorId);
+          isAuthorized = lowerStatus.includes('pending') || action === 'Cancelled' || normalizedAction.includes('resched') || mayActOnProposal;
         }
       } else if (role === 'coordinator') {
-        // Coordinators can act on pending, review, or reschedule flows, and cancel
-        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled';
-
-        // For pending or review statuses, verify ownership / assignment. Allow if:
-        // - request.coordinator_id matches actorId
-        // - request.reviewer is a coordinator and matches actorId
-        // - stakeholder (if present) is linked to this coordinator (legacy linkage)
-        if (lowerStatus.includes('pending') || lowerStatus.includes('review')) {
-          let owns = false;
-          // Direct coordinator assignment on the request
-          if (request.coordinator_id && String(request.coordinator_id) === String(actorId)) owns = true;
-          // Reviewer assignment (snapshot)
-          if (!owns && request.reviewer && request.reviewer.role && String(request.reviewer.role).toLowerCase() === 'coordinator' && String(request.reviewer.id) === String(actorId)) owns = true;
-          // Stakeholder belongs to this coordinator (legacy linkage)
-          if (!owns && request.stakeholder_id) {
-            try {
-              const Stakeholder = require('../../models/index').Stakeholder;
-              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
-              if (stakeholder && (String(stakeholder.Coordinator_ID) === String(actorId) || String(stakeholder.coordinator_id) === String(actorId))) owns = true;
-            } catch (e) {
-              // ignore lookup errors
-            }
+        // Determine ownership/assignment up-front so we can authorize reschedule
+        // proposals even when the request is already completed.
+        let owns = false;
+        // Direct coordinator assignment on the request
+        if (request.coordinator_id && String(request.coordinator_id) === String(actorId)) owns = true;
+        // Reviewer assignment (snapshot)
+        if (!owns && request.reviewer && request.reviewer.role && String(request.reviewer.role).toLowerCase() === 'coordinator' && String(request.reviewer.id) === String(actorId)) owns = true;
+        // Stakeholder belongs to this coordinator (legacy linkage)
+        if (!owns && request.stakeholder_id) {
+          try {
+            const Stakeholder = require('../../models/index').Stakeholder;
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
+            if (stakeholder && (String(stakeholder.Coordinator_ID) === String(actorId) || String(stakeholder.coordinator_id) === String(actorId))) owns = true;
+          } catch (e) {
+            // ignore lookup errors
           }
+        }
+
+        // Coordinators can act on pending, review, or reschedule flows, and cancel.
+        // Business rule: coordinators should be able to propose a reschedule even
+        // on completed/approved events. Allow any coordinator to propose a
+        // reschedule (the reviewer-selection logic later determines who must
+        // approve). For other actions we still require the request to be in a
+        // pending/review/resched state or the coordinator owns the request.
+        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled' || normalizedAction.includes('resched') || owns;
+
+        // For pending or review statuses, enforce ownership/assignment checks.
+        if (lowerStatus.includes('pending') || lowerStatus.includes('review')) {
           if (!owns) {
             throw new Error('Unauthorized: Coordinator does not own this request');
           }
@@ -1902,15 +1916,11 @@ class EventRequestService {
       if (event) {
           if (action === 'Rescheduled') {
           // Handle rescheduling logic
-          // When an admin or coordinator proposes a reschedule (including for
-          // already-approved/completed events), revert the event back to
-          // 'Pending' so the proposed schedule must be reviewed/confirmed.
-          const createdByStakeholder = !!request.stakeholder_id;
-          if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
-            event.Status = 'Pending';
-          } else {
-            event.Status = 'Rescheduled';
-          }
+          // Whenever a reschedule is proposed by any actor (admin, coordinator,
+          // or stakeholder), revoke the event's approved/completed status and
+          // set it back to 'Pending' so the proposed schedule must be
+          // reviewed/confirmed by the appropriate reviewer.
+          event.Status = 'Pending';
 
           // Apply rescheduled date
           if (rescheduledDate) {
@@ -1963,6 +1973,32 @@ class EventRequestService {
 
         event.ApprovedByAdminID = actorId;
         await event.save();
+
+        // If this action was a reschedule, ensure the request is moved into
+        // the reschedule review flow so reviewers see and act on the proposal.
+        if (action === 'Rescheduled') {
+          try {
+            // Capture a reschedule proposal on the request if not already present
+            if (!request.rescheduleProposal) {
+              request.rescheduleProposal = {
+                proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                proposedStartTime: null,
+                proposedEndTime: null,
+                reviewerNotes: note || null,
+                proposedAt: new Date(),
+                proposedBy: { id: actorId, role: actorRole, name: null }
+              };
+            }
+
+            // Move request into the unified review-rescheduled status so the
+            // frontend and reviewers treat this as a reschedule workflow.
+            request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+            await request.save();
+          } catch (e) {
+            // Do not block the main flow if reschedule attachment fails
+            console.warn('Failed to attach reschedule proposal to request:', e && e.message ? e.message : e);
+          }
+        }
 
         // Handle request completion for admin/coordinator actions
         if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
