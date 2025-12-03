@@ -1670,6 +1670,18 @@ class EventRequestService {
 
       const action = actionData.action || 'Accepted'; // Accepted, Rejected, Rescheduled
       const normalizedAction = String(action || '').toLowerCase();
+      // Normalize actor role for consistent comparisons (accepts 'admin'|'Admin' etc.)
+      const role = String(actorRole || '').toLowerCase();
+      // Also normalize the `actorRole` parameter into a canonical capitalized form
+      // so existing strict comparisons (e.g. actorRole === 'Admin') continue to work.
+      const canonicalActorRole = (function() {
+        if (role === 'systemadmin') return 'SystemAdmin';
+        if (role === 'admin') return 'Admin';
+        if (role === 'coordinator') return 'Coordinator';
+        if (role === 'stakeholder') return 'Stakeholder';
+        return actorRole;
+      })();
+      actorRole = canonicalActorRole;
       const note = actionData.note || null;
       const rescheduledDate = actionData.rescheduledDate || null;
 
@@ -1681,7 +1693,7 @@ class EventRequestService {
       // Normalize status for comparisons (handle legacy variants like Pending_Admin_Review etc.)
       const lowerStatus = String(status || '').toLowerCase();
 
-      if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+      if (role === 'systemadmin' || role === 'admin') {
         // Admins can act on pending review flows and may propose reschedules.
         // For reschedule flows, only allow admins to act when they are NOT the
         // proposer of the reschedule (they should not accept their own proposal).
@@ -1698,7 +1710,7 @@ class EventRequestService {
         } else {
           isAuthorized = lowerStatus.includes('pending') || action === 'Cancelled' || normalizedAction.includes('resched');
         }
-      } else if (actorRole === 'Coordinator') {
+      } else if (role === 'coordinator') {
         // Coordinators can act on pending, review, or reschedule flows, and cancel
         isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled';
 
@@ -1745,7 +1757,7 @@ class EventRequestService {
         if (request.CoordinatorFinalAction && !String(request.CoordinatorFinalAction).toLowerCase().includes('resched') && action !== 'Rescheduled') {
           throw new Error('Coordinator has already acted on this request');
         }
-      } else if (actorRole === 'Stakeholder') {
+      } else if (role === 'stakeholder') {
         // Stakeholders can act when the request is pending or accepted-by-admin flows, and may reschedule/cancel their own requests
         isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('accepted') || lowerStatus.includes('resched') || (action === 'Cancelled' && request.stakeholder_id === actorId);
         // Also allow reschedule on completed/approved requests if they own the request
@@ -1772,7 +1784,7 @@ class EventRequestService {
       }
 
       // Update request based on actor type
-      if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+      if (role === 'systemadmin' || role === 'admin') {
         // Admin action
         request.Admin_ID = actorId;
         request.AdminAction = action;
@@ -1800,7 +1812,7 @@ class EventRequestService {
         } catch (e) {
           // ignore
         }
-      } else if (actorRole === 'Coordinator') {
+      } else if (role === 'coordinator') {
         // Coordinator action
         // If this is a coordinator-review request (reviewer is coordinator and status is pending)
         const isCoordinatorReview = String(status || '').toLowerCase().includes('pending') && request.reviewer && request.reviewer.role === 'Coordinator';
@@ -1834,7 +1846,7 @@ class EventRequestService {
             }
           } catch (e) {}
         }
-      } else if (actorRole === 'Stakeholder') {
+      } else if (role === 'stakeholder') {
         // Stakeholder action - they can accept, reschedule, or cancel approved events
         if (action !== 'Accepted' && action !== 'Rescheduled' && action !== 'Cancelled') {
           throw new Error('Stakeholders can only accept, reschedule, or cancel requests');
@@ -1884,6 +1896,9 @@ class EventRequestService {
 
       // Update event status
       const event = await Event.findOne({ Event_ID: request.Event_ID });
+      // capture original start date before any modifications so notifications
+      // can show the before/after dates correctly
+      const originalEventStart = event && event.Start_Date ? new Date(event.Start_Date) : null;
       if (event) {
           if (action === 'Rescheduled') {
           // Handle rescheduling logic
@@ -1891,7 +1906,7 @@ class EventRequestService {
           // already-approved/completed events), revert the event back to
           // 'Pending' so the proposed schedule must be reviewed/confirmed.
           const createdByStakeholder = !!request.stakeholder_id;
-          if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
+          if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
             event.Status = 'Pending';
           } else {
             event.Status = 'Rescheduled';
@@ -1950,7 +1965,7 @@ class EventRequestService {
         await event.save();
 
         // Handle request completion for admin/coordinator actions
-        if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
+        if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
           const createdByStakeholder = !!request.stakeholder_id;
           const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
 
@@ -2091,7 +2106,7 @@ class EventRequestService {
       }
 
       // Create history entry
-      if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
+      if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
         const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
         const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
         
@@ -2136,7 +2151,7 @@ class EventRequestService {
           } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
             // Coordinator accepted system admin's request: no notification needed (event published)
             recipientId = null;
-          } else if (status === 'Pending_Admin_Review' && (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator')) {
+          } else if (status === 'Pending_Admin_Review' && (role === 'systemadmin' || role === 'admin' || role === 'coordinator')) {
             // Admin accepted: notify next in chain
             if (request.stakeholder_id) {
               recipientId = request.stakeholder_id;
@@ -2159,26 +2174,126 @@ class EventRequestService {
             }
           }
         } else if (action === 'Rescheduled') {
-          // Notify the creator about reschedule
-          if (request.made_by_role === 'SystemAdmin' && request.made_by_id) {
-            recipientId = request.made_by_id;
-            recipientType = 'Admin';
-          } else if (request.made_by_role === 'Coordinator') {
-            recipientId = request.coordinator_id;
-            recipientType = 'Coordinator';
+          // Notify the appropriate reviewer/owner for the reschedule proposal.
+          // Prefer the assigned reviewer snapshot, then the coordinator, then stakeholder.
+          try {
+            if (request.reviewer && request.reviewer.id && String(request.reviewer.id) !== String(actorId)) {
+              recipientId = request.reviewer.id;
+              // normalize reviewer role for recipientType
+              recipientType = (request.reviewer.role === 'SystemAdmin' || String(request.reviewer.role).toLowerCase() === 'admin') ? 'Admin' : (request.reviewer.role || 'Coordinator');
+            } else if (request.coordinator_id && String(request.coordinator_id) !== String(actorId)) {
+              recipientId = request.coordinator_id;
+              recipientType = 'Coordinator';
+            } else if (request.stakeholder_id && String(request.stakeholder_id) !== String(actorId)) {
+              recipientId = request.stakeholder_id;
+              recipientType = 'Stakeholder';
+            } else {
+              // fallback: don't notify the actor (avoid notifying the user who performed the action)
+              recipientId = null;
+              recipientType = null;
+            }
+          } catch (e) {
+            // if anything goes wrong, fall back to not notifying
+            recipientId = null;
+            recipientType = null;
           }
         }
 
         if (recipientId && recipientType) {
-          await Notification.createAdminActionNotification(
-            recipientId,
-            requestId,
-            request.Event_ID,
-            action,
-            note,
-            rescheduledDate,
-            recipientType
-          );
+          try {
+            console.log('Notification: sending', { recipientId, recipientType, action, requestId, eventId: request.Event_ID });
+            await Notification.createAdminActionNotification(
+              recipientId,
+              requestId,
+              request.Event_ID,
+              action,
+              note,
+              rescheduledDate,
+              recipientType,
+              originalEventStart
+            );
+          } catch (e) {
+            console.error('Notification: failed to create admin action notification', e && e.message ? e.message : e);
+          }
+        }
+
+        // Always notify the original requester (creator) about the final decision
+        try {
+          const creatorId = request.stakeholder_id || request.made_by_id || request.coordinator_id || null;
+          // resolve actor name once
+          let actorName = null;
+          try {
+            const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId }).lean().exec();
+            if (staff) actorName = `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim();
+          } catch (e) {}
+          const actorLabel = actorRole || null;
+          // determine recipientType based on which id we selected
+          let creatorRecipientType = 'Coordinator';
+          if (creatorId && request.stakeholder_id && String(creatorId) === String(request.stakeholder_id)) creatorRecipientType = 'Stakeholder';
+          else if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin')) creatorRecipientType = 'Admin';
+
+          // Prefer notifying the proposer of a reschedule (if present and different
+          // from the current actor). Otherwise fall back to the original requester.
+          let notifyRecipientId = null;
+          let notifyRecipientType = null;
+
+          try {
+            if (request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id) {
+              const proposer = request.rescheduleProposal.proposedBy;
+              if (String(proposer.id) !== String(actorId)) {
+                notifyRecipientId = proposer.id;
+                const pr = String(proposer.role || '').toLowerCase();
+                if (pr.includes('admin') || pr.includes('system')) notifyRecipientType = 'Admin';
+                else if (pr.includes('stakeholder')) notifyRecipientType = 'Stakeholder';
+                else notifyRecipientType = 'Coordinator';
+                console.log('Notification: choosing reschedule proposer as creator recipient', { notifyRecipientId, notifyRecipientType, proposer });
+              }
+            }
+          } catch (e) {
+            // ignore proposer resolution errors and fall back
+          }
+
+          if (!notifyRecipientId) {
+            // pick original requester but avoid notifying the actor
+            const fallbackId = request.made_by_id || request.stakeholder_id || request.coordinator_id || null;
+            if (fallbackId && String(fallbackId) !== String(actorId)) {
+              notifyRecipientId = fallbackId;
+              if (fallbackId && request.stakeholder_id && String(fallbackId) === String(request.stakeholder_id)) notifyRecipientType = 'Stakeholder';
+              else if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin')) notifyRecipientType = 'Admin';
+              else notifyRecipientType = 'Coordinator';
+              console.log('Notification: falling back to original requester as creator recipient', { notifyRecipientId, notifyRecipientType });
+            }
+          }
+
+          // Decide whether to notify based on normalizedAction and resolved recipient
+          const shouldNotifyCreator = Boolean(notifyRecipientId && String(normalizedAction || '').includes('accept')) ||
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('resched')) ||
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('reject'));
+
+          console.log('Notification: creator notify check', { notifyRecipientId, actorId, action, normalizedAction, shouldNotifyCreator, notifyRecipientType });
+
+          if (shouldNotifyCreator) {
+            try {
+              await Notification.createReviewerDecisionNotification(
+                notifyRecipientId,
+                requestId,
+                request.Event_ID,
+                action,
+                actorLabel,
+                actorName,
+                rescheduledDate || null,
+                originalEventStart || null,
+                notifyRecipientType
+              );
+              console.log('Notification: creator reviewer-decision notification sent', { notifyRecipientId, requestId });
+            } catch (e) {
+              console.error('Notification: failed to send creator reviewer decision notification', e && e.message ? e.message : e);
+            }
+          } else {
+            console.log('Notification: skipping creator notification', { notifyRecipientId, actorId, action, normalizedAction });
+          }
+        } catch (e) {
+          console.error('Notification: failed during creator notification check', e && e.message ? e.message : e);
         }
       } catch (e) {
         // swallow notification errors
@@ -2358,12 +2473,75 @@ class EventRequestService {
 
       // Send notification to admin
       if (request.Admin_ID) {
-        await Notification.createCoordinatorActionNotification(
-          request.Admin_ID,
-          requestId,
-          request.Event_ID,
-          action
-        );
+        try {
+          console.log('coordinatorConfirmRequest: sending coordinator->admin notification', { adminId: request.Admin_ID, requestId, eventId: request.Event_ID, action });
+          await Notification.createCoordinatorActionNotification(
+            request.Admin_ID,
+            requestId,
+            request.Event_ID,
+            action
+          );
+          console.log('coordinatorConfirmRequest: coordinator->admin notification sent', { adminId: request.Admin_ID });
+        } catch (e) {
+          console.error('coordinatorConfirmRequest: failed to send coordinator->admin notification', e && e.message ? e.message : e);
+        }
+      }
+
+      // Also notify the original requester (creator) about the coordinator decision
+      try {
+        // Prefer notifying the proposer of any outstanding reschedule (if different from the coordinator),
+        // otherwise fall back to the original requester (made_by_id / stakeholder_id / coordinator_id).
+        let notifyCreatorId = null;
+        let notifyCreatorType = null;
+
+        try {
+          if (request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id) {
+            const proposer = request.rescheduleProposal.proposedBy;
+            if (String(proposer.id) !== String(coordinatorId)) {
+              notifyCreatorId = proposer.id;
+              const pr = String(proposer.role || '').toLowerCase();
+              if (pr.includes('admin') || pr.includes('system')) notifyCreatorType = 'Admin';
+              else if (pr.includes('stakeholder')) notifyCreatorType = 'Stakeholder';
+              else notifyCreatorType = 'Coordinator';
+              console.log('coordinatorConfirmRequest: chosen proposer as notify target', { notifyCreatorId, notifyCreatorType, proposer });
+            }
+          }
+        } catch (e) {
+          // ignore proposer resolution issues
+        }
+
+        if (!notifyCreatorId) {
+          const fallback = request.made_by_id || request.stakeholder_id || request.coordinator_id || null;
+          if (fallback && String(fallback) !== String(coordinatorId)) {
+            notifyCreatorId = fallback;
+            if (fallback && request.stakeholder_id && String(fallback) === String(request.stakeholder_id)) notifyCreatorType = 'Stakeholder';
+            else if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin')) notifyCreatorType = 'Admin';
+            else notifyCreatorType = 'Coordinator';
+            console.log('coordinatorConfirmRequest: falling back to original requester as notify target', { notifyCreatorId, notifyCreatorType });
+          }
+        }
+
+        console.log('coordinatorConfirmRequest: creator resolution', { notifyCreatorId, stakeholder_id: request.stakeholder_id, made_by_id: request.made_by_id, coordinator_id: request.coordinator_id, made_by_role: request.made_by_role });
+
+        if (notifyCreatorId) {
+          console.log('coordinatorConfirmRequest: sending creator reviewer-decision notification', { notifyCreatorId, notifyCreatorType, requestId, eventId: request.Event_ID, action });
+          await Notification.createReviewerDecisionNotification(
+            notifyCreatorId,
+            requestId,
+            request.Event_ID,
+            action,
+            'Coordinator',
+            coordinatorName || null,
+            null,
+            null,
+            notifyCreatorType
+          );
+          console.log('coordinatorConfirmRequest: creator reviewer-decision notification sent', { notifyCreatorId });
+        } else {
+          console.log('coordinatorConfirmRequest: no creator to notify or creator equals coordinator', { notifyCreatorId });
+        }
+      } catch (e) {
+        console.error('coordinatorConfirmRequest: failed to notify creator after coordinatorConfirmRequest', e && e.message ? e.message : e);
       }
 
       return {

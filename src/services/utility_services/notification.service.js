@@ -509,7 +509,7 @@ class NotificationService {
     }
   }
 
-  async createAdminActionNotification(coordinatorId, requestId, eventId, action, note, rescheduledDate) {
+  async createAdminActionNotification(coordinatorId, requestId, eventId, action, note, rescheduledDate, originalDate = null) {
     try {
       // The model helper now accepts recipientId and optional recipientType
       const notification = await Notification.createAdminActionNotification(
@@ -520,7 +520,8 @@ class NotificationService {
         note,
         rescheduledDate,
         // default recipientType maintained by caller; the service wrapper keeps signature
-        'Coordinator'
+        'Coordinator',
+        originalDate
       );
       return {
         success: true,

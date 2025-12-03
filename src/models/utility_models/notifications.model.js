@@ -78,6 +78,10 @@ const notificationSchema = new mongoose.Schema({
   RescheduledDate: {
     type: Date
   }
+  ,
+  OriginalDate: {
+    type: Date
+  }
 }, {
   timestamps: true
 });
@@ -94,7 +98,17 @@ notificationSchema.methods.markAsRead = function() {
 };
 
 // Static method to create notification for new request
-notificationSchema.statics.createNewRequestNotification = function(adminId, requestId, eventId, coordinatorId) {
+notificationSchema.statics.createNewRequestNotification = async function(adminId, requestId, eventId, coordinatorId) {
+  // Attempt to enrich message with event title when available
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {
+    // ignore
+  }
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     Recipient_ID: adminId,
@@ -102,7 +116,7 @@ notificationSchema.statics.createNewRequestNotification = function(adminId, requ
     Request_ID: requestId,
     Event_ID: eventId,
     Title: 'New Event Request',
-    Message: `A new event request has been submitted and requires your review.`,
+    Message: eventTitle ? `A new event request "${eventTitle}" has been submitted and requires your review.` : `A new event request has been submitted and requires your review.`,
     NotificationType: 'NewRequest'
   });
 };
@@ -110,28 +124,68 @@ notificationSchema.statics.createNewRequestNotification = function(adminId, requ
 // Static method to create notification for admin action
 // recipientId: id of the recipient (coordinator or stakeholder)
 // recipientType: optional string 'Coordinator'|'Stakeholder' (defaults to 'Coordinator')
-notificationSchema.statics.createAdminActionNotification = function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator') {
+notificationSchema.statics.createAdminActionNotification = async function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator', originalDate = null) {
   let title, message, type;
-  
+  // Attempt to fetch event title for clearer messages
+  let eventTitle = null;
+  // Ensure `ev` is available in this scope for later branches
+  let ev = null;
+  try {
+    const Event = mongoose.model('Event');
+    ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Start_Date').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {}
+
   switch(action) {
     case 'Accepted':
       title = 'Event Request Accepted';
-      message = `Your event request has been accepted by the admin. Please review and approve.`;
+      message = eventTitle ? `The event request "${eventTitle}" has been accepted by the admin. Please review and approve.` : `Your event request has been accepted by the admin. Please review and approve.`;
       type = 'AdminAccepted';
       break;
-    case 'Rescheduled':
+      case 'Rescheduled':
       title = 'Event Request Rescheduled';
-      message = `Your event request has been rescheduled by the admin. ${note ? `Note: ${note}` : ''}`;
+      // Format dates as 'Month DD, YYYY' for readability
+      let when = null;
+      let original = null;
+      try {
+        if (rescheduledDate) {
+          when = new Date(rescheduledDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+        // Prefer provided originalDate (captured before event update), otherwise fall back to ev.Start_Date
+        const srcOriginal = originalDate || (ev && ev.Start_Date ? ev.Start_Date : null);
+        if (srcOriginal) {
+          original = new Date(srcOriginal).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+      } catch (e) {
+        // ignore formatting errors
+      }
+      if (eventTitle) {
+        if (original && when) {
+          message = `The event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the admin. ${note ? `Note: ${note}` : ''}`;
+        } else if (when) {
+          message = `The event "${eventTitle}" has a proposed reschedule to ${when} by the admin. ${note ? `Note: ${note}` : ''}`;
+        } else {
+          message = `The event "${eventTitle}" has a proposed reschedule by the admin. ${note ? `Note: ${note}` : ''}`;
+        }
+      } else {
+        if (original && when) {
+          message = `Your event request scheduled on ${original} has been rescheduled by the admin. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+        } else if (when) {
+          message = `Your event request has been rescheduled by the admin. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+        } else {
+          message = `Your event request has been rescheduled by the admin. ${note ? `Note: ${note}` : ''}`;
+        }
+      }
       type = 'AdminRescheduled';
       break;
     case 'Rejected':
       title = 'Event Request Rejected';
-      message = `Your event request has been rejected by the admin. ${note ? `Note: ${note}` : ''}`;
+      message = eventTitle ? `The event "${eventTitle}" has been rejected by the admin. ${note ? `Note: ${note}` : ''}` : `Your event request has been rejected by the admin. ${note ? `Note: ${note}` : ''}`;
       type = 'AdminRejected';
       break;
     default:
       title = 'Event Request Update';
-      message = `Your event request has been updated by the admin.`;
+      message = eventTitle ? `The event "${eventTitle}" has been updated by the admin.` : `Your event request has been updated by the admin.`;
       type = 'NewRequest';
   }
 
@@ -146,29 +200,36 @@ notificationSchema.statics.createAdminActionNotification = function(recipientId,
     NotificationType: type,
     ActionTaken: action,
     ActionNote: note || null,
-    RescheduledDate: rescheduledDate || null
+    RescheduledDate: rescheduledDate || null,
+    OriginalDate: originalDate || (ev && ev.Start_Date ? ev.Start_Date : null)
   });
 };
 
 // Static method to create notification for coordinator final action
-notificationSchema.statics.createCoordinatorActionNotification = function(adminId, requestId, eventId, action) {
+notificationSchema.statics.createCoordinatorActionNotification = async function(adminId, requestId, eventId, action) {
   let title, message, type;
-  
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {}
+
   switch(action) {
     case 'Approved':
     case 'Accepted':
       title = 'Event Request Completed';
-      message = `The coordinator has approved/accepted the event request. The event is now completed.`;
+      message = eventTitle ? `The coordinator has approved the event "${eventTitle}". The event is now completed.` : `The coordinator has approved/accepted the event request. The event is now completed.`;
       type = 'RequestCompleted';
       break;
     case 'Rejected':
       title = 'Event Request Rejected';
-      message = `The coordinator has rejected the event request.`;
+      message = eventTitle ? `The coordinator has rejected the event "${eventTitle}".` : `The coordinator has rejected the event request.`;
       type = 'RequestRejected';
       break;
     default:
       title = 'Event Request Update';
-      message = `The coordinator has updated the event request.`;
+      message = eventTitle ? `The coordinator has updated the event "${eventTitle}".` : `The coordinator has updated the event request.`;
       type = 'CoordinatorApproved';
   }
 
@@ -185,6 +246,93 @@ notificationSchema.statics.createCoordinatorActionNotification = function(adminI
   });
 };
 
+// Static method to notify the original requester when a reviewer (coordinator)
+// accepts/rejects/reschedules a request. Includes actor info for clarity.
+notificationSchema.statics.createReviewerDecisionNotification = async function(recipientId, requestId, eventId, action, actorRole, actorName, rescheduledDate, originalDate = null, recipientType = null) {
+  let title, message, type;
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Start_Date').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+    // include original start date on the event object for formatting below
+    if (ev) ev._origStart = ev.Start_Date;
+  } catch (e) {}
+
+  const actorLabel = actorRole ? String(actorRole) : 'Reviewer';
+
+  switch(action) {
+    case 'Accepted':
+    case 'Approved':
+      title = 'Your Event Request Approved';
+      message = eventTitle ? `Your event "${eventTitle}" has been approved by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been approved by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'CoordinatorAccepted';
+      break;
+    case 'Rejected':
+      title = 'Your Event Request Rejected';
+      message = eventTitle ? `Your event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'CoordinatorRejected';
+      break;
+    case 'Rescheduled':
+      title = 'Your Event Request Rescheduled';
+      // format proposed and original dates
+      let when = null;
+      let original = null;
+      try {
+        if (rescheduledDate) when = new Date(rescheduledDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        // Prefer explicit originalDate argument (captured before event update)
+        const srcOriginal = originalDate || null;
+        if (srcOriginal) {
+          original = new Date(srcOriginal).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        } else {
+          const Event = mongoose.model('Event');
+          const ev = await Event.findOne({ Event_ID: eventId }).select('Start_Date Event_Title').lean().exec();
+          if (ev && ev.Start_Date) original = new Date(ev.Start_Date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+      } catch (e) {}
+      if (eventTitle) {
+        if (original && when) {
+          message = `Your event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+        } else if (when) {
+          message = `Your event "${eventTitle}" has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+        } else {
+          message = `Your event "${eventTitle}" has a proposed reschedule by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+        }
+      } else {
+        message = when ? `Your event request has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      }
+      type = 'AdminRescheduled';
+      break;
+    default:
+      title = 'Event Request Update';
+      message = eventTitle ? `Your event "${eventTitle}" has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'CoordinatorAccepted';
+  }
+
+  // Determine recipient type. Prefer explicit `recipientType` argument (caller knows the recipient),
+  // otherwise fall back to inferring from the actorRole (legacy behavior).
+  let recipientTypeFinal = 'Coordinator';
+  if (recipientType && String(recipientType).length > 0) {
+    recipientTypeFinal = recipientType;
+  } else {
+    if (String(actorRole || '').toLowerCase().includes('admin') || String(actorRole || '').toLowerCase().includes('system')) recipientTypeFinal = 'Admin';
+    if (String(actorRole || '').toLowerCase().includes('stakeholder')) recipientTypeFinal = 'Stakeholder';
+  }
+
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: recipientId,
+    RecipientType: recipientTypeFinal,
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Title: title,
+    Message: message,
+    NotificationType: type,
+    ActionTaken: action,
+    ActionNote: null,
+    RescheduledDate: rescheduledDate || null
+  });
+};
 // Static method to create notification for admin cancellation
 notificationSchema.statics.createAdminCancellationNotification = function(coordinatorId, requestId, eventId, note) {
   return this.create({
