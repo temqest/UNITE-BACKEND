@@ -1,0 +1,59 @@
+Actors
+
+A = Admin
+
+C = Coordinator
+
+S = Stakeholder
+
+Legend for actions
+
+V = view
+
+AC = accept
+
+RJ = reject
+
+📌 1. Admin → Coordinator (Admin requests, Coordinator reviews)
+Scenario	Admin (Requester)	Coordinator (Reviewer)
+A reschedules event → C reviews	V	V, AC, RJ
+📌 2. Coordinator → Admin (Coordinator requests, Admin reviews)
+Scenario	Coordinator (Requester)	Admin (Reviewer)
+C reschedules event → A reviews	V	V, AC, RJ
+📌 3. Stakeholder → Coordinator (Stakeholder requests, Coordinator reviews)
+Scenario	Stakeholder (Requester)	Coordinator (Reviewer)
+S reschedules event → C reviews	V	V, AC, RJ
+📌 4. Stakeholder → Admin (Stakeholder requests, Admin reviews)
+Scenario	Stakeholder (Requester)	Admin (Reviewer)
+S reschedules event → A reviews	V	V, AC, RJ
+📌 5. Coordinator → Stakeholder (Coordinator requests, Stakeholder reviews)
+
+(If this flow exists; if not, ignore)
+
+Scenario	Coordinator (Requester)	Stakeholder (Reviewer)
+C reschedules → S reviews	V	V, AC, RJ
+📌 6. Admin → Stakeholder (Admin requests, Stakeholder reviews)
+
+(If this flow exists; if not, ignore)
+
+Scenario	Admin (Requester)	Stakeholder (Reviewer)
+A reschedules → S reviews	V	V, AC, RJ
+📌 Condensed Master Table (All Actor Pairs)
+Requester → Reviewer	Requester Actions	Reviewer Actions
+Admin → Coordinator	V	V, AC, RJ
+Coordinator → Admin	V	V, AC, RJ
+Stakeholder → Coordinator	V	V, AC, RJ
+Stakeholder → Admin	V	V, AC, RJ
+Coordinator → Stakeholder	V	V, AC, RJ
+
+📌 Key Guarantees This Table Enforces
+
+No self-approval.
+
+No contradictory action sets.
+
+Consistent behavior across all reschedule flows.
+
+Backwards compatibility with multi-actor systems.
+
+Reviewer always has control; requester never does.

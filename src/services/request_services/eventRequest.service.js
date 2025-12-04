@@ -869,6 +869,67 @@ class EventRequestService {
         const isReviewAccepted = status.includes('review') && status.includes('accepted');
         const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled');
 
+        // Special-case: handle reschedule proposals explicitly and symmetrically.
+        // Universal rules:
+        // - Requester (proposer) => view only
+        // - Reviewer => view, accept, reject
+        // Reviewer resolution uses request.reviewer snapshot where available,
+        // otherwise falls back to coordinator_id/stakeholder_id. Admins may
+        // also act as reviewers when appropriate.
+        try {
+          const resProp = req.rescheduleProposal || null;
+          let proposerRole = null;
+          let proposerId = null;
+          if (resProp && resProp.proposedBy) {
+            proposerRole = String(resProp.proposedBy.role || '').toLowerCase();
+            proposerId = resProp.proposedBy.id || null;
+          }
+
+          // Account for CoordinatorFinalAction flag as a legacy reschedule marker
+          const coordFinal = (req.CoordinatorFinalAction || req.coordinatorFinalAction || null);
+          const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
+          if (!proposerRole && coordFinalIsResched) {
+            proposerRole = 'coordinator';
+          }
+
+          // If we have a legacy CoordinatorFinalAction reschedule marker but
+          // no explicit proposer id, use the request.coordinator_id as the
+          // proposer identifier so proposer checks work for legacy flows.
+          if (!proposerId && coordFinalIsResched && req.coordinator_id) {
+            proposerId = req.coordinator_id;
+          }
+
+          // Resolve reviewer snapshot or fallbacks
+          const reviewerSnapshot = req.reviewer || null;
+          const reviewerId = reviewerSnapshot && reviewerSnapshot.id ? reviewerSnapshot.id : (req.coordinator_id || req.stakeholder_id || null);
+          const reviewerRoleRaw = reviewerSnapshot && reviewerSnapshot.role ? String(reviewerSnapshot.role).toLowerCase() : (req.coordinator_id ? 'coordinator' : (req.stakeholder_id ? 'stakeholder' : null));
+
+          // If the current actor is the proposer, they must be view-only
+          if (proposerId && String(proposerId) === String(actorId)) {
+            return ['view'];
+          }
+
+          // If actor is the explicit reviewer (by id) they get reviewer rights
+          if (reviewerId && String(reviewerId) === String(actorId)) {
+            return ['view', 'accept', 'reject'];
+          }
+
+          // If actor role matches resolved reviewer role, grant reviewer rights
+          if (reviewerRoleRaw && reviewerRoleRaw === role) {
+            return ['view', 'accept', 'reject'];
+          }
+
+          // Allow system admins to act as reviewers for reschedules by default
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'accept', 'reject'];
+          }
+
+          // Fallback: everyone else can only view
+          return ['view'];
+        } catch (e) {
+          // ignore and continue
+        }
+
         // Special case: if the request is review-accepted (admin accepted a
         // coordinator-created request), only the assigned coordinator/reviewer
         // should be able to confirm; admins should no longer have accept/reject/resched.
@@ -967,8 +1028,10 @@ class EventRequestService {
           const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
           const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
           const isCreator = String(req.made_by_role || '').toLowerCase() === 'coordinator' && req.made_by_id && String(req.made_by_id) === String(actorId);
+          // Coordinators assigned to review should be able to propose reschedules
+          // in addition to accepting/rejecting. Preserve original creator rule.
           if (role === 'coordinator' && (isReviewer || (isAssigned && !isCreator))) {
-            return ['view', 'accept', 'reject'];
+            return ['view', 'resched', 'accept', 'reject'];
           }
           return ['view'];
         }
@@ -1676,6 +1739,28 @@ class EventRequestService {
       console.log('processRequestAction: actorRole=', actorRole, 'status=', status);
       let isAuthorized = false;
 
+      // Block proposers from accepting or rejecting their own reschedule
+      // proposals. Do not block proposers from creating a reschedule (they
+      // must be able to propose). Handle legacy CoordinatorFinalAction by
+      // resolving proposerId from request.coordinator_id when necessary.
+      try {
+        const resProp = request.rescheduleProposal || null;
+        let proposerId = resProp && resProp.proposedBy && resProp.proposedBy.id ? resProp.proposedBy.id : null;
+        const coordFinal = request.CoordinatorFinalAction || request.coordinatorFinalAction || null;
+        const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
+        if (!proposerId && coordFinalIsResched && request.coordinator_id) proposerId = request.coordinator_id;
+
+        // If the actor is the proposer (explicit proposal), disallow accept/reject only
+        if (proposerId && String(proposerId) === String(actorId)) {
+          if (normalizedAction.includes('accept') || normalizedAction.includes('reject')) {
+            throw new Error('Unauthorized: proposer cannot accept or reject their own reschedule');
+          }
+        }
+      } catch (e) {
+        // rethrow authorization errors
+        if (e && String(e.message).toLowerCase().includes('unauthorized')) throw e;
+      }
+
       // Normalize status for comparisons (handle legacy variants like Pending_Admin_Review etc.)
       const lowerStatus = String(status || '').toLowerCase();
 
@@ -1990,6 +2075,23 @@ class EventRequestService {
         if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
           const createdByStakeholder = !!request.stakeholder_id;
           const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
+          // Special fix: when a coordinator proposed a reschedule (CoordinatorFinalAction
+          // flagged or rescheduleProposal present) and the system admin accepts it,
+          // ensure both the request and the event are finalized as completed.
+          try {
+            const coordFinal = request.CoordinatorFinalAction || request.coordinatorFinalAction || null;
+            const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
+            const proposal = request.rescheduleProposal || null;
+            const proposalBy = proposal && proposal.proposedBy ? String(proposal.proposedBy.role || '').toLowerCase() : null;
+            const isCoordProposal = proposalBy === 'coordinator' || coordFinalIsResched;
+            if (isCoordProposal && (actorRole === 'SystemAdmin' || actorRole === 'Admin') && action === 'Accepted') {
+              // finalize both event and request
+              try {
+                if (event) event.Status = 'Completed';
+              } catch (e) {}
+              request.Status = REQUEST_STATUSES.COMPLETED;
+            }
+          } catch (e) {}
 
           if (lowerStatus.includes('resched') && action === 'Accepted') {
             // Accepting reschedule: complete the request
@@ -2123,6 +2225,11 @@ class EventRequestService {
             // Admin acted on stakeholder-created request: set to pending stakeholder review (only for acceptance)
             request.Status = 'Pending_Stakeholder_Review';
           }
+          // Clear any attached reschedule proposal if this action finalizes the flow.
+          if ((action === 'Accepted' || action === 'Rejected' || action === 'Cancelled') && request.rescheduleProposal) {
+            request.rescheduleProposal = null;
+          }
+
           await request.save();
         }
       }
