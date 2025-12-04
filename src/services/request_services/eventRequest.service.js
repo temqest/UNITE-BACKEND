@@ -910,18 +910,20 @@ class EventRequestService {
           }
 
           // If actor is the explicit reviewer (by id) they get reviewer rights
+          // Reviewer rights include the ability to propose a reschedule (RS)
+          // in the initial review step.
           if (reviewerId && String(reviewerId) === String(actorId)) {
-            return ['view', 'accept', 'reject'];
+            return ['view', 'accept', 'reject', 'resched'];
           }
 
           // If actor role matches resolved reviewer role, grant reviewer rights
           if (reviewerRoleRaw && reviewerRoleRaw === role) {
-            return ['view', 'accept', 'reject'];
+            return ['view', 'accept', 'reject', 'resched'];
           }
 
           // Allow system admins to act as reviewers for reschedules by default
           if (role === 'admin' || role === 'systemadmin') {
-            return ['view', 'accept', 'reject'];
+            return ['view', 'accept', 'reject', 'resched'];
           }
 
           // Fallback: everyone else can only view
@@ -1904,6 +1906,29 @@ class EventRequestService {
         if (isCoordinatorReview) {
           request.CoordinatorFinalAction = action;
           request.CoordinatorFinalActionDate = new Date();
+          // If coordinator is proposing a reschedule in a coordinator-review
+          // flow, attach a rescheduleProposal and route the review back to the
+          // original admin requester so they can accept/reject the proposal.
+          try {
+            if (action === 'Rescheduled') {
+              const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+              request.rescheduleProposal = {
+                proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                proposedStartTime: null,
+                proposedEndTime: null,
+                reviewerNotes: note || null,
+                proposedAt: new Date(),
+                proposedBy: actorSnapshot
+              };
+              // assign admin reviewer if original requester was admin
+              if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin') && request.made_by_id) {
+                request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+              }
+              request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+            }
+          } catch (e) {
+            // swallow attach errors
+          }
         } else {
           // Acting as admin
           request.Admin_ID = actorId;
@@ -1984,6 +2009,7 @@ class EventRequestService {
       // capture original start date before any modifications so notifications
       // can show the before/after dates correctly
       const originalEventStart = event && event.Start_Date ? new Date(event.Start_Date) : null;
+      let finalizedByAccept = false;
       if (event) {
           if (action === 'Rescheduled') {
           // Handle rescheduling logic
@@ -2009,7 +2035,36 @@ class EventRequestService {
               currentEnd.setFullYear(rs.getFullYear(), rs.getMonth(), rs.getDate());
               event.End_Date = currentEnd;
             }
-          }
+            }
+            // If a coordinator proposed a reschedule on an admin-created request,
+            // move the request into the unified review-rescheduled status and
+            // assign the original admin (made_by_id) as the reviewer so the
+            // admin can accept/reject the proposal.
+            try {
+              const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+              // Attach explicit rescheduleProposal on the request if missing
+              if (!request.rescheduleProposal) {
+                request.rescheduleProposal = {
+                  proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                  proposedStartTime: null,
+                  proposedEndTime: null,
+                  reviewerNotes: note || null,
+                  proposedAt: new Date(),
+                  proposedBy: actorSnapshot
+                };
+              }
+
+              // If the coordinator proposed this and the original requester is an admin,
+              // set the reviewer to the original admin so they can review the proposal.
+              if (actorRole === 'Coordinator' && request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin') && request.made_by_id) {
+                request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+              }
+
+              request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+              await request.save();
+            } catch (e) {
+              // ignore attach errors
+            }
         } else if (action === 'Rejected') {
           event.Status = 'Rejected';
         } else if (action === 'Cancelled') {
@@ -2119,21 +2174,62 @@ class EventRequestService {
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
-              // Coordinator rescheduled: sys admin reviews the reschedule date
-              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
-              request.CoordinatorFinalAction = 'Rescheduled';
-              request.CoordinatorFinalActionDate = new Date();
+              // Coordinator rescheduled: create a reschedule proposal and route
+              // it to the original admin requester so they review the proposal.
+              try {
+                const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                request.rescheduleProposal = {
+                  proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                  proposedStartTime: null,
+                  proposedEndTime: null,
+                  reviewerNotes: note || null,
+                  proposedAt: new Date(),
+                  proposedBy: actorSnapshot
+                };
+                // set CoordinatorFinalAction metadata
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+                // set unified review-rescheduled status and assign the original admin reviewer
+                request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+                if (request.made_by_id) {
+                  request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+                }
+              } catch (e) {
+                // fallback to previous behavior
+                request.Status = REQUEST_STATUSES.PENDING_REVIEW;
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+              }
             }
           } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rejected') {
             // Sys admin accepting coordinator's rejection: complete the rejection
             request.Status = 'Rejected';
           } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
-            // Sys admin reviewing coordinator's reschedule
-            if (action === 'Accepted') {
-              request.Status = REQUEST_STATUSES.COMPLETED;
-            } else if (action === 'Rejected') {
-              request.Status = 'Rejected';
-            }
+              // Sys admin reviewing coordinator's reschedule
+              if (action === 'Accepted') {
+                // Ensure there's a reschedule proposal attached so finalize can apply it.
+                try {
+                  if (!request.rescheduleProposal) {
+                    // Prefer explicit RescheduledDate recorded earlier, otherwise use incoming action data
+                    const proposedDate = request.RescheduledDate || rescheduledDate || null;
+                    request.rescheduleProposal = {
+                      proposedDate: proposedDate ? new Date(proposedDate) : null,
+                      proposedStartTime: null,
+                      proposedEndTime: null,
+                      reviewerNotes: request.CoordinatorFinalActionDate ? (request.CoordinatorFinalActionDate.toString()) : (note || null),
+                      proposedAt: request.CoordinatorFinalActionDate || new Date(),
+                      proposedBy: { id: request.coordinator_id || null, role: 'Coordinator', name: null }
+                    };
+                  }
+                  const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                  await this._finalizeRequest(request, event, 'approved', actorSnapshot, note, { applyReschedule: true });
+                } catch (e) {
+                  // fallback: mark completed and continue
+                  request.Status = REQUEST_STATUSES.COMPLETED;
+                }
+              } else if (action === 'Rejected') {
+                request.Status = 'Rejected';
+              }
           } else if (lowerStatus.includes('pending') && actorRole === 'Coordinator') {
             // Coordinator acting on admin's request
             if (action === 'Accepted') {
@@ -2145,9 +2241,29 @@ class EventRequestService {
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
-              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
-              request.CoordinatorFinalAction = 'Rescheduled';
-              request.CoordinatorFinalActionDate = new Date();
+              // Coordinator proposes a reschedule on an admin-created request.
+              // Attach rescheduleProposal and route to admin for review.
+              try {
+                const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                request.rescheduleProposal = {
+                  proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                  proposedStartTime: null,
+                  proposedEndTime: null,
+                  reviewerNotes: note || null,
+                  proposedAt: new Date(),
+                  proposedBy: actorSnapshot
+                };
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+                request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+                if (request.made_by_id) {
+                  request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+                }
+              } catch (e) {
+                request.Status = REQUEST_STATUSES.PENDING_REVIEW;
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+              }
             }
           } else if ((String(status || '').toLowerCase().includes('resched') || status === 'Rescheduled_By_Admin') && actorRole === 'Coordinator') {
             // Coordinator acting on admin's reschedule
@@ -2230,7 +2346,44 @@ class EventRequestService {
             request.rescheduleProposal = null;
           }
 
-          await request.save();
+          // If admin accepted a reschedule that has a proposal attached, apply it and finalize
+          try {
+            if (action === 'Accepted' && request.rescheduleProposal && (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator')) {
+              // Only the reviewer should finalize; ensure actor is the resolved reviewer
+              const reviewerId = request.reviewer && request.reviewer.id ? String(request.reviewer.id) : null;
+              const isReviewerActor = reviewerId ? String(reviewerId) === String(actorId) : false;
+              if (isReviewerActor || actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+                const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                await this._finalizeRequest(request, event, 'approved', actorSnapshot, note, { applyReschedule: true });
+                finalizedByAccept = true;
+              }
+            }
+          } catch (e) {
+            // swallow finalize errors, continue to normal save path
+            console.warn('Failed to finalize reschedule on accept:', e && e.message ? e.message : e);
+          }
+
+          // Ensure reschedule proposals consistently set unified review state
+          try {
+            if (request.rescheduleProposal && String(request.Status || '').toLowerCase() !== String(REQUEST_STATUSES.REVIEW_RESCHEDULED).toLowerCase()) {
+              request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+              // If proposer is coordinator and original requester was an admin,
+              // route reviewer to the original admin so they can review the proposal.
+              const propRole = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.role ? String(request.rescheduleProposal.proposedBy.role).toLowerCase() : null;
+              if (propRole === 'coordinator' && request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin') && request.made_by_id) {
+                request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+              } else if (!request.reviewer || !request.reviewer.id) {
+                // fallback to coordinator as reviewer
+                if (request.coordinator_id) request.reviewer = { id: request.coordinator_id, role: 'Coordinator', name: null };
+              }
+            }
+          } catch (e) {
+            // ignore normalization errors
+          }
+
+          if (!finalizedByAccept) {
+            await request.save();
+          }
         }
       }
 

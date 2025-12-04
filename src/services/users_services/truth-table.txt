@@ -1,12 +1,4 @@
-Actors
-
-A = Admin
-
-C = Coordinator
-
-S = Stakeholder
-
-Legend for actions
+Key action symbols
 
 V = view
 
@@ -14,46 +6,52 @@ AC = accept
 
 RJ = reject
 
-📌 1. Admin → Coordinator (Admin requests, Coordinator reviews)
-Scenario	Admin (Requester)	Coordinator (Reviewer)
-A reschedules event → C reviews	V	V, AC, RJ
-📌 2. Coordinator → Admin (Coordinator requests, Admin reviews)
-Scenario	Coordinator (Requester)	Admin (Reviewer)
-C reschedules event → A reviews	V	V, AC, RJ
-📌 3. Stakeholder → Coordinator (Stakeholder requests, Coordinator reviews)
-Scenario	Stakeholder (Requester)	Coordinator (Reviewer)
-S reschedules event → C reviews	V	V, AC, RJ
-📌 4. Stakeholder → Admin (Stakeholder requests, Admin reviews)
-Scenario	Stakeholder (Requester)	Admin (Reviewer)
-S reschedules event → A reviews	V	V, AC, RJ
-📌 5. Coordinator → Stakeholder (Coordinator requests, Stakeholder reviews)
+RS = resched (reviewer proposes a new date/time and sends it back to requester)
 
-(If this flow exists; if not, ignore)
+Flow model (two-step reschedule exchange)
 
-Scenario	Coordinator (Requester)	Stakeholder (Reviewer)
-C reschedules → S reviews	V	V, AC, RJ
-📌 6. Admin → Stakeholder (Admin requests, Stakeholder reviews)
+Requester creates a reschedule request (initial request).
 
-(If this flow exists; if not, ignore)
+Requester actions: V only.
 
-Scenario	Admin (Requester)	Stakeholder (Reviewer)
-A reschedules → S reviews	V	V, AC, RJ
-📌 Condensed Master Table (All Actor Pairs)
-Requester → Reviewer	Requester Actions	Reviewer Actions
-Admin → Coordinator	V	V, AC, RJ
-Coordinator → Admin	V	V, AC, RJ
-Stakeholder → Coordinator	V	V, AC, RJ
-Stakeholder → Admin	V	V, AC, RJ
-Coordinator → Stakeholder	V	V, AC, RJ
+Reviewer actions: V, AC, RJ, RS.
 
-📌 Key Guarantees This Table Enforces
+If reviewer picks AC → request accepted → final status changed accordingly.
 
-No self-approval.
+If reviewer picks RJ → request rejected → final status changed accordingly.
 
-No contradictory action sets.
+If reviewer picks RS → reviewer proposes a new schedule and sends the proposal back to the requester.
 
-Consistent behavior across all reschedule flows.
+Reviewer-proposed resched (after reviewer used RS) — now the requester receives a reviewer-proposed reschedule and must respond.
 
-Backwards compatibility with multi-actor systems.
+Requester actions: V, AC, RJ (they may accept the reviewer-proposed schedule or reject it).
 
-Reviewer always has control; requester never does.
+Reviewer at this stage has no further actions on that pending proposal (unless your system allows multiple proposal rounds — see edge cases).
+
+Important invariant: A user must never be able to accept/reject their own request in the initial step. (If they are also the reviewer by role, the reviewer powers apply only when they are not the request creator or unless a well-defined override exists.)
+
+Full truth table (covers all actor-pairs and both steps)
+Legend:
+
+Initial = initial resched request created by Requester.
+
+ReviewerRS = reviewer chose RS and sent a proposed schedule back to Requester.
+
+Master table — Initial request (Requester creates request)
+Requester → Reviewer	Requester (Initial)	Reviewer (Initial)
+Admin → Coordinator	V	V, AC, RJ, RS
+Coordinator → Admin	V	V, AC, RJ, RS
+Stakeholder → Coordinator	V	V, AC, RJ, RS
+Stakeholder → Admin	V	V, AC, RJ, RS
+Coordinator → Stakeholder	V	V, AC, RJ, RS
+Admin → Stakeholder	V	V, AC, RJ, RS
+Master table — After reviewer used RS (Reviewer proposes new schedule)
+Requester ← Reviewer (proposal)	Requester (on proposed resched)	Reviewer (after proposing)
+Admin ← Coordinator (C proposed)	V, AC, RJ	(no actions on the proposed request / or view only)
+Coordinator ← Admin (A proposed)	V, AC, RJ	(no actions / view only)
+Coordinator ← Stakeholder (S proposed)	V, AC, RJ	(no actions / view only)
+Admin ← Stakeholder (S proposed)	V, AC, RJ	(no actions / view only)
+Stakeholder ← Admin (A proposed)	V, AC, RJ	(no actions / view only)
+Stakeholder ← Coordinator (C proposed)	V, AC, RJ	(no actions / view only)
+
+Implementation note: after the reviewer proposes (RS), the proposal becomes a new pending decision for the original requester to accept/reject. You can allow multiple proposal rounds (reviewer proposes again after requester rejects), but that must be explicit in your workflow rules.
