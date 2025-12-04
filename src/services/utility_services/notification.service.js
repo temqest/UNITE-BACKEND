@@ -492,13 +492,14 @@ class NotificationService {
    * These are convenience wrappers around the model static methods
    */
   
-  async createNewRequestNotification(adminId, requestId, eventId, coordinatorId) {
+  async createNewRequestNotification(recipientId, requestId, eventId, coordinatorId, recipientType = null) {
     try {
       const notification = await Notification.createNewRequestNotification(
-        adminId,
+        recipientId,
         requestId,
         eventId,
-        coordinatorId
+        coordinatorId,
+        recipientType
       );
       return {
         success: true,

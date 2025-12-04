@@ -1248,11 +1248,14 @@ class EventRequestService {
       });
 
       if (reviewer && reviewer.id) {
+        // Pass reviewer.role so the notification is created for correct recipient type
+        const recipientType = reviewer.role || null;
         await Notification.createNewRequestNotification(
           reviewer.id,
           requestId,
           eventId,
-          coordinatorId
+          coordinatorId,
+          recipientType
         );
       }
 
@@ -1598,42 +1601,25 @@ class EventRequestService {
 
       
 
-      // If the actor is admin or coordinator, auto-approve the updated request/event
-      // but only when the request was NOT created by a stakeholder. If the
-      // request was created by a stakeholder, admins/coordinators must not
-      // finalize it — the stakeholder must confirm any reschedule/changes.
-      // Also skip auto-approval for coordinator review requests where coordinator is acting
-      if ((actorIsAdmin || actorIsCoordinator) && !(actorIsCoordinator && request.reviewer && request.reviewer.role === 'Coordinator')) {
+      // NOTE: Editing/updating an event should NOT change its publish/review
+      // status implicitly. Preserve the current `event.Status` and
+      // `request.Status` when admins or coordinators perform updates.
+      // Only set administrative metadata (e.g., Admin_ID/ApprovedByAdminID)
+      // but do not transition the workflow state here.
+      if (actorIsAdmin || actorIsCoordinator) {
         try {
           const approverId = actorId;
           if (freshEvent) {
-            // If stakeholder created the request, do not auto-publish the event
-            const createdByStakeholder = !!request.stakeholder_id;
-            const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
-            if (createdByStakeholder) {
-              freshEvent.Status = 'Pending';
-            } else if (createdByCoordinator) {
-              // Admin updated a coordinator-created request: keep pending so coordinator can confirm
-              freshEvent.Status = 'Pending';
-            } else {
-              // Non-stakeholder, non-coordinator created events may be auto-published
-              freshEvent.Status = 'Completed';
-            }
-            freshEvent.ApprovedByAdminID = approverId;
+            // Preserve whatever status the event currently has. Only record
+            // which admin/coordinator performed this update.
+            if (!freshEvent.ApprovedByAdminID) freshEvent.ApprovedByAdminID = approverId;
             await freshEvent.save();
           }
-          // mark request status appropriately
-          const createdByStakeholder = !!request.stakeholder_id;
-          const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
-          if (!createdByStakeholder && !createdByCoordinator) {
-            request.Status = REQUEST_STATUSES.COMPLETED;
-          } else if (createdByCoordinator) {
-            request.Status = REQUEST_STATUSES.REVIEW_ACCEPTED;
-          }
+          // Record admin id on request for audit but do not change Status
           request.Admin_ID = approverId;
           await request.save();
         } catch (e) {
-          // swallow approval errors to avoid blocking update
+          // swallow metadata save errors to avoid blocking update
         }
       }
 

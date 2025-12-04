@@ -98,25 +98,61 @@ notificationSchema.methods.markAsRead = function() {
 };
 
 // Static method to create notification for new request
-notificationSchema.statics.createNewRequestNotification = async function(adminId, requestId, eventId, coordinatorId) {
-  // Attempt to enrich message with event title when available
+notificationSchema.statics.createNewRequestNotification = async function(recipientId, requestId, eventId, coordinatorId, recipientType) {
+  // Attempt to enrich message with event title, category, and requester information
   let eventTitle = null;
+  let eventCategory = null;
+  let requesterLabel = null;
   try {
     const Event = mongoose.model('Event');
-    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title').lean().exec();
-    if (ev) eventTitle = ev.Event_Title;
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Category Start_Date').lean().exec();
+    if (ev) {
+      eventTitle = ev.Event_Title;
+      eventCategory = ev.Category;
+    }
   } catch (e) {
     // ignore
   }
 
+  try {
+    const EventRequest = mongoose.model('EventRequest');
+    const req = await EventRequest.findOne({ Request_ID: requestId }).lean().exec();
+    if (req) {
+      // Prefer creator snapshot if present
+      if (req.creator && req.creator.name) {
+        requesterLabel = `${req.creator.role || req.made_by_role || 'Requester'}: ${req.creator.name}`;
+      } else if (req.made_by_role) {
+        requesterLabel = `${req.made_by_role}${req.made_by_id ? ` (${req.made_by_id})` : ''}`;
+      } else if (req.stakeholder_id) {
+        requesterLabel = `Stakeholder (${req.stakeholder_id})`;
+      } else if (coordinatorId) {
+        requesterLabel = `Coordinator (${coordinatorId})`;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  const finalRecipientType = recipientType && String(recipientType).length > 0 ? (String(recipientType).toLowerCase().includes('system') || String(recipientType).toLowerCase().includes('admin') ? 'Admin' : (String(recipientType).toLowerCase().includes('stakeholder') ? 'Stakeholder' : 'Coordinator')) : 'Admin';
+
+  const categoryLabel = eventCategory || 'Event';
+  const title = 'New Event Request';
+  const messageParts = [];
+  if (eventTitle) messageParts.push(`"${eventTitle}"`);
+  messageParts.push(`a new ${categoryLabel} request`);
+  if (requesterLabel) messageParts.push(`submitted by ${requesterLabel}`);
+  messageParts.push('requires your review.');
+
+  const message = messageParts.join(' ');
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    Recipient_ID: adminId,
-    RecipientType: 'Admin',
+    Recipient_ID: recipientId,
+    RecipientType: finalRecipientType,
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'New Event Request',
-    Message: eventTitle ? `A new event request "${eventTitle}" has been submitted and requires your review.` : `A new event request has been submitted and requires your review.`,
+    Title: title,
+    Message: message,
     NotificationType: 'NewRequest'
   });
 };
