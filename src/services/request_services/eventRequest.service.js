@@ -3002,10 +3002,29 @@ class EventRequestService {
         if (filters.date_to) query.createdAt.$lte = new Date(filters.date_to);
       }
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      // Use aggregation to compute a status priority so results are ordered
+      // Pending -> Approved -> Rejected, then by newest createdAt.
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -3037,10 +3056,27 @@ class EventRequestService {
 
       const query = { stakeholder_id: stakeholderId };
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -3060,7 +3096,7 @@ class EventRequestService {
         }
 
         return {
-          ...r.toObject(),
+          ...r,
           event: event ? event.toObject() : null,
           coordinator: coordinator ? {
             ...coordinator.toObject(),
@@ -3105,10 +3141,28 @@ class EventRequestService {
         if (filters.date_to) query.createdAt.$lte = new Date(filters.date_to);
       }
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: 1 }); // Oldest first
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        // For pending requests keep oldest-first within pending
+        { $sort: { status_priority: 1, createdAt: 1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -3167,10 +3221,27 @@ class EventRequestService {
         if (eventIdMatches.length > 0) query.$or.push({ Event_ID: { $in: eventIdMatches } });
       }
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -3197,10 +3268,27 @@ class EventRequestService {
   async getAllRequests(page = 1, limit = 50) {
     try {
       const skip = (page - 1) * limit;
-      const requests = await EventRequest.find({})
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      const pipeline = [
+        { $match: {} },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments({});
 
