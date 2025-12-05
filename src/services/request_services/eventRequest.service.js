@@ -1056,12 +1056,16 @@ class EventRequestService {
 
       // Check for cancelled status
       if (status.includes('cancel')) {
-        return ['view', 'delete'];
+        // Only system administrators (Admin role) should be allowed to delete cancelled requests.
+        if (role === 'systemadmin' || role === 'admin') return ['view', 'delete'];
+        return ['view'];
       }
 
       // Check for rejected status
       if (status.includes('reject')) {
-        return ['view', 'delete'];
+        // Only system administrators (Admin role) should be allowed to delete rejected requests.
+        if (role === 'systemadmin' || role === 'admin') return ['view', 'delete'];
+        return ['view'];
       }
 
       // Legacy handling for other statuses
@@ -1715,6 +1719,12 @@ class EventRequestService {
       const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Request not found');
+      }
+
+      // Stakeholders are not allowed to cancel requests or events
+      const actorRoleNorm = String(actorRole || '').toLowerCase();
+      if (actorRoleNorm === 'stakeholder') {
+        throw new Error('Unauthorized: Stakeholders are not allowed to cancel requests or events');
       }
 
       const previousStatus = request.Status;
@@ -3223,6 +3233,12 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
+      // Normalize actor role and disallow Stakeholders from cancelling
+      const actorRoleNorm = String(actorRole || '').toLowerCase();
+      if (actorRoleNorm === 'stakeholder') {
+        throw new Error('Unauthorized: Stakeholders are not allowed to cancel requests or events');
+      }
+
       // Allow cancellation of pending requests or approved events
       const lowerStatus = String(request.Status || '').toLowerCase();
       const isPending = lowerStatus.includes('pending');
@@ -3362,6 +3378,58 @@ class EventRequestService {
           }
         } catch (notificationError) {
           console.warn('Error sending cancellation notifications:', notificationError);
+        }
+
+        // If a coordinator cancelled this request, notify all system admins
+        if (actorRole === 'Coordinator') {
+          try {
+            const models = require('../../models/index');
+            const SystemAdmin = models.SystemAdmin;
+            const Notification = models.Notification;
+            const admins = await SystemAdmin.find({}).select('Admin_ID').lean().exec();
+            if (admins && admins.length) {
+              for (const a of admins) {
+                try {
+                  await Notification.createCoordinatorActionNotification(
+                    a.Admin_ID,
+                    requestId,
+                    request.Event_ID,
+                    'Cancelled'
+                  );
+                } catch (innerErr) {
+                  console.warn('Failed to notify admin', a && a.Admin_ID, innerErr);
+                }
+              }
+            }
+          } catch (adminNotifyErr) {
+            console.warn('Error notifying system admins of coordinator cancellation:', adminNotifyErr);
+          }
+        }
+
+        // If a coordinator cancelled this event/request, notify all system admins
+        if (actorRole === 'Coordinator') {
+          try {
+            const models = require('../../models/index');
+            const SystemAdmin = models.SystemAdmin;
+            const Notification = models.Notification;
+            const admins = await SystemAdmin.find({}).select('Admin_ID').lean().exec();
+            if (admins && admins.length) {
+              for (const a of admins) {
+                try {
+                  await Notification.createCoordinatorActionNotification(
+                    a.Admin_ID,
+                    requestId,
+                    request.Event_ID,
+                    'Cancelled'
+                  );
+                } catch (innerErr) {
+                  console.warn('Failed to notify admin', a && a.Admin_ID, innerErr);
+                }
+              }
+            }
+          } catch (adminNotifyErr) {
+            console.warn('Error notifying system admins of coordinator cancellation:', adminNotifyErr);
+          }
         }
         
         return {
@@ -3506,26 +3574,42 @@ class EventRequestService {
         throw new Error('Cannot delete request. Only cancelled or rejected requests can be deleted.');
       }
 
-      // Authorization checks based on actor role and request status
-      const isAdmin = actorRole === 'SystemAdmin' || actorRole === 'Admin';
-      const isStakeholder = actorRole === 'Stakeholder' && request.stakeholder_id === actorId;
-      
-      let isCoordinator = false;
-      if (actorRole === 'Coordinator') {
-        isCoordinator = request.coordinator_id === actorId;
-        if (!isCoordinator && request.stakeholder_id) {
+      // Authorization: Only System Administrators / Admin role may permanently delete cancelled/rejected requests
+      const actorRoleNorm = String(actorRole || '').toLowerCase();
+      const isSysAdmin = actorRoleNorm === 'systemadmin' || actorRoleNorm === 'admin';
+      if (!isSysAdmin) {
+        throw new Error('Unauthorized: Only system administrators can permanently delete cancelled or rejected requests');
+      }
+
+      // Notify involved parties about permanent deletion before removing records
+      try {
+        const Notification = require('../../models/index').Notification;
+        // Notify coordinator
+        if (request.coordinator_id) {
           try {
-            const Stakeholder = require('../../models/index').Stakeholder;
-            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
-            isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
-          } catch (e) {
-            // Ignore errors in stakeholder lookup
+            await Notification.createRequestDeletionNotification(
+              request.coordinator_id,
+              requestId,
+              request.Event_ID
+            );
+          } catch (nerr) {
+            console.warn('Failed to notify coordinator about deletion', nerr);
           }
         }
-      }
-      
-      if (!isAdmin && !isStakeholder && !isCoordinator) {
-        throw new Error('Unauthorized: Only sys admins, coordinators (who own the request or handle the stakeholder), or the stakeholder who created this request can delete cancelled or rejected requests');
+        // Notify stakeholder
+        if (request.stakeholder_id) {
+          try {
+            await Notification.createStakeholderDeletionNotification(
+              request.stakeholder_id,
+              requestId,
+              request.Event_ID
+            );
+          } catch (nerr) {
+            console.warn('Failed to notify stakeholder about deletion', nerr);
+          }
+        }
+      } catch (notifyErr) {
+        console.warn('Error while sending deletion notifications:', notifyErr);
       }
 
       // Delete everything associated with the request

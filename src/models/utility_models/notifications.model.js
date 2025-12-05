@@ -402,30 +402,130 @@ notificationSchema.statics.createStakeholderCancellationNotification = function(
 };
 
 // Static method to create notification for request deletion
-notificationSchema.statics.createRequestDeletionNotification = function(coordinatorId, requestId, eventId) {
+notificationSchema.statics.createRequestDeletionNotification = async function(coordinatorId, requestId, eventId) {
+  // Attempt to include event title and type for better context
+  let eventTitle = null;
+  let eventCategory = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Category').lean().exec();
+    if (ev) {
+      eventTitle = ev.Event_Title;
+      eventCategory = ev.Category;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  // If the Event record is not available (already deleted), try to enrich
+  // the message from the EventRequest document which may contain category
+  // or originalData snapshots.
+  if (!eventTitle && !eventCategory) {
+    try {
+      const EventRequest = mongoose.model('EventRequest');
+      const req = await EventRequest.findOne({ Request_ID: requestId }).select('Category originalData Event_Title creator').lean().exec();
+      if (req) {
+        if (!eventCategory && req.Category) eventCategory = req.Category;
+        // originalData may contain a snapshot of the event
+        if (!eventTitle && req.originalData) {
+          eventTitle = req.originalData.Event_Title || req.originalData.EventTitle || null;
+        }
+        // fallback: some older docs may have Event_Title at root
+        if (!eventTitle && req.Event_Title) eventTitle = req.Event_Title;
+        // also consider creator snapshot
+        if (!eventTitle && req.creator && req.creator.name) {
+          // nothing to do for title, but keep creator present for context (not used here)
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const title = 'Event Request Deleted';
+  const messageParts = [];
+  if (eventTitle) messageParts.push(`"${eventTitle}"`);
+  if (eventCategory) messageParts.push(`${eventCategory}`);
+  messageParts.push('request has been permanently deleted by the system administrator.');
+  const message = messageParts.join(' ');
+  // Avoid creating duplicate deletion notifications for the same recipient+request
+  try {
+    const recent = await this.findOne({
+      Recipient_ID: coordinatorId,
+      Request_ID: requestId,
+      NotificationType: 'RequestDeleted'
+    }).sort({ createdAt: -1 }).lean().exec();
+    if (recent) {
+      const createdAt = new Date(recent.createdAt || recent.created_at || recent.created_at);
+      if (Date.now() - createdAt.getTime() < 60 * 1000) {
+        // return existing recent notification instead of creating a duplicate
+        return recent;
+      }
+    }
+  } catch (e) {
+    // ignore dedupe failures and proceed to create
+  }
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     Recipient_ID: coordinatorId,
     RecipientType: 'Coordinator',
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'Event Request Deleted',
-    Message: `A cancelled event request has been permanently deleted by the system administrator.`,
+    Title: title,
+    Message: message,
     NotificationType: 'RequestDeleted',
     ActionTaken: 'Deleted'
   });
 };
 
 // Static method to create notification for stakeholder when request is deleted
-notificationSchema.statics.createStakeholderDeletionNotification = function(stakeholderId, requestId, eventId) {
+notificationSchema.statics.createStakeholderDeletionNotification = async function(stakeholderId, requestId, eventId) {
+  // Attempt to include event title and type for better context
+  let eventTitle = null;
+  let eventCategory = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Category').lean().exec();
+    if (ev) {
+      eventTitle = ev.Event_Title;
+      eventCategory = ev.Category;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  const title = 'Your Event Request Deleted';
+  const messageParts = [];
+  if (eventTitle) messageParts.push(`"${eventTitle}"`);
+  if (eventCategory) messageParts.push(`${eventCategory}`);
+  messageParts.push('request has been permanently deleted by the system administrator.');
+  const message = messageParts.join(' ');
+  // Avoid creating duplicate deletion notifications for the same recipient+request
+  try {
+    const recent = await this.findOne({
+      Recipient_ID: stakeholderId,
+      Request_ID: requestId,
+      NotificationType: 'RequestDeleted'
+    }).sort({ createdAt: -1 }).lean().exec();
+    if (recent) {
+      const createdAt = new Date(recent.createdAt || recent.created_at || recent.created_at);
+      if (Date.now() - createdAt.getTime() < 60 * 1000) {
+        return recent;
+      }
+    }
+  } catch (e) {
+    // ignore dedupe failures and proceed to create
+  }
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     Recipient_ID: stakeholderId,
     RecipientType: 'Stakeholder',
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'Your Event Request Deleted',
-    Message: `Your event request has been permanently deleted by the system administrator.`,
+    Title: title,
+    Message: message,
     NotificationType: 'RequestDeleted',
     ActionTaken: 'Deleted'
   });
