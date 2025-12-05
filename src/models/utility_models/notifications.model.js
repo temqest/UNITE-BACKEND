@@ -160,7 +160,7 @@ notificationSchema.statics.createNewRequestNotification = async function(recipie
 // Static method to create notification for admin action
 // recipientId: id of the recipient (coordinator or stakeholder)
 // recipientType: optional string 'Coordinator'|'Stakeholder' (defaults to 'Coordinator')
-notificationSchema.statics.createAdminActionNotification = async function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator', originalDate = null) {
+notificationSchema.statics.createAdminActionNotification = async function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator', originalDate = null, actorRole = 'Admin', actorName = null) {
   let title, message, type;
   // Attempt to fetch event title for clearer messages
   let eventTitle = null;
@@ -172,10 +172,20 @@ notificationSchema.statics.createAdminActionNotification = async function(recipi
     if (ev) eventTitle = ev.Event_Title;
   } catch (e) {}
 
+  // Determine actor label
+  let actorLabel = 'Admin';
+  if (actorRole) {
+    const roleLower = String(actorRole).toLowerCase();
+    if (roleLower === 'systemadmin' || roleLower === 'admin') actorLabel = 'Admin';
+    else if (roleLower === 'coordinator') actorLabel = 'Coordinator';
+    else if (roleLower === 'stakeholder') actorLabel = 'Stakeholder';
+    else actorLabel = actorRole;
+  }
+
   switch(action) {
     case 'Accepted':
       title = 'Event Request Accepted';
-      message = eventTitle ? `The event request "${eventTitle}" has been accepted by the admin. Please review and approve.` : `Your event request has been accepted by the admin. Please review and approve.`;
+      message = eventTitle ? `The event request "${eventTitle}" has been accepted by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Please review and approve.` : `Your event request has been accepted by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Please review and approve.`;
       type = 'AdminAccepted';
       break;
       case 'Rescheduled':
@@ -197,31 +207,31 @@ notificationSchema.statics.createAdminActionNotification = async function(recipi
       }
       if (eventTitle) {
         if (original && when) {
-          message = `The event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the admin. ${note ? `Note: ${note}` : ''}`;
+          message = `The event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
         } else if (when) {
-          message = `The event "${eventTitle}" has a proposed reschedule to ${when} by the admin. ${note ? `Note: ${note}` : ''}`;
+          message = `The event "${eventTitle}" has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
         } else {
-          message = `The event "${eventTitle}" has a proposed reschedule by the admin. ${note ? `Note: ${note}` : ''}`;
+          message = `The event "${eventTitle}" has a proposed reschedule by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
         }
       } else {
         if (original && when) {
-          message = `Your event request scheduled on ${original} has been rescheduled by the admin. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+          message = `Your event request scheduled on ${original} has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
         } else if (when) {
-          message = `Your event request has been rescheduled by the admin. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
         } else {
-          message = `Your event request has been rescheduled by the admin. ${note ? `Note: ${note}` : ''}`;
+          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
         }
       }
       type = 'AdminRescheduled';
       break;
     case 'Rejected':
       title = 'Event Request Rejected';
-      message = eventTitle ? `The event "${eventTitle}" has been rejected by the admin. ${note ? `Note: ${note}` : ''}` : `Your event request has been rejected by the admin. ${note ? `Note: ${note}` : ''}`;
+      message = eventTitle ? `The event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
       type = 'AdminRejected';
       break;
     default:
       title = 'Event Request Update';
-      message = eventTitle ? `The event "${eventTitle}" has been updated by the admin.` : `Your event request has been updated by the admin.`;
+      message = eventTitle ? `The event "${eventTitle}" has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
       type = 'NewRequest';
   }
 

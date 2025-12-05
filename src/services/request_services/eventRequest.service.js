@@ -863,11 +863,11 @@ class EventRequestService {
       // Handle pending-review workflow. The request model uses a unified
       // `pending-review` status; use the `reviewer` field to determine who may act.
       const status = String(req.Status || '').toLowerCase();
-      if (status.includes('pending') || status.includes('review')) {
+      const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled') || !!(req.rescheduleProposal && req.rescheduleProposal.proposedBy);
+      if (status.includes('pending') || status.includes('review') || isRescheduled) {
         const reviewerRole = req.reviewer && req.reviewer.role ? String(req.reviewer.role).toLowerCase() : null;
 
         const isReviewAccepted = status.includes('review') && status.includes('accepted');
-        const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled');
 
         // Special-case: handle reschedule proposals explicitly and symmetrically.
         // Universal rules:
@@ -1034,6 +1034,10 @@ class EventRequestService {
           // in addition to accepting/rejecting. Preserve original creator rule.
           if (role === 'coordinator' && (isReviewer || (isAssigned && !isCreator))) {
             return ['view', 'resched', 'accept', 'reject'];
+          }
+          // Allow stakeholder to accept/reject coordinator's reschedule proposals
+          if (role === 'stakeholder' && req.rescheduleProposal && req.rescheduleProposal.proposedBy && String(req.rescheduleProposal.proposedBy.role).toLowerCase() === 'coordinator' && req.stakeholder_id === actorId) {
+            return ['view', 'accept', 'reject'];
           }
           return ['view'];
         }
@@ -1721,16 +1725,15 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
-      // Stakeholders are not allowed to cancel requests or events
+      const action = actionData.action || 'Accepted'; // Accepted, Rejected, Rescheduled
+      const normalizedAction = String(action || '').toLowerCase();
+
+      // Stakeholders are not allowed to cancel requests or events, but can reschedule, accept, reject, or cancel
       const actorRoleNorm = String(actorRole || '').toLowerCase();
-      if (actorRoleNorm === 'stakeholder') {
+      if (actorRoleNorm === 'stakeholder' && !['rescheduled', 'accepted', 'rejected', 'cancelled'].includes(normalizedAction)) {
         throw new Error('Unauthorized: Stakeholders are not allowed to cancel requests or events');
       }
 
-      const previousStatus = request.Status;
-
-      const action = actionData.action || 'Accepted'; // Accepted, Rejected, Rescheduled
-      const normalizedAction = String(action || '').toLowerCase();
       // Normalize actor role for consistent comparisons (accepts 'admin'|'Admin' etc.)
       const role = String(actorRole || '').toLowerCase();
       // Also normalize the `actorRole` parameter into a canonical capitalized form
@@ -1967,9 +1970,9 @@ class EventRequestService {
           } catch (e) {}
         }
       } else if (role === 'stakeholder') {
-        // Stakeholder action - they can accept, reschedule, or cancel approved events
-        if (action !== 'Accepted' && action !== 'Rescheduled' && action !== 'Cancelled') {
-          throw new Error('Stakeholders can only accept, reschedule, or cancel requests');
+        // Stakeholder action - they can accept, reschedule, reject, or cancel approved events
+        if (action !== 'Accepted' && action !== 'Rejected' && action !== 'Rescheduled' && action !== 'Cancelled') {
+          throw new Error('Stakeholders can only accept, reschedule, reject, or cancel requests');
         }
         request.StakeholderFinalAction = action;
         request.StakeholderNote = note;
@@ -2412,8 +2415,20 @@ class EventRequestService {
           metadata: { rescheduledDate: rescheduledDate || null, scheduledAt: event ? event.Start_Date : null }
         });
       } else if (actorRole === 'Stakeholder') {
-        const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
-        const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+        let stakeholderName = null;
+        try {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          if (bloodbankStaff) {
+            stakeholderName = `${bloodbankStaff.First_Name || ''} ${bloodbankStaff.Last_Name || ''}`.trim();
+          } else {
+            // Try Stakeholder model
+            const Stakeholder = require('../../models/index').Stakeholder;
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: actorId });
+            if (stakeholder) {
+              stakeholderName = stakeholder.Stakeholder_Name || stakeholder.name || null;
+            }
+          }
+        } catch (e) {}
         try {
           await EventRequestHistory.logCreatorResponse({
             requestId: requestId,
