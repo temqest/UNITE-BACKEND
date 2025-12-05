@@ -44,7 +44,7 @@ class NotificationController {
       }
 
       const filters = {
-        isRead: req.query.isRead === 'true' || req.query.isRead === true,
+        isRead: req.query.isRead !== undefined ? (req.query.isRead === 'true' || req.query.isRead === true) : undefined,
         type: req.query.type,
         date_from: req.query.date_from,
         date_to: req.query.date_to,

@@ -185,7 +185,7 @@ router.get('/notifications/unread-count', async (req, res, next) => {
  * @desc    Mark notification as read
  * @access  Private
  */
-router.put('/notifications/:notificationId/read', async (req, res, next) => {
+router.put('/notifications/:notificationId/read', authenticate, async (req, res, next) => {
   try {
     await notificationController.markAsRead(req, res);
   } catch (error) {
@@ -211,7 +211,7 @@ router.put('/notifications/mark-multiple-read', async (req, res, next) => {
  * @desc    Mark all notifications as read for a user
  * @access  Private
  */
-router.put('/notifications/mark-all-read', async (req, res, next) => {
+router.put('/notifications/mark-all-read', authenticate, async (req, res, next) => {
   try {
     await notificationController.markAllAsRead(req, res);
   } catch (error) {
