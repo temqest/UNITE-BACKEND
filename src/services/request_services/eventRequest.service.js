@@ -2104,6 +2104,9 @@ class EventRequestService {
           } else if (lowerStatus.includes('resched') && actorRole === 'Coordinator') {
             // Coordinator accepted admin's reschedule: event is approved
             event.Status = 'Completed';
+          } else if ((actorRole === 'SystemAdmin' || actorRole === 'Admin') && request.stakeholder_id) {
+            // Admin accepted stakeholder-created request: event is approved
+            event.Status = 'Completed';
           } else {
             // Admin/Coordinator accepted regular request: keep pending for next step
             event.Status = 'Pending';
@@ -2351,8 +2354,8 @@ class EventRequestService {
             // Non-stakeholder, non-coordinator created requests: admin/coordinator acceptance completes the request
             request.Status = REQUEST_STATUSES.COMPLETED;
           } else if (createdByStakeholder && action !== 'Rescheduled' && action !== 'Rejected') {
-            // Admin acted on stakeholder-created request: set to pending stakeholder review (only for acceptance)
-            request.Status = 'Pending_Stakeholder_Review';
+            // Admin acted on stakeholder-created request: finalize the request (admin actions are final for stakeholder requests)
+            request.Status = REQUEST_STATUSES.COMPLETED;
           }
           // Clear any attached reschedule proposal if this action finalizes the flow.
           if ((action === 'Accepted' || action === 'Rejected' || action === 'Cancelled') && request.rescheduleProposal) {
@@ -2480,6 +2483,21 @@ class EventRequestService {
               recipientType = 'Admin';
             }
           }
+        } else if (action === 'Cancelled') {
+          // Notify the creator about cancellation
+          if (request.stakeholder_id) {
+            recipientId = request.stakeholder_id;
+            recipientType = 'Stakeholder';
+          } else if (request.made_by_role === 'Coordinator') {
+            recipientId = request.coordinator_id;
+            recipientType = 'Coordinator';
+          } else if (request.made_by_role === 'SystemAdmin') {
+            // For admin cancellations, notify the admin who created the request
+            if (request.made_by_id) {
+              recipientId = request.made_by_id;
+              recipientType = 'Admin';
+            }
+          }
         } else if (action === 'Rescheduled') {
           // Notify the appropriate reviewer/owner for the reschedule proposal.
           // Prefer the assigned reviewer snapshot, then the coordinator, then stakeholder.
@@ -2575,7 +2593,8 @@ class EventRequestService {
           // Decide whether to notify based on normalizedAction and resolved recipient
           const shouldNotifyCreator = Boolean(notifyRecipientId && String(normalizedAction || '').includes('accept')) ||
             Boolean(notifyRecipientId && String(normalizedAction || '').includes('resched')) ||
-            Boolean(notifyRecipientId && String(normalizedAction || '').includes('reject'));
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('reject')) ||
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('cancel'));
 
           console.log('Notification: creator notify check', { notifyRecipientId, actorId, action, normalizedAction, shouldNotifyCreator, notifyRecipientType });
 

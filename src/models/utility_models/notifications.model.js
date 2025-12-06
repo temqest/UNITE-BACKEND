@@ -229,6 +229,11 @@ notificationSchema.statics.createAdminActionNotification = async function(recipi
       message = eventTitle ? `The event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
       type = 'AdminRejected';
       break;
+    case 'Cancelled':
+      title = 'Event Request Cancelled';
+      message = eventTitle ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+      type = 'RequestCancelled';
+      break;
     default:
       title = 'Event Request Update';
       message = eventTitle ? `The event "${eventTitle}" has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
@@ -318,6 +323,11 @@ notificationSchema.statics.createReviewerDecisionNotification = async function(r
       title = 'Your Event Request Rejected';
       message = eventTitle ? `Your event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
       type = 'CoordinatorRejected';
+      break;
+    case 'Cancelled':
+      title = 'Your Event Request Cancelled';
+      message = eventTitle ? `Your event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'RequestCancelled';
       break;
     case 'Rescheduled':
       title = 'Your Event Request Rescheduled';
