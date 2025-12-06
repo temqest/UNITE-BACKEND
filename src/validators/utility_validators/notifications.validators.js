@@ -76,11 +76,12 @@ const createNotificationSchema = Joi.object({
       'CoordinatorAccepted',
       'CoordinatorRejected',
       'RequestCompleted',
-      'RequestRejected'
+      'RequestRejected',
+      'RequestCancelled'
     )
     .messages({
       'any.required': 'Notification Type is required',
-      'any.only': 'Notification Type must be one of: NewRequest, AdminAccepted, AdminRescheduled, AdminRejected, CoordinatorApproved, CoordinatorAccepted, CoordinatorRejected, RequestCompleted, or RequestRejected'
+      'any.only': 'Notification Type must be one of: NewRequest, AdminAccepted, AdminRescheduled, AdminRejected, CoordinatorApproved, CoordinatorAccepted, CoordinatorRejected, RequestCompleted, RequestRejected, or RequestCancelled'
     }),
 
   IsRead: Joi.boolean()
@@ -185,10 +186,11 @@ const updateNotificationSchema = Joi.object({
       'CoordinatorAccepted',
       'CoordinatorRejected',
       'RequestCompleted',
-      'RequestRejected'
+      'RequestRejected',
+      'RequestCancelled'
     )
     .messages({
-      'any.only': 'Notification Type must be one of: NewRequest, AdminAccepted, AdminRescheduled, AdminRejected, CoordinatorApproved, CoordinatorAccepted, CoordinatorRejected, RequestCompleted, or RequestRejected'
+      'any.only': 'Notification Type must be one of: NewRequest, AdminAccepted, AdminRescheduled, AdminRejected, CoordinatorApproved, CoordinatorAccepted, CoordinatorRejected, RequestCompleted, RequestRejected, or RequestCancelled'
     }),
 
   IsRead: Joi.boolean()

@@ -863,11 +863,74 @@ class EventRequestService {
       // Handle pending-review workflow. The request model uses a unified
       // `pending-review` status; use the `reviewer` field to determine who may act.
       const status = String(req.Status || '').toLowerCase();
-      if (status.includes('pending') || status.includes('review')) {
+      const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled') || !!(req.rescheduleProposal && req.rescheduleProposal.proposedBy);
+      if (status.includes('pending') || status.includes('review') || isRescheduled) {
         const reviewerRole = req.reviewer && req.reviewer.role ? String(req.reviewer.role).toLowerCase() : null;
 
         const isReviewAccepted = status.includes('review') && status.includes('accepted');
-        const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled');
+
+        // Special-case: handle reschedule proposals explicitly and symmetrically.
+        // Universal rules:
+        // - Requester (proposer) => view only
+        // - Reviewer => view, accept, reject
+        // Reviewer resolution uses request.reviewer snapshot where available,
+        // otherwise falls back to coordinator_id/stakeholder_id. Admins may
+        // also act as reviewers when appropriate.
+        try {
+          const resProp = req.rescheduleProposal || null;
+          let proposerRole = null;
+          let proposerId = null;
+          if (resProp && resProp.proposedBy) {
+            proposerRole = String(resProp.proposedBy.role || '').toLowerCase();
+            proposerId = resProp.proposedBy.id || null;
+          }
+
+          // Account for CoordinatorFinalAction flag as a legacy reschedule marker
+          const coordFinal = (req.CoordinatorFinalAction || req.coordinatorFinalAction || null);
+          const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
+          if (!proposerRole && coordFinalIsResched) {
+            proposerRole = 'coordinator';
+          }
+
+          // If we have a legacy CoordinatorFinalAction reschedule marker but
+          // no explicit proposer id, use the request.coordinator_id as the
+          // proposer identifier so proposer checks work for legacy flows.
+          if (!proposerId && coordFinalIsResched && req.coordinator_id) {
+            proposerId = req.coordinator_id;
+          }
+
+          // Resolve reviewer snapshot or fallbacks
+          const reviewerSnapshot = req.reviewer || null;
+          const reviewerId = reviewerSnapshot && reviewerSnapshot.id ? reviewerSnapshot.id : (req.coordinator_id || req.stakeholder_id || null);
+          const reviewerRoleRaw = reviewerSnapshot && reviewerSnapshot.role ? String(reviewerSnapshot.role).toLowerCase() : (req.coordinator_id ? 'coordinator' : (req.stakeholder_id ? 'stakeholder' : null));
+
+          // If the current actor is the proposer, they must be view-only
+          if (proposerId && String(proposerId) === String(actorId)) {
+            return ['view'];
+          }
+
+          // If actor is the explicit reviewer (by id) they get reviewer rights
+          // Reviewer rights include the ability to propose a reschedule (RS)
+          // in the initial review step.
+          if (reviewerId && String(reviewerId) === String(actorId)) {
+            return ['view', 'accept', 'reject', 'resched'];
+          }
+
+          // If actor role matches resolved reviewer role, grant reviewer rights
+          if (reviewerRoleRaw && reviewerRoleRaw === role) {
+            return ['view', 'accept', 'reject', 'resched'];
+          }
+
+          // Allow system admins to act as reviewers for reschedules by default
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'accept', 'reject', 'resched'];
+          }
+
+          // Fallback: everyone else can only view
+          return ['view'];
+        } catch (e) {
+          // ignore and continue
+        }
 
         // Special case: if the request is review-accepted (admin accepted a
         // coordinator-created request), only the assigned coordinator/reviewer
@@ -890,23 +953,56 @@ class EventRequestService {
           return ['view'];
         }
 
-        // If this is a reschedule flow, limit coordinator actions to accept/reject only
+        // If this is a reschedule flow, determine who proposed the reschedule
+        // and restrict who may accept it according to business rules:
+        // - Admin proposed: coordinator assigned to the request must approve.
+        // - Coordinator proposed: if no stakeholder involved -> sysadmin must approve;
+        //   if stakeholder involved -> stakeholder must approve (sysadmin may also approve).
+        // - Stakeholder proposed: coordinator or sysadmin must approve.
         if (isRescheduled) {
-          if (role === 'admin' || role === 'systemadmin') {
-            return ['view', 'resched', 'accept', 'reject'];
-          }
-          if (role === 'coordinator') {
-            const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
-            const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
-            // Only assigned/reviewer coordinators may act; they may accept or reject but not reschedule
-            if (isReviewer || isAssigned) {
+          const proposerRoleRaw = req.rescheduleProposal && req.rescheduleProposal.proposedBy && req.rescheduleProposal.proposedBy.role ? String(req.rescheduleProposal.proposedBy.role).toLowerCase() : null;
+          const proposerRole = proposerRoleRaw || null;
+
+          // helper: check if actor is assigned/reviewer coordinator
+          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
+          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
+
+          // Admin proposed reschedule -> only assigned/reviewer coordinator may accept/reject
+          if (proposerRole === 'systemadmin' || proposerRole === 'admin') {
+            if (role === 'coordinator' && (isReviewer || isAssigned)) {
               return ['view', 'accept', 'reject'];
             }
+            // Admins may view or propose another reschedule but should not accept their own proposal
+            if (role === 'admin' || role === 'systemadmin') return ['view', 'resched'];
             return ['view'];
           }
-          // stakeholders: treat as view unless stakeholder reviewer
-          if (role === 'stakeholder' && req.stakeholder_id && String(req.stakeholder_id) === String(actorId)) {
-            return ['view', 'accept', 'reject'];
+
+          // Coordinator proposed reschedule
+          if (proposerRole === 'coordinator') {
+            const stakeholderPresent = !!req.stakeholder_id;
+            // If no stakeholder: sys admin must approve
+            if (!stakeholderPresent) {
+              if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
+              return ['view'];
+            }
+            // If stakeholder involved: stakeholder should approve, but sysadmin may also approve
+            if (role === 'stakeholder' && req.stakeholder_id && String(req.stakeholder_id) === String(actorId)) {
+              return ['view', 'accept', 'reject'];
+            }
+            if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
+            return ['view'];
+          }
+
+          // Stakeholder proposed reschedule -> coordinator or sysadmin may approve
+          if (proposerRole === 'stakeholder') {
+            if (role === 'coordinator' && (isReviewer || isAssigned)) return ['view', 'accept', 'reject'];
+            if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
+            return ['view'];
+          }
+
+          // Fallback: preserve previous permissive behavior for admins, otherwise view-only
+          if (role === 'admin' || role === 'systemadmin') {
+            return ['view', 'resched', 'accept', 'reject'];
           }
           return ['view'];
         }
@@ -934,7 +1030,13 @@ class EventRequestService {
           const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
           const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
           const isCreator = String(req.made_by_role || '').toLowerCase() === 'coordinator' && req.made_by_id && String(req.made_by_id) === String(actorId);
+          // Coordinators assigned to review should be able to propose reschedules
+          // in addition to accepting/rejecting. Preserve original creator rule.
           if (role === 'coordinator' && (isReviewer || (isAssigned && !isCreator))) {
+            return ['view', 'resched', 'accept', 'reject'];
+          }
+          // Allow stakeholder to accept/reject coordinator's reschedule proposals
+          if (role === 'stakeholder' && req.rescheduleProposal && req.rescheduleProposal.proposedBy && String(req.rescheduleProposal.proposedBy.role).toLowerCase() === 'coordinator' && req.stakeholder_id === actorId) {
             return ['view', 'accept', 'reject'];
           }
           return ['view'];
@@ -958,12 +1060,16 @@ class EventRequestService {
 
       // Check for cancelled status
       if (status.includes('cancel')) {
-        return ['view', 'delete'];
+        // Only system administrators (Admin role) should be allowed to delete cancelled requests.
+        if (role === 'systemadmin' || role === 'admin') return ['view', 'delete'];
+        return ['view'];
       }
 
       // Check for rejected status
       if (status.includes('reject')) {
-        return ['view', 'delete'];
+        // Only system administrators (Admin role) should be allowed to delete rejected requests.
+        if (role === 'systemadmin' || role === 'admin') return ['view', 'delete'];
+        return ['view'];
       }
 
       // Legacy handling for other statuses
@@ -1215,11 +1321,14 @@ class EventRequestService {
       });
 
       if (reviewer && reviewer.id) {
+        // Pass reviewer.role so the notification is created for correct recipient type
+        const recipientType = reviewer.role || null;
         await Notification.createNewRequestNotification(
           reviewer.id,
           requestId,
           eventId,
-          coordinatorId
+          coordinatorId,
+          recipientType
         );
       }
 
@@ -1565,42 +1674,25 @@ class EventRequestService {
 
       
 
-      // If the actor is admin or coordinator, auto-approve the updated request/event
-      // but only when the request was NOT created by a stakeholder. If the
-      // request was created by a stakeholder, admins/coordinators must not
-      // finalize it — the stakeholder must confirm any reschedule/changes.
-      // Also skip auto-approval for coordinator review requests where coordinator is acting
-      if ((actorIsAdmin || actorIsCoordinator) && !(actorIsCoordinator && request.reviewer && request.reviewer.role === 'Coordinator')) {
+      // NOTE: Editing/updating an event should NOT change its publish/review
+      // status implicitly. Preserve the current `event.Status` and
+      // `request.Status` when admins or coordinators perform updates.
+      // Only set administrative metadata (e.g., Admin_ID/ApprovedByAdminID)
+      // but do not transition the workflow state here.
+      if (actorIsAdmin || actorIsCoordinator) {
         try {
           const approverId = actorId;
           if (freshEvent) {
-            // If stakeholder created the request, do not auto-publish the event
-            const createdByStakeholder = !!request.stakeholder_id;
-            const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
-            if (createdByStakeholder) {
-              freshEvent.Status = 'Pending';
-            } else if (createdByCoordinator) {
-              // Admin updated a coordinator-created request: keep pending so coordinator can confirm
-              freshEvent.Status = 'Pending';
-            } else {
-              // Non-stakeholder, non-coordinator created events may be auto-published
-              freshEvent.Status = 'Completed';
-            }
-            freshEvent.ApprovedByAdminID = approverId;
+            // Preserve whatever status the event currently has. Only record
+            // which admin/coordinator performed this update.
+            if (!freshEvent.ApprovedByAdminID) freshEvent.ApprovedByAdminID = approverId;
             await freshEvent.save();
           }
-          // mark request status appropriately
-          const createdByStakeholder = !!request.stakeholder_id;
-          const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
-          if (!createdByStakeholder && !createdByCoordinator) {
-            request.Status = REQUEST_STATUSES.COMPLETED;
-          } else if (createdByCoordinator) {
-            request.Status = REQUEST_STATUSES.REVIEW_ACCEPTED;
-          }
+          // Record admin id on request for audit but do not change Status
           request.Admin_ID = approverId;
           await request.save();
         } catch (e) {
-          // swallow approval errors to avoid blocking update
+          // swallow metadata save errors to avoid blocking update
         }
       }
 
@@ -1633,10 +1725,27 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
-      const previousStatus = request.Status;
-
       const action = actionData.action || 'Accepted'; // Accepted, Rejected, Rescheduled
       const normalizedAction = String(action || '').toLowerCase();
+
+      // Stakeholders are not allowed to cancel requests or events, but can reschedule, accept, reject, or cancel
+      const actorRoleNorm = String(actorRole || '').toLowerCase();
+      if (actorRoleNorm === 'stakeholder' && !['rescheduled', 'accepted', 'rejected', 'cancelled'].includes(normalizedAction)) {
+        throw new Error('Unauthorized: Stakeholders are not allowed to cancel requests or events');
+      }
+
+      // Normalize actor role for consistent comparisons (accepts 'admin'|'Admin' etc.)
+      const role = String(actorRole || '').toLowerCase();
+      // Also normalize the `actorRole` parameter into a canonical capitalized form
+      // so existing strict comparisons (e.g. actorRole === 'Admin') continue to work.
+      const canonicalActorRole = (function() {
+        if (role === 'systemadmin') return 'SystemAdmin';
+        if (role === 'admin') return 'Admin';
+        if (role === 'coordinator') return 'Coordinator';
+        if (role === 'stakeholder') return 'Stakeholder';
+        return actorRole;
+      })();
+      actorRole = canonicalActorRole;
       const note = actionData.note || null;
       const rescheduledDate = actionData.rescheduledDate || null;
 
@@ -1645,38 +1754,102 @@ class EventRequestService {
       console.log('processRequestAction: actorRole=', actorRole, 'status=', status);
       let isAuthorized = false;
 
+      // Block proposers from accepting or rejecting their own reschedule
+      // proposals. Do not block proposers from creating a reschedule (they
+      // must be able to propose). Handle legacy CoordinatorFinalAction by
+      // resolving proposerId from request.coordinator_id when necessary.
+      try {
+        const resProp = request.rescheduleProposal || null;
+        let proposerId = resProp && resProp.proposedBy && resProp.proposedBy.id ? resProp.proposedBy.id : null;
+        const coordFinal = request.CoordinatorFinalAction || request.coordinatorFinalAction || null;
+        const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
+        if (!proposerId && coordFinalIsResched && request.coordinator_id) proposerId = request.coordinator_id;
+
+        // If the actor is the proposer (explicit proposal), disallow accept/reject only
+        if (proposerId && String(proposerId) === String(actorId)) {
+          if (normalizedAction.includes('accept') || normalizedAction.includes('reject')) {
+            throw new Error('Unauthorized: proposer cannot accept or reject their own reschedule');
+          }
+        }
+      } catch (e) {
+        // rethrow authorization errors
+        if (e && String(e.message).toLowerCase().includes('unauthorized')) throw e;
+      }
+
       // Normalize status for comparisons (handle legacy variants like Pending_Admin_Review etc.)
       const lowerStatus = String(status || '').toLowerCase();
 
-      if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
-        // Admins can act on any pending review or reschedule flows, and cancel
-        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || action === 'Cancelled';
-      } else if (actorRole === 'Coordinator') {
-        // Coordinators can act on pending, review, or reschedule flows, and cancel
-        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled';
-
-        // For pending or review statuses, verify ownership / assignment. Allow if:
-        // - request.coordinator_id matches actorId
-        // - request.reviewer is a coordinator and matches actorId
-        // - stakeholder (if present) is linked to this coordinator (legacy linkage)
-        if (lowerStatus.includes('pending') || lowerStatus.includes('review')) {
-          let owns = false;
-          // Direct coordinator assignment on the request
-          if (request.coordinator_id && String(request.coordinator_id) === String(actorId)) owns = true;
-          // Reviewer assignment (snapshot)
-          if (!owns && request.reviewer && request.reviewer.role && String(request.reviewer.role).toLowerCase() === 'coordinator' && String(request.reviewer.id) === String(actorId)) owns = true;
-          // Stakeholder belongs to this coordinator (legacy linkage)
-          if (!owns && request.stakeholder_id) {
-            try {
-              const Stakeholder = require('../../models/index').Stakeholder;
-              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
-              if (stakeholder && (String(stakeholder.Coordinator_ID) === String(actorId) || String(stakeholder.coordinator_id) === String(actorId))) owns = true;
-            } catch (e) {
-              // ignore lookup errors
-            }
+      if (role === 'systemadmin' || role === 'admin') {
+        // Admins can act on pending review flows and may propose reschedules.
+        // For reschedule flows, only allow admins to act when they are NOT the
+        // proposer of the reschedule (they should not accept their own proposal).
+        if (lowerStatus.includes('resched')) {
+          const proposerRole = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.role ? String(request.rescheduleProposal.proposedBy.role).toLowerCase() : null;
+          if (proposerRole === 'systemadmin' || proposerRole === 'admin') {
+            // Admin proposed this reschedule: allow proposing another reschedule or cancelling,
+            // but do not allow accept/reject here.
+            isAuthorized = normalizedAction.includes('resched') || action === 'Cancelled' || lowerStatus.includes('pending');
+          } else {
+            // Admin may act on reschedules proposed by others
+            isAuthorized = true;
           }
+        } else {
+          // Allow admin actions when pending, cancelled, or proposing reschedule.
+          // Additionally, if there's an outstanding rescheduleProposal (even when
+          // the request.Status is 'Completed'), allow admins to act on it provided
+          // they are not the proposer. This lets admins accept/reject reschedules
+          // submitted earlier without requiring the request status to have been
+          // updated to a resched state.
+          const hasReschedProposal = !!(request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id);
+          const proposerId = hasReschedProposal ? String(request.rescheduleProposal.proposedBy.id) : null;
+          const mayActOnProposal = hasReschedProposal && proposerId !== String(actorId);
+          isAuthorized = lowerStatus.includes('pending') || action === 'Cancelled' || normalizedAction.includes('resched') || mayActOnProposal;
+        }
+      } else if (role === 'coordinator') {
+        // Determine ownership/assignment up-front so we can authorize reschedule
+        // proposals even when the request is already completed.
+        let owns = false;
+        // Direct coordinator assignment on the request
+        if (request.coordinator_id && String(request.coordinator_id) === String(actorId)) owns = true;
+        // Reviewer assignment (snapshot)
+        if (!owns && request.reviewer && request.reviewer.role && String(request.reviewer.role).toLowerCase() === 'coordinator' && String(request.reviewer.id) === String(actorId)) owns = true;
+        // Stakeholder belongs to this coordinator (legacy linkage)
+        if (!owns && request.stakeholder_id) {
+          try {
+            const Stakeholder = require('../../models/index').Stakeholder;
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
+            if (stakeholder && (String(stakeholder.Coordinator_ID) === String(actorId) || String(stakeholder.coordinator_id) === String(actorId))) owns = true;
+          } catch (e) {
+            // ignore lookup errors
+          }
+        }
+
+        // Coordinators can act on pending, review, or reschedule flows, and cancel.
+        // Business rule: coordinators should be able to propose a reschedule even
+        // on completed/approved events. Allow any coordinator to propose a
+        // reschedule (the reviewer-selection logic later determines who must
+        // approve). For other actions we still require the request to be in a
+        // pending/review/resched state or the coordinator owns the request.
+        isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('resched') || lowerStatus.includes('review') || action === 'Cancelled' || normalizedAction.includes('resched') || owns;
+
+        // For pending or review statuses, enforce ownership/assignment checks.
+        if (lowerStatus.includes('pending') || lowerStatus.includes('review')) {
           if (!owns) {
             throw new Error('Unauthorized: Coordinator does not own this request');
+          }
+        }
+
+        // Prevent coordinators from approving reschedules they themselves proposed
+        // especially when business rules require sysadmin approval (no stakeholder involved).
+        if (lowerStatus.includes('resched') && request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
+          try {
+            const proposerRole = String(request.rescheduleProposal.proposedBy.role || '').toLowerCase();
+            const proposerId = request.rescheduleProposal.proposedBy.id;
+            if (proposerRole === 'coordinator' && !request.stakeholder_id && String(proposerId) === String(actorId)) {
+              throw new Error('Unauthorized: Coordinator reschedule requires system admin approval');
+            }
+          } catch (e) {
+            // if anything odd, fall through to existing ownership checks
           }
         }
 
@@ -1684,7 +1857,7 @@ class EventRequestService {
         if (request.CoordinatorFinalAction && !String(request.CoordinatorFinalAction).toLowerCase().includes('resched') && action !== 'Rescheduled') {
           throw new Error('Coordinator has already acted on this request');
         }
-      } else if (actorRole === 'Stakeholder') {
+      } else if (role === 'stakeholder') {
         // Stakeholders can act when the request is pending or accepted-by-admin flows, and may reschedule/cancel their own requests
         isAuthorized = lowerStatus.includes('pending') || lowerStatus.includes('accepted') || lowerStatus.includes('resched') || (action === 'Cancelled' && request.stakeholder_id === actorId);
         // Also allow reschedule on completed/approved requests if they own the request
@@ -1711,7 +1884,7 @@ class EventRequestService {
       }
 
       // Update request based on actor type
-      if (actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+      if (role === 'systemadmin' || role === 'admin') {
         // Admin action
         request.Admin_ID = actorId;
         request.AdminAction = action;
@@ -1739,13 +1912,36 @@ class EventRequestService {
         } catch (e) {
           // ignore
         }
-      } else if (actorRole === 'Coordinator') {
+      } else if (role === 'coordinator') {
         // Coordinator action
         // If this is a coordinator-review request (reviewer is coordinator and status is pending)
         const isCoordinatorReview = String(status || '').toLowerCase().includes('pending') && request.reviewer && request.reviewer.role === 'Coordinator';
         if (isCoordinatorReview) {
           request.CoordinatorFinalAction = action;
           request.CoordinatorFinalActionDate = new Date();
+          // If coordinator is proposing a reschedule in a coordinator-review
+          // flow, attach a rescheduleProposal and route the review back to the
+          // original admin requester so they can accept/reject the proposal.
+          try {
+            if (action === 'Rescheduled') {
+              const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+              request.rescheduleProposal = {
+                proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                proposedStartTime: null,
+                proposedEndTime: null,
+                reviewerNotes: note || null,
+                proposedAt: new Date(),
+                proposedBy: actorSnapshot
+              };
+              // assign admin reviewer if original requester was admin
+              if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin') && request.made_by_id) {
+                request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+              }
+              request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+            }
+          } catch (e) {
+            // swallow attach errors
+          }
         } else {
           // Acting as admin
           request.Admin_ID = actorId;
@@ -1773,10 +1969,10 @@ class EventRequestService {
             }
           } catch (e) {}
         }
-      } else if (actorRole === 'Stakeholder') {
-        // Stakeholder action - they can accept, reschedule, or cancel approved events
-        if (action !== 'Accepted' && action !== 'Rescheduled' && action !== 'Cancelled') {
-          throw new Error('Stakeholders can only accept, reschedule, or cancel requests');
+      } else if (role === 'stakeholder') {
+        // Stakeholder action - they can accept, reschedule, reject, or cancel approved events
+        if (action !== 'Accepted' && action !== 'Rejected' && action !== 'Rescheduled' && action !== 'Cancelled') {
+          throw new Error('Stakeholders can only accept, reschedule, reject, or cancel requests');
         }
         request.StakeholderFinalAction = action;
         request.StakeholderNote = note;
@@ -1823,23 +2019,18 @@ class EventRequestService {
 
       // Update event status
       const event = await Event.findOne({ Event_ID: request.Event_ID });
+      // capture original start date before any modifications so notifications
+      // can show the before/after dates correctly
+      const originalEventStart = event && event.Start_Date ? new Date(event.Start_Date) : null;
+      let finalizedByAccept = false;
       if (event) {
-        if (action === 'Rescheduled') {
+          if (action === 'Rescheduled') {
           // Handle rescheduling logic
-          const createdByStakeholder = !!request.stakeholder_id;
-          const createdByCoordinator = request.made_by_role === 'Coordinator';
-          if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
-            if (createdByStakeholder) {
-              event.Status = 'Pending';
-            } else if (createdByCoordinator && (actorRole === 'SystemAdmin' || actorRole === 'Admin')) {
-              // Coordinator-created request rescheduled by admin: keep pending for coordinator review
-              event.Status = 'Pending';
-            } else {
-              event.Status = 'Completed';
-            }
-          } else {
-            event.Status = 'Rescheduled';
-          }
+          // Whenever a reschedule is proposed by any actor (admin, coordinator,
+          // or stakeholder), revoke the event's approved/completed status and
+          // set it back to 'Pending' so the proposed schedule must be
+          // reviewed/confirmed by the appropriate reviewer.
+          event.Status = 'Pending';
 
           // Apply rescheduled date
           if (rescheduledDate) {
@@ -1857,7 +2048,36 @@ class EventRequestService {
               currentEnd.setFullYear(rs.getFullYear(), rs.getMonth(), rs.getDate());
               event.End_Date = currentEnd;
             }
-          }
+            }
+            // If a coordinator proposed a reschedule on an admin-created request,
+            // move the request into the unified review-rescheduled status and
+            // assign the original admin (made_by_id) as the reviewer so the
+            // admin can accept/reject the proposal.
+            try {
+              const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+              // Attach explicit rescheduleProposal on the request if missing
+              if (!request.rescheduleProposal) {
+                request.rescheduleProposal = {
+                  proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                  proposedStartTime: null,
+                  proposedEndTime: null,
+                  reviewerNotes: note || null,
+                  proposedAt: new Date(),
+                  proposedBy: actorSnapshot
+                };
+              }
+
+              // If the coordinator proposed this and the original requester is an admin,
+              // set the reviewer to the original admin so they can review the proposal.
+              if (actorRole === 'Coordinator' && request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin') && request.made_by_id) {
+                request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+              }
+
+              request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+              await request.save();
+            } catch (e) {
+              // ignore attach errors
+            }
         } else if (action === 'Rejected') {
           event.Status = 'Rejected';
         } else if (action === 'Cancelled') {
@@ -1884,6 +2104,9 @@ class EventRequestService {
           } else if (lowerStatus.includes('resched') && actorRole === 'Coordinator') {
             // Coordinator accepted admin's reschedule: event is approved
             event.Status = 'Completed';
+          } else if ((actorRole === 'SystemAdmin' || actorRole === 'Admin') && request.stakeholder_id) {
+            // Admin accepted stakeholder-created request: event is approved
+            event.Status = 'Completed';
           } else {
             // Admin/Coordinator accepted regular request: keep pending for next step
             event.Status = 'Pending';
@@ -1893,10 +2116,53 @@ class EventRequestService {
         event.ApprovedByAdminID = actorId;
         await event.save();
 
+        // If this action was a reschedule, ensure the request is moved into
+        // the reschedule review flow so reviewers see and act on the proposal.
+        if (action === 'Rescheduled') {
+          try {
+            // Capture a reschedule proposal on the request if not already present
+            if (!request.rescheduleProposal) {
+              request.rescheduleProposal = {
+                proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                proposedStartTime: null,
+                proposedEndTime: null,
+                reviewerNotes: note || null,
+                proposedAt: new Date(),
+                proposedBy: { id: actorId, role: actorRole, name: null }
+              };
+            }
+
+            // Move request into the unified review-rescheduled status so the
+            // frontend and reviewers treat this as a reschedule workflow.
+            request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+            await request.save();
+          } catch (e) {
+            // Do not block the main flow if reschedule attachment fails
+            console.warn('Failed to attach reschedule proposal to request:', e && e.message ? e.message : e);
+          }
+        }
+
         // Handle request completion for admin/coordinator actions
-        if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
+        if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
           const createdByStakeholder = !!request.stakeholder_id;
           const createdByCoordinator = String(request.made_by_role || '').toLowerCase() === 'coordinator';
+          // Special fix: when a coordinator proposed a reschedule (CoordinatorFinalAction
+          // flagged or rescheduleProposal present) and the system admin accepts it,
+          // ensure both the request and the event are finalized as completed.
+          try {
+            const coordFinal = request.CoordinatorFinalAction || request.coordinatorFinalAction || null;
+            const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
+            const proposal = request.rescheduleProposal || null;
+            const proposalBy = proposal && proposal.proposedBy ? String(proposal.proposedBy.role || '').toLowerCase() : null;
+            const isCoordProposal = proposalBy === 'coordinator' || coordFinalIsResched;
+            if (isCoordProposal && (actorRole === 'SystemAdmin' || actorRole === 'Admin') && action === 'Accepted') {
+              // finalize both event and request
+              try {
+                if (event) event.Status = 'Completed';
+              } catch (e) {}
+              request.Status = REQUEST_STATUSES.COMPLETED;
+            }
+          } catch (e) {}
 
           if (lowerStatus.includes('resched') && action === 'Accepted') {
             // Accepting reschedule: complete the request
@@ -1924,21 +2190,62 @@ class EventRequestService {
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
-              // Coordinator rescheduled: sys admin reviews the reschedule date
-              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
-              request.CoordinatorFinalAction = 'Rescheduled';
-              request.CoordinatorFinalActionDate = new Date();
+              // Coordinator rescheduled: create a reschedule proposal and route
+              // it to the original admin requester so they review the proposal.
+              try {
+                const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                request.rescheduleProposal = {
+                  proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                  proposedStartTime: null,
+                  proposedEndTime: null,
+                  reviewerNotes: note || null,
+                  proposedAt: new Date(),
+                  proposedBy: actorSnapshot
+                };
+                // set CoordinatorFinalAction metadata
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+                // set unified review-rescheduled status and assign the original admin reviewer
+                request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+                if (request.made_by_id) {
+                  request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+                }
+              } catch (e) {
+                // fallback to previous behavior
+                request.Status = REQUEST_STATUSES.PENDING_REVIEW;
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+              }
             }
           } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rejected') {
             // Sys admin accepting coordinator's rejection: complete the rejection
             request.Status = 'Rejected';
           } else if (status === 'Pending_Admin_Review' && actorRole === 'SystemAdmin' && request.CoordinatorFinalAction === 'Rescheduled') {
-            // Sys admin reviewing coordinator's reschedule
-            if (action === 'Accepted') {
-              request.Status = REQUEST_STATUSES.COMPLETED;
-            } else if (action === 'Rejected') {
-              request.Status = 'Rejected';
-            }
+              // Sys admin reviewing coordinator's reschedule
+              if (action === 'Accepted') {
+                // Ensure there's a reschedule proposal attached so finalize can apply it.
+                try {
+                  if (!request.rescheduleProposal) {
+                    // Prefer explicit RescheduledDate recorded earlier, otherwise use incoming action data
+                    const proposedDate = request.RescheduledDate || rescheduledDate || null;
+                    request.rescheduleProposal = {
+                      proposedDate: proposedDate ? new Date(proposedDate) : null,
+                      proposedStartTime: null,
+                      proposedEndTime: null,
+                      reviewerNotes: request.CoordinatorFinalActionDate ? (request.CoordinatorFinalActionDate.toString()) : (note || null),
+                      proposedAt: request.CoordinatorFinalActionDate || new Date(),
+                      proposedBy: { id: request.coordinator_id || null, role: 'Coordinator', name: null }
+                    };
+                  }
+                  const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                  await this._finalizeRequest(request, event, 'approved', actorSnapshot, note, { applyReschedule: true });
+                } catch (e) {
+                  // fallback: mark completed and continue
+                  request.Status = REQUEST_STATUSES.COMPLETED;
+                }
+              } else if (action === 'Rejected') {
+                request.Status = 'Rejected';
+              }
           } else if (lowerStatus.includes('pending') && actorRole === 'Coordinator') {
             // Coordinator acting on admin's request
             if (action === 'Accepted') {
@@ -1950,9 +2257,29 @@ class EventRequestService {
               request.CoordinatorFinalAction = 'Rejected';
               request.CoordinatorFinalActionDate = new Date();
             } else if (action === 'Rescheduled') {
-              request.Status = REQUEST_STATUSES.PENDING_REVIEW;
-              request.CoordinatorFinalAction = 'Rescheduled';
-              request.CoordinatorFinalActionDate = new Date();
+              // Coordinator proposes a reschedule on an admin-created request.
+              // Attach rescheduleProposal and route to admin for review.
+              try {
+                const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                request.rescheduleProposal = {
+                  proposedDate: rescheduledDate ? new Date(rescheduledDate) : null,
+                  proposedStartTime: null,
+                  proposedEndTime: null,
+                  reviewerNotes: note || null,
+                  proposedAt: new Date(),
+                  proposedBy: actorSnapshot
+                };
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+                request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+                if (request.made_by_id) {
+                  request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+                }
+              } catch (e) {
+                request.Status = REQUEST_STATUSES.PENDING_REVIEW;
+                request.CoordinatorFinalAction = 'Rescheduled';
+                request.CoordinatorFinalActionDate = new Date();
+              }
             }
           } else if ((String(status || '').toLowerCase().includes('resched') || status === 'Rescheduled_By_Admin') && actorRole === 'Coordinator') {
             // Coordinator acting on admin's reschedule
@@ -2027,15 +2354,57 @@ class EventRequestService {
             // Non-stakeholder, non-coordinator created requests: admin/coordinator acceptance completes the request
             request.Status = REQUEST_STATUSES.COMPLETED;
           } else if (createdByStakeholder && action !== 'Rescheduled' && action !== 'Rejected') {
-            // Admin acted on stakeholder-created request: set to pending stakeholder review (only for acceptance)
-            request.Status = 'Pending_Stakeholder_Review';
+            // Admin acted on stakeholder-created request: finalize the request (admin actions are final for stakeholder requests)
+            request.Status = REQUEST_STATUSES.COMPLETED;
           }
-          await request.save();
+          // Clear any attached reschedule proposal if this action finalizes the flow.
+          if ((action === 'Accepted' || action === 'Rejected' || action === 'Cancelled') && request.rescheduleProposal) {
+            request.rescheduleProposal = null;
+          }
+
+          // If admin accepted a reschedule that has a proposal attached, apply it and finalize
+          try {
+            if (action === 'Accepted' && request.rescheduleProposal && (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator')) {
+              // Only the reviewer should finalize; ensure actor is the resolved reviewer
+              const reviewerId = request.reviewer && request.reviewer.id ? String(request.reviewer.id) : null;
+              const isReviewerActor = reviewerId ? String(reviewerId) === String(actorId) : false;
+              if (isReviewerActor || actorRole === 'SystemAdmin' || actorRole === 'Admin') {
+                const actorSnapshot = await this._buildActorSnapshot(actorRole, actorId);
+                await this._finalizeRequest(request, event, 'approved', actorSnapshot, note, { applyReschedule: true });
+                finalizedByAccept = true;
+              }
+            }
+          } catch (e) {
+            // swallow finalize errors, continue to normal save path
+            console.warn('Failed to finalize reschedule on accept:', e && e.message ? e.message : e);
+          }
+
+          // Ensure reschedule proposals consistently set unified review state
+          try {
+            if (request.rescheduleProposal && String(request.Status || '').toLowerCase() !== String(REQUEST_STATUSES.REVIEW_RESCHEDULED).toLowerCase()) {
+              request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
+              // If proposer is coordinator and original requester was an admin,
+              // route reviewer to the original admin so they can review the proposal.
+              const propRole = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.role ? String(request.rescheduleProposal.proposedBy.role).toLowerCase() : null;
+              if (propRole === 'coordinator' && request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin') && request.made_by_id) {
+                request.reviewer = { id: request.made_by_id, role: 'SystemAdmin', name: null };
+              } else if (!request.reviewer || !request.reviewer.id) {
+                // fallback to coordinator as reviewer
+                if (request.coordinator_id) request.reviewer = { id: request.coordinator_id, role: 'Coordinator', name: null };
+              }
+            }
+          } catch (e) {
+            // ignore normalization errors
+          }
+
+          if (!finalizedByAccept) {
+            await request.save();
+          }
         }
       }
 
       // Create history entry
-      if (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator') {
+      if (role === 'systemadmin' || role === 'admin' || role === 'coordinator') {
         const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
         const actorName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
         
@@ -2049,8 +2418,20 @@ class EventRequestService {
           metadata: { rescheduledDate: rescheduledDate || null, scheduledAt: event ? event.Start_Date : null }
         });
       } else if (actorRole === 'Stakeholder') {
-        const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
-        const stakeholderName = bloodbankStaff ? `${bloodbankStaff.First_Name} ${bloodbankStaff.Last_Name}` : null;
+        let stakeholderName = null;
+        try {
+          const bloodbankStaff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId });
+          if (bloodbankStaff) {
+            stakeholderName = `${bloodbankStaff.First_Name || ''} ${bloodbankStaff.Last_Name || ''}`.trim();
+          } else {
+            // Try Stakeholder model
+            const Stakeholder = require('../../models/index').Stakeholder;
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: actorId });
+            if (stakeholder) {
+              stakeholderName = stakeholder.Stakeholder_Name || stakeholder.name || null;
+            }
+          }
+        } catch (e) {}
         try {
           await EventRequestHistory.logCreatorResponse({
             requestId: requestId,
@@ -2080,7 +2461,7 @@ class EventRequestService {
           } else if (status === 'Pending_Coordinator_Review' && actorRole === 'Coordinator') {
             // Coordinator accepted system admin's request: no notification needed (event published)
             recipientId = null;
-          } else if (status === 'Pending_Admin_Review' && (actorRole === 'SystemAdmin' || actorRole === 'Admin' || actorRole === 'Coordinator')) {
+          } else if (status === 'Pending_Admin_Review' && (role === 'systemadmin' || role === 'admin' || role === 'coordinator')) {
             // Admin accepted: notify next in chain
             if (request.stakeholder_id) {
               recipientId = request.stakeholder_id;
@@ -2102,27 +2483,143 @@ class EventRequestService {
               recipientType = 'Admin';
             }
           }
-        } else if (action === 'Rescheduled') {
-          // Notify the creator about reschedule
-          if (request.made_by_role === 'SystemAdmin' && request.made_by_id) {
-            recipientId = request.made_by_id;
-            recipientType = 'Admin';
+        } else if (action === 'Cancelled') {
+          // Notify the creator about cancellation
+          if (request.stakeholder_id) {
+            recipientId = request.stakeholder_id;
+            recipientType = 'Stakeholder';
           } else if (request.made_by_role === 'Coordinator') {
             recipientId = request.coordinator_id;
             recipientType = 'Coordinator';
+          } else if (request.made_by_role === 'SystemAdmin') {
+            // For admin cancellations, notify the admin who created the request
+            if (request.made_by_id) {
+              recipientId = request.made_by_id;
+              recipientType = 'Admin';
+            }
+          }
+        } else if (action === 'Rescheduled') {
+          // Notify the appropriate reviewer/owner for the reschedule proposal.
+          // Prefer the assigned reviewer snapshot, then the coordinator, then stakeholder.
+          try {
+            if (request.reviewer && request.reviewer.id && String(request.reviewer.id) !== String(actorId)) {
+              recipientId = request.reviewer.id;
+              // normalize reviewer role for recipientType
+              recipientType = (request.reviewer.role === 'SystemAdmin' || String(request.reviewer.role).toLowerCase() === 'admin') ? 'Admin' : (request.reviewer.role || 'Coordinator');
+            } else if (request.coordinator_id && String(request.coordinator_id) !== String(actorId)) {
+              recipientId = request.coordinator_id;
+              recipientType = 'Coordinator';
+            } else if (request.stakeholder_id && String(request.stakeholder_id) !== String(actorId)) {
+              recipientId = request.stakeholder_id;
+              recipientType = 'Stakeholder';
+            } else {
+              // fallback: don't notify the actor (avoid notifying the user who performed the action)
+              recipientId = null;
+              recipientType = null;
+            }
+          } catch (e) {
+            // if anything goes wrong, fall back to not notifying
+            recipientId = null;
+            recipientType = null;
           }
         }
 
         if (recipientId && recipientType) {
-          await Notification.createAdminActionNotification(
-            recipientId,
-            requestId,
-            request.Event_ID,
-            action,
-            note,
-            rescheduledDate,
-            recipientType
-          );
+          try {
+            console.log('Notification: sending', { recipientId, recipientType, action, requestId, eventId: request.Event_ID });
+            await Notification.createAdminActionNotification(
+              recipientId,
+              requestId,
+              request.Event_ID,
+              action,
+              note,
+              rescheduledDate,
+              recipientType,
+              originalEventStart
+            );
+          } catch (e) {
+            console.error('Notification: failed to create admin action notification', e && e.message ? e.message : e);
+          }
+        }
+
+        // Always notify the original requester (creator) about the final decision
+        try {
+          const creatorId = request.stakeholder_id || request.made_by_id || request.coordinator_id || null;
+          // resolve actor name once
+          let actorName = null;
+          try {
+            const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: actorId }).lean().exec();
+            if (staff) actorName = `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim();
+          } catch (e) {}
+          const actorLabel = actorRole || null;
+          // determine recipientType based on which id we selected
+          let creatorRecipientType = 'Coordinator';
+          if (creatorId && request.stakeholder_id && String(creatorId) === String(request.stakeholder_id)) creatorRecipientType = 'Stakeholder';
+          else if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin')) creatorRecipientType = 'Admin';
+
+          // Prefer notifying the proposer of a reschedule (if present and different
+          // from the current actor). Otherwise fall back to the original requester.
+          let notifyRecipientId = null;
+          let notifyRecipientType = null;
+
+          try {
+            if (request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id) {
+              const proposer = request.rescheduleProposal.proposedBy;
+              if (String(proposer.id) !== String(actorId)) {
+                notifyRecipientId = proposer.id;
+                const pr = String(proposer.role || '').toLowerCase();
+                if (pr.includes('admin') || pr.includes('system')) notifyRecipientType = 'Admin';
+                else if (pr.includes('stakeholder')) notifyRecipientType = 'Stakeholder';
+                else notifyRecipientType = 'Coordinator';
+                console.log('Notification: choosing reschedule proposer as creator recipient', { notifyRecipientId, notifyRecipientType, proposer });
+              }
+            }
+          } catch (e) {
+            // ignore proposer resolution errors and fall back
+          }
+
+          if (!notifyRecipientId) {
+            // pick original requester but avoid notifying the actor
+            const fallbackId = request.made_by_id || request.stakeholder_id || request.coordinator_id || null;
+            if (fallbackId && String(fallbackId) !== String(actorId)) {
+              notifyRecipientId = fallbackId;
+              if (fallbackId && request.stakeholder_id && String(fallbackId) === String(request.stakeholder_id)) notifyRecipientType = 'Stakeholder';
+              else if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin')) notifyRecipientType = 'Admin';
+              else notifyRecipientType = 'Coordinator';
+              console.log('Notification: falling back to original requester as creator recipient', { notifyRecipientId, notifyRecipientType });
+            }
+          }
+
+          // Decide whether to notify based on normalizedAction and resolved recipient
+          const shouldNotifyCreator = Boolean(notifyRecipientId && String(normalizedAction || '').includes('accept')) ||
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('resched')) ||
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('reject')) ||
+            Boolean(notifyRecipientId && String(normalizedAction || '').includes('cancel'));
+
+          console.log('Notification: creator notify check', { notifyRecipientId, actorId, action, normalizedAction, shouldNotifyCreator, notifyRecipientType });
+
+          if (shouldNotifyCreator) {
+            try {
+              await Notification.createReviewerDecisionNotification(
+                notifyRecipientId,
+                requestId,
+                request.Event_ID,
+                action,
+                actorLabel,
+                actorName,
+                rescheduledDate || null,
+                originalEventStart || null,
+                notifyRecipientType
+              );
+              console.log('Notification: creator reviewer-decision notification sent', { notifyRecipientId, requestId });
+            } catch (e) {
+              console.error('Notification: failed to send creator reviewer decision notification', e && e.message ? e.message : e);
+            }
+          } else {
+            console.log('Notification: skipping creator notification', { notifyRecipientId, actorId, action, normalizedAction });
+          }
+        } catch (e) {
+          console.error('Notification: failed during creator notification check', e && e.message ? e.message : e);
         }
       } catch (e) {
         // swallow notification errors
@@ -2302,12 +2799,75 @@ class EventRequestService {
 
       // Send notification to admin
       if (request.Admin_ID) {
-        await Notification.createCoordinatorActionNotification(
-          request.Admin_ID,
-          requestId,
-          request.Event_ID,
-          action
-        );
+        try {
+          console.log('coordinatorConfirmRequest: sending coordinator->admin notification', { adminId: request.Admin_ID, requestId, eventId: request.Event_ID, action });
+          await Notification.createCoordinatorActionNotification(
+            request.Admin_ID,
+            requestId,
+            request.Event_ID,
+            action
+          );
+          console.log('coordinatorConfirmRequest: coordinator->admin notification sent', { adminId: request.Admin_ID });
+        } catch (e) {
+          console.error('coordinatorConfirmRequest: failed to send coordinator->admin notification', e && e.message ? e.message : e);
+        }
+      }
+
+      // Also notify the original requester (creator) about the coordinator decision
+      try {
+        // Prefer notifying the proposer of any outstanding reschedule (if different from the coordinator),
+        // otherwise fall back to the original requester (made_by_id / stakeholder_id / coordinator_id).
+        let notifyCreatorId = null;
+        let notifyCreatorType = null;
+
+        try {
+          if (request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id) {
+            const proposer = request.rescheduleProposal.proposedBy;
+            if (String(proposer.id) !== String(coordinatorId)) {
+              notifyCreatorId = proposer.id;
+              const pr = String(proposer.role || '').toLowerCase();
+              if (pr.includes('admin') || pr.includes('system')) notifyCreatorType = 'Admin';
+              else if (pr.includes('stakeholder')) notifyCreatorType = 'Stakeholder';
+              else notifyCreatorType = 'Coordinator';
+              console.log('coordinatorConfirmRequest: chosen proposer as notify target', { notifyCreatorId, notifyCreatorType, proposer });
+            }
+          }
+        } catch (e) {
+          // ignore proposer resolution issues
+        }
+
+        if (!notifyCreatorId) {
+          const fallback = request.made_by_id || request.stakeholder_id || request.coordinator_id || null;
+          if (fallback && String(fallback) !== String(coordinatorId)) {
+            notifyCreatorId = fallback;
+            if (fallback && request.stakeholder_id && String(fallback) === String(request.stakeholder_id)) notifyCreatorType = 'Stakeholder';
+            else if (request.made_by_role && String(request.made_by_role).toLowerCase().includes('admin')) notifyCreatorType = 'Admin';
+            else notifyCreatorType = 'Coordinator';
+            console.log('coordinatorConfirmRequest: falling back to original requester as notify target', { notifyCreatorId, notifyCreatorType });
+          }
+        }
+
+        console.log('coordinatorConfirmRequest: creator resolution', { notifyCreatorId, stakeholder_id: request.stakeholder_id, made_by_id: request.made_by_id, coordinator_id: request.coordinator_id, made_by_role: request.made_by_role });
+
+        if (notifyCreatorId) {
+          console.log('coordinatorConfirmRequest: sending creator reviewer-decision notification', { notifyCreatorId, notifyCreatorType, requestId, eventId: request.Event_ID, action });
+          await Notification.createReviewerDecisionNotification(
+            notifyCreatorId,
+            requestId,
+            request.Event_ID,
+            action,
+            'Coordinator',
+            coordinatorName || null,
+            null,
+            null,
+            notifyCreatorType
+          );
+          console.log('coordinatorConfirmRequest: creator reviewer-decision notification sent', { notifyCreatorId });
+        } else {
+          console.log('coordinatorConfirmRequest: no creator to notify or creator equals coordinator', { notifyCreatorId });
+        }
+      } catch (e) {
+        console.error('coordinatorConfirmRequest: failed to notify creator after coordinatorConfirmRequest', e && e.message ? e.message : e);
       }
 
       return {
@@ -2476,10 +3036,29 @@ class EventRequestService {
         if (filters.date_to) query.createdAt.$lte = new Date(filters.date_to);
       }
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      // Use aggregation to compute a status priority so results are ordered
+      // Pending -> Approved -> Rejected, then by newest createdAt.
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -2511,10 +3090,27 @@ class EventRequestService {
 
       const query = { stakeholder_id: stakeholderId };
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -2534,7 +3130,7 @@ class EventRequestService {
         }
 
         return {
-          ...r.toObject(),
+          ...r,
           event: event ? event.toObject() : null,
           coordinator: coordinator ? {
             ...coordinator.toObject(),
@@ -2579,10 +3175,28 @@ class EventRequestService {
         if (filters.date_to) query.createdAt.$lte = new Date(filters.date_to);
       }
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: 1 }); // Oldest first
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        // For pending requests keep oldest-first within pending
+        { $sort: { status_priority: 1, createdAt: 1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -2641,10 +3255,27 @@ class EventRequestService {
         if (eventIdMatches.length > 0) query.$or.push({ Event_ID: { $in: eventIdMatches } });
       }
 
-      const requests = await EventRequest.find(query)
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      const pipeline = [
+        { $match: query },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments(query);
 
@@ -2671,10 +3302,27 @@ class EventRequestService {
   async getAllRequests(page = 1, limit = 50) {
     try {
       const skip = (page - 1) * limit;
-      const requests = await EventRequest.find({})
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 });
+      const pipeline = [
+        { $match: {} },
+        { $addFields: {
+          status_priority: {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "pending" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "review" } }, then: 0 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "accept|approved|complete" } }, then: 1 },
+                { case: { $regexMatch: { input: { $toLower: "$Status" }, regex: "reject" } }, then: 2 }
+              ],
+              default: 3
+            }
+          }
+        } },
+        { $sort: { status_priority: 1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ];
+
+      const requests = await EventRequest.aggregate(pipeline).exec();
 
       const total = await EventRequest.countDocuments({});
 
@@ -2705,6 +3353,12 @@ class EventRequestService {
       const request = await this._findRequest(requestId);
       if (!request) {
         throw new Error('Request not found');
+      }
+
+      // Normalize actor role and disallow Stakeholders from cancelling
+      const actorRoleNorm = String(actorRole || '').toLowerCase();
+      if (actorRoleNorm === 'stakeholder') {
+        throw new Error('Unauthorized: Stakeholders are not allowed to cancel requests or events');
       }
 
       // Allow cancellation of pending requests or approved events
@@ -2846,6 +3500,58 @@ class EventRequestService {
           }
         } catch (notificationError) {
           console.warn('Error sending cancellation notifications:', notificationError);
+        }
+
+        // If a coordinator cancelled this request, notify all system admins
+        if (actorRole === 'Coordinator') {
+          try {
+            const models = require('../../models/index');
+            const SystemAdmin = models.SystemAdmin;
+            const Notification = models.Notification;
+            const admins = await SystemAdmin.find({}).select('Admin_ID').lean().exec();
+            if (admins && admins.length) {
+              for (const a of admins) {
+                try {
+                  await Notification.createCoordinatorActionNotification(
+                    a.Admin_ID,
+                    requestId,
+                    request.Event_ID,
+                    'Cancelled'
+                  );
+                } catch (innerErr) {
+                  console.warn('Failed to notify admin', a && a.Admin_ID, innerErr);
+                }
+              }
+            }
+          } catch (adminNotifyErr) {
+            console.warn('Error notifying system admins of coordinator cancellation:', adminNotifyErr);
+          }
+        }
+
+        // If a coordinator cancelled this event/request, notify all system admins
+        if (actorRole === 'Coordinator') {
+          try {
+            const models = require('../../models/index');
+            const SystemAdmin = models.SystemAdmin;
+            const Notification = models.Notification;
+            const admins = await SystemAdmin.find({}).select('Admin_ID').lean().exec();
+            if (admins && admins.length) {
+              for (const a of admins) {
+                try {
+                  await Notification.createCoordinatorActionNotification(
+                    a.Admin_ID,
+                    requestId,
+                    request.Event_ID,
+                    'Cancelled'
+                  );
+                } catch (innerErr) {
+                  console.warn('Failed to notify admin', a && a.Admin_ID, innerErr);
+                }
+              }
+            }
+          } catch (adminNotifyErr) {
+            console.warn('Error notifying system admins of coordinator cancellation:', adminNotifyErr);
+          }
         }
         
         return {
@@ -2990,26 +3696,42 @@ class EventRequestService {
         throw new Error('Cannot delete request. Only cancelled or rejected requests can be deleted.');
       }
 
-      // Authorization checks based on actor role and request status
-      const isAdmin = actorRole === 'SystemAdmin' || actorRole === 'Admin';
-      const isStakeholder = actorRole === 'Stakeholder' && request.stakeholder_id === actorId;
-      
-      let isCoordinator = false;
-      if (actorRole === 'Coordinator') {
-        isCoordinator = request.coordinator_id === actorId;
-        if (!isCoordinator && request.stakeholder_id) {
+      // Authorization: Only System Administrators / Admin role may permanently delete cancelled/rejected requests
+      const actorRoleNorm = String(actorRole || '').toLowerCase();
+      const isSysAdmin = actorRoleNorm === 'systemadmin' || actorRoleNorm === 'admin';
+      if (!isSysAdmin) {
+        throw new Error('Unauthorized: Only system administrators can permanently delete cancelled or rejected requests');
+      }
+
+      // Notify involved parties about permanent deletion before removing records
+      try {
+        const Notification = require('../../models/index').Notification;
+        // Notify coordinator
+        if (request.coordinator_id) {
           try {
-            const Stakeholder = require('../../models/index').Stakeholder;
-            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: request.stakeholder_id });
-            isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
-          } catch (e) {
-            // Ignore errors in stakeholder lookup
+            await Notification.createRequestDeletionNotification(
+              request.coordinator_id,
+              requestId,
+              request.Event_ID
+            );
+          } catch (nerr) {
+            console.warn('Failed to notify coordinator about deletion', nerr);
           }
         }
-      }
-      
-      if (!isAdmin && !isStakeholder && !isCoordinator) {
-        throw new Error('Unauthorized: Only sys admins, coordinators (who own the request or handle the stakeholder), or the stakeholder who created this request can delete cancelled or rejected requests');
+        // Notify stakeholder
+        if (request.stakeholder_id) {
+          try {
+            await Notification.createStakeholderDeletionNotification(
+              request.stakeholder_id,
+              requestId,
+              request.Event_ID
+            );
+          } catch (nerr) {
+            console.warn('Failed to notify stakeholder about deletion', nerr);
+          }
+        }
+      } catch (notifyErr) {
+        console.warn('Error while sending deletion notifications:', notifyErr);
       }
 
       // Delete everything associated with the request

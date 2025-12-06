@@ -69,8 +69,8 @@ function resolveEventIntent(category, categoryDoc = {}, event = {}) {
   }
 
   if (category === 'Advocacy') {
-    if (categoryDoc.Topic) {
-      return `advance the advocacy topic "${categoryDoc.Topic}"`;
+    if (categoryDoc.ExpectedAudienceSize) {
+      return `reach an expected audience size of ${categoryDoc.ExpectedAudienceSize}`;
     }
     if (categoryDoc.TargetAudience) {
       return `engage ${categoryDoc.TargetAudience}`;
@@ -79,11 +79,12 @@ function resolveEventIntent(category, categoryDoc = {}, event = {}) {
   }
 
   if (category === 'Training') {
+    const type = categoryDoc.TrainingType ? `${categoryDoc.TrainingType} ` : '';
+    if (categoryDoc.MaxParticipants) {
+      return `conduct ${type}training for up to ${categoryDoc.MaxParticipants} participants`;
+    }
     if (categoryDoc.TrainingType) {
       return `conduct ${categoryDoc.TrainingType} training`;
-    }
-    if (categoryDoc.MaxParticipants) {
-      return `train up to ${categoryDoc.MaxParticipants} participants`;
     }
     return 'deliver hands-on training';
   }

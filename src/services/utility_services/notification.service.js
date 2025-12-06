@@ -492,13 +492,14 @@ class NotificationService {
    * These are convenience wrappers around the model static methods
    */
   
-  async createNewRequestNotification(adminId, requestId, eventId, coordinatorId) {
+  async createNewRequestNotification(recipientId, requestId, eventId, coordinatorId, recipientType = null) {
     try {
       const notification = await Notification.createNewRequestNotification(
-        adminId,
+        recipientId,
         requestId,
         eventId,
-        coordinatorId
+        coordinatorId,
+        recipientType
       );
       return {
         success: true,
@@ -509,7 +510,7 @@ class NotificationService {
     }
   }
 
-  async createAdminActionNotification(coordinatorId, requestId, eventId, action, note, rescheduledDate) {
+  async createAdminActionNotification(coordinatorId, requestId, eventId, action, note, rescheduledDate, originalDate = null) {
     try {
       // The model helper now accepts recipientId and optional recipientType
       const notification = await Notification.createAdminActionNotification(
@@ -520,7 +521,8 @@ class NotificationService {
         note,
         rescheduledDate,
         // default recipientType maintained by caller; the service wrapper keeps signature
-        'Coordinator'
+        'Coordinator',
+        originalDate
       );
       return {
         success: true,

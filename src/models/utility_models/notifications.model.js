@@ -78,6 +78,10 @@ const notificationSchema = new mongoose.Schema({
   RescheduledDate: {
     type: Date
   }
+  ,
+  OriginalDate: {
+    type: Date
+  }
 }, {
   timestamps: true
 });
@@ -94,15 +98,61 @@ notificationSchema.methods.markAsRead = function() {
 };
 
 // Static method to create notification for new request
-notificationSchema.statics.createNewRequestNotification = function(adminId, requestId, eventId, coordinatorId) {
+notificationSchema.statics.createNewRequestNotification = async function(recipientId, requestId, eventId, coordinatorId, recipientType) {
+  // Attempt to enrich message with event title, category, and requester information
+  let eventTitle = null;
+  let eventCategory = null;
+  let requesterLabel = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Category Start_Date').lean().exec();
+    if (ev) {
+      eventTitle = ev.Event_Title;
+      eventCategory = ev.Category;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  try {
+    const EventRequest = mongoose.model('EventRequest');
+    const req = await EventRequest.findOne({ Request_ID: requestId }).lean().exec();
+    if (req) {
+      // Prefer creator snapshot if present
+      if (req.creator && req.creator.name) {
+        requesterLabel = `${req.creator.role || req.made_by_role || 'Requester'}: ${req.creator.name}`;
+      } else if (req.made_by_role) {
+        requesterLabel = `${req.made_by_role}${req.made_by_id ? ` (${req.made_by_id})` : ''}`;
+      } else if (req.stakeholder_id) {
+        requesterLabel = `Stakeholder (${req.stakeholder_id})`;
+      } else if (coordinatorId) {
+        requesterLabel = `Coordinator (${coordinatorId})`;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  const finalRecipientType = recipientType && String(recipientType).length > 0 ? (String(recipientType).toLowerCase().includes('system') || String(recipientType).toLowerCase().includes('admin') ? 'Admin' : (String(recipientType).toLowerCase().includes('stakeholder') ? 'Stakeholder' : 'Coordinator')) : 'Admin';
+
+  const categoryLabel = eventCategory || 'Event';
+  const title = 'New Event Request';
+  const messageParts = [];
+  if (eventTitle) messageParts.push(`"${eventTitle}"`);
+  messageParts.push(`a new ${categoryLabel} request`);
+  if (requesterLabel) messageParts.push(`submitted by ${requesterLabel}`);
+  messageParts.push('requires your review.');
+
+  const message = messageParts.join(' ');
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    Recipient_ID: adminId,
-    RecipientType: 'Admin',
+    Recipient_ID: recipientId,
+    RecipientType: finalRecipientType,
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'New Event Request',
-    Message: `A new event request has been submitted and requires your review.`,
+    Title: title,
+    Message: message,
     NotificationType: 'NewRequest'
   });
 };
@@ -110,28 +160,83 @@ notificationSchema.statics.createNewRequestNotification = function(adminId, requ
 // Static method to create notification for admin action
 // recipientId: id of the recipient (coordinator or stakeholder)
 // recipientType: optional string 'Coordinator'|'Stakeholder' (defaults to 'Coordinator')
-notificationSchema.statics.createAdminActionNotification = function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator') {
+notificationSchema.statics.createAdminActionNotification = async function(recipientId, requestId, eventId, action, note, rescheduledDate, recipientType = 'Coordinator', originalDate = null, actorRole = 'Admin', actorName = null) {
   let title, message, type;
-  
+  // Attempt to fetch event title for clearer messages
+  let eventTitle = null;
+  // Ensure `ev` is available in this scope for later branches
+  let ev = null;
+  try {
+    const Event = mongoose.model('Event');
+    ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Start_Date').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {}
+
+  // Determine actor label
+  let actorLabel = 'Admin';
+  if (actorRole) {
+    const roleLower = String(actorRole).toLowerCase();
+    if (roleLower === 'systemadmin' || roleLower === 'admin') actorLabel = 'Admin';
+    else if (roleLower === 'coordinator') actorLabel = 'Coordinator';
+    else if (roleLower === 'stakeholder') actorLabel = 'Stakeholder';
+    else actorLabel = actorRole;
+  }
+
   switch(action) {
     case 'Accepted':
       title = 'Event Request Accepted';
-      message = `Your event request has been accepted by the admin. Please review and approve.`;
+      message = eventTitle ? `The event request "${eventTitle}" has been accepted by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Please review and approve.` : `Your event request has been accepted by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Please review and approve.`;
       type = 'AdminAccepted';
       break;
-    case 'Rescheduled':
+      case 'Rescheduled':
       title = 'Event Request Rescheduled';
-      message = `Your event request has been rescheduled by the admin. ${note ? `Note: ${note}` : ''}`;
+      // Format dates as 'Month DD, YYYY' for readability
+      let when = null;
+      let original = null;
+      try {
+        if (rescheduledDate) {
+          when = new Date(rescheduledDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+        // Prefer provided originalDate (captured before event update), otherwise fall back to ev.Start_Date
+        const srcOriginal = originalDate || (ev && ev.Start_Date ? ev.Start_Date : null);
+        if (srcOriginal) {
+          original = new Date(srcOriginal).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+      } catch (e) {
+        // ignore formatting errors
+      }
+      if (eventTitle) {
+        if (original && when) {
+          message = `The event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+        } else if (when) {
+          message = `The event "${eventTitle}" has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+        } else {
+          message = `The event "${eventTitle}" has a proposed reschedule by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+        }
+      } else {
+        if (original && when) {
+          message = `Your event request scheduled on ${original} has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+        } else if (when) {
+          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+        } else {
+          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+        }
+      }
       type = 'AdminRescheduled';
       break;
     case 'Rejected':
       title = 'Event Request Rejected';
-      message = `Your event request has been rejected by the admin. ${note ? `Note: ${note}` : ''}`;
+      message = eventTitle ? `The event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
       type = 'AdminRejected';
+      break;
+    case 'Cancelled':
+      title = 'Event Request Cancelled';
+      message = eventTitle ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+      type = 'RequestCancelled';
       break;
     default:
       title = 'Event Request Update';
-      message = `Your event request has been updated by the admin.`;
+      message = eventTitle ? `The event "${eventTitle}" has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
       type = 'NewRequest';
   }
 
@@ -146,29 +251,36 @@ notificationSchema.statics.createAdminActionNotification = function(recipientId,
     NotificationType: type,
     ActionTaken: action,
     ActionNote: note || null,
-    RescheduledDate: rescheduledDate || null
+    RescheduledDate: rescheduledDate || null,
+    OriginalDate: originalDate || (ev && ev.Start_Date ? ev.Start_Date : null)
   });
 };
 
 // Static method to create notification for coordinator final action
-notificationSchema.statics.createCoordinatorActionNotification = function(adminId, requestId, eventId, action) {
+notificationSchema.statics.createCoordinatorActionNotification = async function(adminId, requestId, eventId, action) {
   let title, message, type;
-  
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {}
+
   switch(action) {
     case 'Approved':
     case 'Accepted':
       title = 'Event Request Completed';
-      message = `The coordinator has approved/accepted the event request. The event is now completed.`;
+      message = eventTitle ? `The coordinator has approved the event "${eventTitle}". The event is now completed.` : `The coordinator has approved/accepted the event request. The event is now completed.`;
       type = 'RequestCompleted';
       break;
     case 'Rejected':
       title = 'Event Request Rejected';
-      message = `The coordinator has rejected the event request.`;
+      message = eventTitle ? `The coordinator has rejected the event "${eventTitle}".` : `The coordinator has rejected the event request.`;
       type = 'RequestRejected';
       break;
     default:
       title = 'Event Request Update';
-      message = `The coordinator has updated the event request.`;
+      message = eventTitle ? `The coordinator has updated the event "${eventTitle}".` : `The coordinator has updated the event request.`;
       type = 'CoordinatorApproved';
   }
 
@@ -185,6 +297,98 @@ notificationSchema.statics.createCoordinatorActionNotification = function(adminI
   });
 };
 
+// Static method to notify the original requester when a reviewer (coordinator)
+// accepts/rejects/reschedules a request. Includes actor info for clarity.
+notificationSchema.statics.createReviewerDecisionNotification = async function(recipientId, requestId, eventId, action, actorRole, actorName, rescheduledDate, originalDate = null, recipientType = null) {
+  let title, message, type;
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Start_Date').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+    // include original start date on the event object for formatting below
+    if (ev) ev._origStart = ev.Start_Date;
+  } catch (e) {}
+
+  const actorLabel = actorRole ? String(actorRole) : 'Reviewer';
+
+  switch(action) {
+    case 'Accepted':
+    case 'Approved':
+      title = 'Your Event Request Approved';
+      message = eventTitle ? `Your event "${eventTitle}" has been approved by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been approved by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'CoordinatorAccepted';
+      break;
+    case 'Rejected':
+      title = 'Your Event Request Rejected';
+      message = eventTitle ? `Your event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'CoordinatorRejected';
+      break;
+    case 'Cancelled':
+      title = 'Your Event Request Cancelled';
+      message = eventTitle ? `Your event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'RequestCancelled';
+      break;
+    case 'Rescheduled':
+      title = 'Your Event Request Rescheduled';
+      // format proposed and original dates
+      let when = null;
+      let original = null;
+      try {
+        if (rescheduledDate) when = new Date(rescheduledDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        // Prefer explicit originalDate argument (captured before event update)
+        const srcOriginal = originalDate || null;
+        if (srcOriginal) {
+          original = new Date(srcOriginal).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        } else {
+          const Event = mongoose.model('Event');
+          const ev = await Event.findOne({ Event_ID: eventId }).select('Start_Date Event_Title').lean().exec();
+          if (ev && ev.Start_Date) original = new Date(ev.Start_Date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+      } catch (e) {}
+      if (eventTitle) {
+        if (original && when) {
+          message = `Your event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+        } else if (when) {
+          message = `Your event "${eventTitle}" has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+        } else {
+          message = `Your event "${eventTitle}" has a proposed reschedule by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+        }
+      } else {
+        message = when ? `Your event request has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      }
+      type = 'AdminRescheduled';
+      break;
+    default:
+      title = 'Event Request Update';
+      message = eventTitle ? `Your event "${eventTitle}" has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
+      type = 'CoordinatorAccepted';
+  }
+
+  // Determine recipient type. Prefer explicit `recipientType` argument (caller knows the recipient),
+  // otherwise fall back to inferring from the actorRole (legacy behavior).
+  let recipientTypeFinal = 'Coordinator';
+  if (recipientType && String(recipientType).length > 0) {
+    recipientTypeFinal = recipientType;
+  } else {
+    if (String(actorRole || '').toLowerCase().includes('admin') || String(actorRole || '').toLowerCase().includes('system')) recipientTypeFinal = 'Admin';
+    if (String(actorRole || '').toLowerCase().includes('stakeholder')) recipientTypeFinal = 'Stakeholder';
+  }
+
+  return this.create({
+    Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    Recipient_ID: recipientId,
+    RecipientType: recipientTypeFinal,
+    Request_ID: requestId,
+    Event_ID: eventId,
+    Title: title,
+    Message: message,
+    NotificationType: type,
+    ActionTaken: action,
+    ActionNote: null,
+    RescheduledDate: rescheduledDate || null
+  });
+};
 // Static method to create notification for admin cancellation
 notificationSchema.statics.createAdminCancellationNotification = function(coordinatorId, requestId, eventId, note) {
   return this.create({
@@ -218,30 +422,130 @@ notificationSchema.statics.createStakeholderCancellationNotification = function(
 };
 
 // Static method to create notification for request deletion
-notificationSchema.statics.createRequestDeletionNotification = function(coordinatorId, requestId, eventId) {
+notificationSchema.statics.createRequestDeletionNotification = async function(coordinatorId, requestId, eventId) {
+  // Attempt to include event title and type for better context
+  let eventTitle = null;
+  let eventCategory = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Category').lean().exec();
+    if (ev) {
+      eventTitle = ev.Event_Title;
+      eventCategory = ev.Category;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  // If the Event record is not available (already deleted), try to enrich
+  // the message from the EventRequest document which may contain category
+  // or originalData snapshots.
+  if (!eventTitle && !eventCategory) {
+    try {
+      const EventRequest = mongoose.model('EventRequest');
+      const req = await EventRequest.findOne({ Request_ID: requestId }).select('Category originalData Event_Title creator').lean().exec();
+      if (req) {
+        if (!eventCategory && req.Category) eventCategory = req.Category;
+        // originalData may contain a snapshot of the event
+        if (!eventTitle && req.originalData) {
+          eventTitle = req.originalData.Event_Title || req.originalData.EventTitle || null;
+        }
+        // fallback: some older docs may have Event_Title at root
+        if (!eventTitle && req.Event_Title) eventTitle = req.Event_Title;
+        // also consider creator snapshot
+        if (!eventTitle && req.creator && req.creator.name) {
+          // nothing to do for title, but keep creator present for context (not used here)
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const title = 'Event Request Deleted';
+  const messageParts = [];
+  if (eventTitle) messageParts.push(`"${eventTitle}"`);
+  if (eventCategory) messageParts.push(`${eventCategory}`);
+  messageParts.push('request has been permanently deleted by the system administrator.');
+  const message = messageParts.join(' ');
+  // Avoid creating duplicate deletion notifications for the same recipient+request
+  try {
+    const recent = await this.findOne({
+      Recipient_ID: coordinatorId,
+      Request_ID: requestId,
+      NotificationType: 'RequestDeleted'
+    }).sort({ createdAt: -1 }).lean().exec();
+    if (recent) {
+      const createdAt = new Date(recent.createdAt || recent.created_at || recent.created_at);
+      if (Date.now() - createdAt.getTime() < 60 * 1000) {
+        // return existing recent notification instead of creating a duplicate
+        return recent;
+      }
+    }
+  } catch (e) {
+    // ignore dedupe failures and proceed to create
+  }
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     Recipient_ID: coordinatorId,
     RecipientType: 'Coordinator',
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'Event Request Deleted',
-    Message: `A cancelled event request has been permanently deleted by the system administrator.`,
+    Title: title,
+    Message: message,
     NotificationType: 'RequestDeleted',
     ActionTaken: 'Deleted'
   });
 };
 
 // Static method to create notification for stakeholder when request is deleted
-notificationSchema.statics.createStakeholderDeletionNotification = function(stakeholderId, requestId, eventId) {
+notificationSchema.statics.createStakeholderDeletionNotification = async function(stakeholderId, requestId, eventId) {
+  // Attempt to include event title and type for better context
+  let eventTitle = null;
+  let eventCategory = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title Category').lean().exec();
+    if (ev) {
+      eventTitle = ev.Event_Title;
+      eventCategory = ev.Category;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  const title = 'Your Event Request Deleted';
+  const messageParts = [];
+  if (eventTitle) messageParts.push(`"${eventTitle}"`);
+  if (eventCategory) messageParts.push(`${eventCategory}`);
+  messageParts.push('request has been permanently deleted by the system administrator.');
+  const message = messageParts.join(' ');
+  // Avoid creating duplicate deletion notifications for the same recipient+request
+  try {
+    const recent = await this.findOne({
+      Recipient_ID: stakeholderId,
+      Request_ID: requestId,
+      NotificationType: 'RequestDeleted'
+    }).sort({ createdAt: -1 }).lean().exec();
+    if (recent) {
+      const createdAt = new Date(recent.createdAt || recent.created_at || recent.created_at);
+      if (Date.now() - createdAt.getTime() < 60 * 1000) {
+        return recent;
+      }
+    }
+  } catch (e) {
+    // ignore dedupe failures and proceed to create
+  }
+
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     Recipient_ID: stakeholderId,
     RecipientType: 'Stakeholder',
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'Your Event Request Deleted',
-    Message: `Your event request has been permanently deleted by the system administrator.`,
+    Title: title,
+    Message: message,
     NotificationType: 'RequestDeleted',
     ActionTaken: 'Deleted'
   });
