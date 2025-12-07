@@ -39,7 +39,6 @@ class MessageController {
         data: message
       });
     } catch (error) {
-      console.error('Send message error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to send message'
@@ -77,7 +76,6 @@ class MessageController {
         }
       });
     } catch (error) {
-      console.error('Get messages error:', error);
       res.status(500).json({
         success: false,
         message: error.message || 'Failed to get messages'
@@ -113,7 +111,6 @@ class MessageController {
         message: 'Message marked as read'
       });
     } catch (error) {
-      console.error('Mark as read error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to mark message as read'
@@ -132,7 +129,6 @@ class MessageController {
         data: conversations
       });
     } catch (error) {
-      console.error('Get conversations error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to get conversations'
@@ -151,7 +147,6 @@ class MessageController {
         data: recipients
       });
     } catch (error) {
-      console.error('Get allowed recipients error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to get allowed recipients'
@@ -187,7 +182,6 @@ class MessageController {
         message: 'Message deleted successfully'
       });
     } catch (error) {
-      console.error('Delete message error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to delete message'

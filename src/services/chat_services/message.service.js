@@ -70,7 +70,7 @@ class MessageService {
 
       await conversation.save();
     } catch (error) {
-      console.error('Failed to update conversation:', error);
+      // Silently fail conversation update
     }
   }
 
@@ -95,9 +95,30 @@ class MessageService {
         .filter(p => p.userId !== userId)
         .map(p => p.userId);
 
-      const hasPermission = otherParticipants.every(participantId =>
-        allowedRecipients.includes(participantId)
+      // Convert to strings for comparison to handle any type mismatches
+      const allowedRecipientsStr = allowedRecipients.map(id => String(id));
+      const otherParticipantsStr = otherParticipants.map(id => String(id));
+
+      // Check if user has permission to chat with all other participants
+      let hasPermission = otherParticipantsStr.every(participantId =>
+        allowedRecipientsStr.includes(participantId)
       );
+
+      // Bidirectional check: if direct check fails, verify the reverse relationship
+      // (e.g., if coordinator can't see stakeholder in their list, check if stakeholder can see coordinator)
+      if (!hasPermission && otherParticipantsStr.length === 1) {
+        const otherParticipantId = otherParticipantsStr[0];
+        try {
+          const reverseAllowed = await permissionsService.getAllowedRecipients(otherParticipantId);
+          const reverseAllowedStr = reverseAllowed.map(id => String(id));
+          // If the other participant can see this user, allow access (bidirectional permission)
+          if (reverseAllowedStr.includes(String(userId))) {
+            hasPermission = true;
+          }
+        } catch (error) {
+          // Silently fail bidirectional check
+        }
+      }
 
       if (!hasPermission) {
         throw new Error('Access denied to this conversation');
@@ -236,7 +257,6 @@ class MessageService {
         type: 'unknown'
       };
     } catch (error) {
-      console.error('Error getting user details:', error);
       return {
         id: userId,
         name: 'Unknown User',

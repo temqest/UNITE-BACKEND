@@ -140,16 +140,21 @@ const eventRequestSchema = new mongoose.Schema({
   Status: {
     type: String,
     enum: [
-      // canonical (new) statuses
+      // State machine canonical statuses
       'pending-review',
       'review-accepted',
       'review-rejected',
       'review-rescheduled',
+      'awaiting-confirmation',
+      'approved',
+      'rejected',
+      'cancelled',
+      'closed',
+      // Legacy statuses (backward compatibility)
       'creator-confirmed',
       'creator-declined',
       'completed',
       'expired-review',
-      // legacy / backwards-compatibility variants (uppercase / underscore)
       'Pending',
       'Pending_Admin_Review',
       'Pending_Coordinator_Review',

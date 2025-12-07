@@ -100,7 +100,7 @@ class PresenceService {
         { upsert: true }
       );
     } catch (error) {
-      console.error(`Failed to update last seen for ${userId}:`, error);
+      // Silently fail last seen update
     }
   }
 }

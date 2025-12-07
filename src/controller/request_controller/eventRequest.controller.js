@@ -361,7 +361,19 @@ class EventRequestController {
         });
       }
 
-      const result = await eventRequestService.coordinatorConfirmRequest(coordinatorId, requestId, action);
+      // Use the unified state machine flow instead of legacy method
+      // Map action to state machine format
+      const actionData = {
+        action: action === 'Accepted' ? 'confirm' : (action === 'Rejected' ? 'confirm' : action.toLowerCase()),
+        note: req.body.note || null
+      };
+
+      const result = await eventRequestService.processRequestAction(
+        coordinatorId,
+        'Coordinator',
+        requestId,
+        actionData
+      );
 
       return res.status(200).json({
         success: result.success,
@@ -451,23 +463,34 @@ class EventRequestController {
   /**
    * Stakeholder confirms admin/coordinator decision
    * POST /api/requests/:requestId/stakeholder-confirm
+   * Now allows all roles to confirm (not just stakeholders)
    */
   async stakeholderConfirmRequest(req, res) {
     try {
       const { requestId } = req.params;
       const user = req.user;
       if (!user) return res.status(401).json({ success: false, message: 'Authentication required' });
-      if (!(user.role === 'Stakeholder' || user.staff_type === 'Stakeholder')) {
-        return res.status(403).json({ success: false, message: 'Only stakeholders may perform this action' });
+      
+      // Allow all roles to confirm (Admin, Coordinator, Stakeholder)
+      const actorRole = user.staff_type || user.role;
+      const actorId = user.Admin_ID || user.Coordinator_ID || user.Stakeholder_ID || user.id || null;
+      
+      if (!actorRole || !actorId) {
+        return res.status(400).json({ success: false, message: 'Unable to determine user role or id' });
       }
 
-      const stakeholderId = user.Stakeholder_ID || user.id || null;
       const { action } = req.body;
       if (!action) {
         return res.status(400).json({ success: false, message: 'Action is required' });
       }
 
-      const result = await eventRequestService.stakeholderConfirmRequest(stakeholderId, requestId, action);
+      // Use the unified processRequestAction method which supports all roles
+      const result = await eventRequestService.processRequestAction(
+        actorId,
+        actorRole,
+        requestId,
+        { action: action === 'Accepted' || action === 'confirm' ? 'Accepted' : action }
+      );
 
       return res.status(200).json({
         success: result.success,
@@ -477,7 +500,7 @@ class EventRequestController {
     } catch (error) {
       return res.status(400).json({
         success: false,
-        message: error.message || 'Failed to record stakeholder confirmation'
+        message: error.message || 'Failed to record confirmation'
       });
     }
   }
