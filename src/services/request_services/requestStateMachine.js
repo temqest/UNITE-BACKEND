@@ -202,7 +202,8 @@ class RequestStateMachine {
     const stateConfig = STATE_TRANSITIONS[normalizedState];
     const isRequester = this.isRequester(userId, request);
     let isReviewer = this.isReviewer(userId, userRole, request);
-    const isAdmin = normalizedRole === ROLES.SYSTEM_ADMIN.toLowerCase();
+    // Check if user is SystemAdmin - normalizeRole returns ROLES.SYSTEM_ADMIN ("SystemAdmin"), not lowercase
+    const isAdmin = normalizedRole === ROLES.SYSTEM_ADMIN;
     
     // Additional fallback for SystemAdmin-created requests: if coordinator_id matches and reviewer should be coordinator
     const creatorRole = request.made_by_role || request.creator?.role;
@@ -287,9 +288,24 @@ class RequestStateMachine {
         return stateConfig.allowedActions[normalizedRole];
       }
       // Try canonical role format
-      const canonicalRole = normalizedRole === ROLES.SYSTEM_ADMIN.toLowerCase() ? ROLES.SYSTEM_ADMIN :
-                           normalizedRole === ROLES.COORDINATOR.toLowerCase() ? ROLES.COORDINATOR :
-                           normalizedRole === ROLES.STAKEHOLDER.toLowerCase() ? ROLES.STAKEHOLDER : null;
+      const canonicalRole = normalizedRole === ROLES.SYSTEM_ADMIN ? ROLES.SYSTEM_ADMIN :
+                           normalizedRole === ROLES.COORDINATOR ? ROLES.COORDINATOR :
+                           normalizedRole === ROLES.STAKEHOLDER ? ROLES.STAKEHOLDER : null;
+      if (canonicalRole && stateConfig.allowedActions[canonicalRole]) {
+        return stateConfig.allowedActions[canonicalRole];
+      }
+    }
+
+    // For APPROVED state: allow any SystemAdmin, Coordinator, or Stakeholder to use their role-based actions
+    // This allows rescheduling of already approved events by any authorized user
+    if (normalizedState === REQUEST_STATES.APPROVED) {
+      if (stateConfig.allowedActions[normalizedRole]) {
+        return stateConfig.allowedActions[normalizedRole];
+      }
+      // Try canonical role format
+      const canonicalRole = normalizedRole === ROLES.SYSTEM_ADMIN ? ROLES.SYSTEM_ADMIN :
+                           normalizedRole === ROLES.COORDINATOR ? ROLES.COORDINATOR :
+                           normalizedRole === ROLES.STAKEHOLDER ? ROLES.STAKEHOLDER : null;
       if (canonicalRole && stateConfig.allowedActions[canonicalRole]) {
         return stateConfig.allowedActions[canonicalRole];
       }

@@ -90,12 +90,17 @@ class RequestFlowEngine {
       throw new Error(`Invalid action: ${actionData.action}`);
     }
     
+    // Normalize role for validation (ensure Admin -> SystemAdmin)
+    const normalizedRole = this.stateMachine.normalizeRole(actorRole);
+    
     // Debug logging for action normalization
-    console.log(`[RequestFlowEngine] Action normalization: input="${actionInput}", currentState="${currentState}", normalizedAction="${action}", actorRole="${actorRole}"`);
+    console.log(`[RequestFlowEngine] Action normalization: input="${actionInput}", currentState="${currentState}", normalizedAction="${action}", actorRole="${actorRole}", normalizedRole="${normalizedRole}", request.Status="${request.Status}"`);
 
-    // Validate transition
-    if (!this.stateMachine.isValidTransition(currentState, action, actorRole, actorId, request)) {
-      throw new Error(`Action '${action}' is not allowed in state '${currentState}' for role '${actorRole}'`);
+    // Validate transition (use normalized role)
+    if (!this.stateMachine.isValidTransition(currentState, action, normalizedRole || actorRole, actorId, request)) {
+      // Get allowed actions for better error message
+      const allowedActions = this.stateMachine.getAllowedActions(currentState, normalizedRole || actorRole, actorId, request);
+      throw new Error(`Action '${action}' is not allowed in state '${currentState}' for role '${actorRole}' (normalized: ${normalizedRole}). Allowed actions: ${allowedActions.join(', ')}`);
     }
 
     // Get next state
@@ -132,10 +137,15 @@ class RequestFlowEngine {
     } else {
       // For intermediate states (REVIEW_ACCEPTED, REVIEW_REJECTED, REVIEW_RESCHEDULED, etc.)
       // Keep event status as "Pending" until final confirmation
+      // SPECIAL CASE: When rescheduling from APPROVED/Completed, always reset to Pending
       if (event && event.Status !== 'Pending') {
-        // Only set to Pending if it's not already in a final state
         const currentEventStatus = event.Status;
-        if (currentEventStatus !== 'Completed' && currentEventStatus !== 'Rejected' && currentEventStatus !== 'Cancelled') {
+        // If rescheduling (transitioning to REVIEW_RESCHEDULED), always reset to Pending
+        // This allows rescheduling of already approved/completed events
+        if (nextState === REQUEST_STATES.REVIEW_RESCHEDULED && action === ACTIONS.RESCHEDULE) {
+          event.Status = 'Pending';
+          await event.save();
+        } else if (currentEventStatus !== 'Completed' && currentEventStatus !== 'Rejected' && currentEventStatus !== 'Cancelled') {
           event.Status = 'Pending';
           await event.save();
         }
@@ -296,7 +306,8 @@ class RequestFlowEngine {
           currentEnd.setFullYear(rescheduledDate.getFullYear(), rescheduledDate.getMonth(), rescheduledDate.getDate());
           event.End_Date = currentEnd;
         }
-        // Only set to Pending if we're actually rescheduling (not confirming)
+        // CRITICAL: Always reset event status to Pending when rescheduling
+        // This allows rescheduling of already approved/completed events
         event.Status = 'Pending';
         await event.save();
       }

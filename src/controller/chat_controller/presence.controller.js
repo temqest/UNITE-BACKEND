@@ -12,7 +12,6 @@ class PresenceController {
         data: presence
       });
     } catch (error) {
-      console.error('Get presence error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to get presence'
@@ -39,7 +38,6 @@ class PresenceController {
         data: presences
       });
     } catch (error) {
-      console.error('Get presences error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to get presences'
@@ -57,7 +55,6 @@ class PresenceController {
         data: onlineUsers
       });
     } catch (error) {
-      console.error('Get online users error:', error);
       res.status(500).json({
         success: false,
         message: 'Failed to get online users'
