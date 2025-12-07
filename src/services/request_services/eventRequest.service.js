@@ -867,6 +867,11 @@ class EventRequestService {
       if (status.includes('pending') || status.includes('review') || isRescheduled) {
         const reviewerRole = req.reviewer && req.reviewer.role ? String(req.reviewer.role).toLowerCase() : null;
 
+        // If the actor is the creator of the request, they should only view
+        if (req.made_by_id && String(req.made_by_id) === String(actorId)) {
+          return ['view'];
+        }
+
         const isReviewAccepted = status.includes('review') && status.includes('accepted');
 
         // Special-case: handle reschedule proposals explicitly and symmetrically.
@@ -1045,6 +1050,10 @@ class EventRequestService {
         // Default pending/review: admins may act. Coordinators may act only when
         // they are the assigned coordinator or the assigned reviewer.
         if (role === 'admin' || role === 'systemadmin') {
+          const isCreator = req.made_by_role && String(req.made_by_role).toLowerCase().includes('admin') && req.made_by_id && String(req.made_by_id) === String(actorId);
+          if (isCreator) {
+            return ['view'];
+          }
           return ['view', 'resched', 'accept', 'reject'];
         }
         if (role === 'coordinator') {
