@@ -664,6 +664,42 @@ class NotificationService {
       throw new Error(`Failed to create notification: ${error.message}`);
     }
   }
+
+  /**
+   * Create a new message notification
+   * @param {string} recipientId 
+   * @param {string} recipientType 
+   * @param {string} senderId 
+   * @param {string} messageId 
+   * @param {string} conversationId 
+   * @param {string} messageContent 
+   * @returns {Object} Created notification
+   */
+  async createNewMessageNotification(recipientId, recipientType, senderId, messageId, conversationId, messageContent) {
+    try {
+      // Get sender details
+      const sender = await BloodbankStaff.findOne({ ID: senderId });
+      if (!sender) {
+        throw new Error('Sender not found');
+      }
+
+      const notificationData = {
+        Notification_ID: this.generateNotificationID(),
+        Recipient_ID: recipientId,
+        RecipientType: recipientType,
+        Title: 'New Message',
+        Message: `You have a new message from ${sender.First_Name} ${sender.Last_Name}`,
+        NotificationType: 'NewMessage',
+        Message_ID: messageId,
+        Sender_ID: senderId,
+        Conversation_ID: conversationId
+      };
+
+      return await this.createNotification(notificationData);
+    } catch (error) {
+      throw new Error(`Failed to create message notification: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new NotificationService();
