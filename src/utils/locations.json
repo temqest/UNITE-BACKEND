@@ -80,18 +80,13 @@
     "name": "Camarines Norte",
     "districts": [
       {
-        "name": "District I",
+        "name": "District I & II",
         "municipalities": [
           "Capalonga",
           "Jose Panganiban",
           "Labo",
           "Paracale",
-          "Sta. Elena"
-        ]
-      },
-      {
-        "name": "District II",
-        "municipalities": [
+          "Sta. Elena",
           "Basud",
           "Daet",
           "Mercedes",
