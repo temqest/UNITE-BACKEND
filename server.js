@@ -5,9 +5,21 @@ const cors = require('cors');
 const compression = require('compression');
 const routes = require('./src/routes');
 const rateLimiter = require('./src/middleware/rateLimiter');
+const http = require('http');
+const socketIo = require('socket.io');
 
 // Initialize Express app
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: process.env.NODE_ENV === 'production'
+      ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000'],
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
 
 // ==================== ENVIRONMENT VARIABLES ====================
 const PORT = process.env.PORT || 3000;
@@ -182,6 +194,221 @@ app.use(rateLimiter.general);
 
 app.use('/', routes);
 
+// ==================== SOCKET.IO SETUP ====================
+
+const { messageService, presenceService, typingService, permissionsService } = require('./src/services/chat_services');
+const { Notification: NotificationModel, BloodbankStaff } = require('./src/models');
+const notificationService = require('./src/services/utility_services/notification.service');
+
+// Store connected users: userId -> socketId
+const connectedUsers = new Map();
+
+io.use(async (socket, next) => {
+  try {
+    // Get token from handshake
+    const token = socket.handshake.auth.token || socket.handshake.query.token;
+
+    if (!token) {
+      return next(new Error('Authentication token required'));
+    }
+
+    // Verify token
+    const { verifyToken } = require('./src/utils/jwt');
+    const decoded = verifyToken(token);
+
+    socket.userId = decoded.id;
+    socket.user = decoded;
+    next();
+  } catch (error) {
+    next(new Error('Authentication failed'));
+  }
+});
+
+io.on('connection', (socket) => {
+  console.log(`User ${socket.userId} connected with socket ${socket.id}`);
+
+  // Store connection
+  connectedUsers.set(socket.userId, socket.id);
+
+  // Set user online
+  presenceService.setOnline(socket.userId, socket.id);
+
+  // Broadcast presence update
+  socket.broadcast.emit('user_online', { userId: socket.userId });
+
+  // Join user's personal room for direct messages
+  socket.join(socket.userId);
+
+  // Send message
+  socket.on('send_message', async (data) => {
+    try {
+      const { receiverId, content, messageType = 'text', attachments = [] } = data;
+
+      const message = await messageService.sendMessage(
+        socket.userId,
+        receiverId,
+        content,
+        messageType,
+        attachments
+      );
+
+      // Send to sender
+      socket.emit('message_sent', message);
+
+      // Send to receiver if online
+      const receiverSocketId = connectedUsers.get(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('new_message', message);
+
+        // Mark as delivered
+        await messageService.markAsDelivered(message.messageId, receiverId);
+        socket.emit('message_delivered', { messageId: message.messageId });
+      }
+
+      // Create notification for receiver
+      try {
+        // Get receiver details to determine recipient type
+        const receiver = await BloodbankStaff.findOne({ ID: receiverId });
+        if (receiver) {
+          const recipientType = receiver.StaffType; // Admin or Coordinator
+          await notificationService.createNewMessageNotification(
+            receiverId,
+            recipientType,
+            socket.userId,
+            message.messageId,
+            message.conversationId,
+            content
+          );
+        }
+      } catch (notificationError) {
+        console.error('Failed to create notification:', notificationError);
+      }
+
+      // Emit to conversation room (for future group chats)
+      const conversationId = [socket.userId, receiverId].sort().join('_');
+      socket.to(conversationId).emit('new_message', message);
+
+    } catch (error) {
+      socket.emit('message_error', { error: error.message });
+    }
+  });
+
+  // Mark message as read
+  socket.on('mark_read', async (data) => {
+    try {
+      const { messageId } = data;
+      await messageService.markAsRead(messageId, socket.userId);
+      socket.emit('message_read', { messageId });
+    } catch (error) {
+      socket.emit('read_error', { error: error.message });
+    }
+  });
+
+  // Typing indicators
+  socket.on('typing_start', async (data) => {
+    try {
+      const { receiverId } = data;
+
+      // Validate permissions
+      const canChat = await permissionsService.canSendMessage(socket.userId, receiverId);
+      if (!canChat) {
+        socket.emit('typing_error', { error: 'You do not have permission to chat with this user' });
+        return;
+      }
+
+      const conversationId = [socket.userId, receiverId].sort().join('_');
+
+      typingService.startTyping(conversationId, socket.userId);
+
+      // Notify receiver
+      const receiverSocketId = connectedUsers.get(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('typing_start', { userId: socket.userId, conversationId });
+      }
+    } catch (error) {
+      socket.emit('typing_error', { error: error.message });
+    }
+  });
+
+  socket.on('typing_stop', async (data) => {
+    try {
+      const { receiverId } = data;
+
+      // Validate permissions
+      const canChat = await permissionsService.canSendMessage(socket.userId, receiverId);
+      if (!canChat) {
+        return; // Silently fail for typing stop
+      }
+
+      const conversationId = [socket.userId, receiverId].sort().join('_');
+
+      typingService.stopTyping(conversationId, socket.userId);
+
+      // Notify receiver
+      const receiverSocketId = connectedUsers.get(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('typing_stop', { userId: socket.userId, conversationId });
+      }
+    } catch (error) {
+      // Silently handle typing stop errors
+    }
+  });
+
+  // Join conversation room
+  socket.on('join_conversation', (data) => {
+    const { conversationId } = data;
+    socket.join(conversationId);
+  });
+
+  // Leave conversation room
+  socket.on('leave_conversation', (data) => {
+    const { conversationId } = data;
+    socket.leave(conversationId);
+  });
+
+  // Get presence
+  socket.on('get_presence', async (data) => {
+    const { userIds } = data;
+    const presences = await presenceService.getPresences(userIds);
+    socket.emit('presence_update', presences);
+  });
+
+  // Handle disconnect
+  socket.on('disconnect', async () => {
+    console.log(`User ${socket.userId} disconnected`);
+
+    // Remove from connected users
+    connectedUsers.delete(socket.userId);
+
+    // Clear typing indicators
+    typingService.clearUserTyping(socket.userId);
+
+    // Set offline
+    await presenceService.setOffline(socket.userId);
+
+    // Broadcast offline status
+    socket.broadcast.emit('user_offline', { userId: socket.userId });
+  });
+
+  // Handle manual offline (user closes app)
+  socket.on('go_offline', async () => {
+    await presenceService.setOffline(socket.userId);
+    socket.broadcast.emit('user_offline', { userId: socket.userId });
+  });
+
+  // Handle idle status
+  socket.on('set_idle', async () => {
+    await presenceService.setIdle(socket.userId);
+    socket.broadcast.emit('user_idle', { userId: socket.userId });
+  });
+
+  // Handle active status
+  socket.on('set_active', async () => {
+    await presenceService.setOnline(socket.userId, socket.id);
+    socket.broadcast.emit('user_online', { userId: socket.userId });
+  });
+});
+
 // ==================== ERROR HANDLING ====================
 
 // 404 Handler - Catch all unmatched routes
@@ -251,7 +478,7 @@ const startServer = async () => {
     await connectDB();
     
     // Start listening
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log('');
       console.log('🚀 ========================================');
       console.log('🚀  UNITE Backend Server Started');

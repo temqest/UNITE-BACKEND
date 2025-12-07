@@ -37,6 +37,13 @@ const SignUpRequest = require('./utility_models/signupRequest.model');
 const BloodBag = require('./utility_models/bloodbag.model');
 
 // ============================================
+// CHAT MODELS
+// ============================================
+const Message = require('./chat_models/message.model');
+const Conversation = require('./chat_models/conversation.model');
+const Presence = require('./chat_models/presence.model');
+
+// ============================================
 // MODEL RELATIONSHIPS & CONSTRAINTS
 // ============================================
 
@@ -187,6 +194,11 @@ module.exports = {
   SystemSettings,
   SignUpRequest,
   BloodBag,
+  
+  // CHAT MODELS
+  Message,
+  Conversation,
+  Presence,
   
   // Validation Helpers
   validateCoordinator,

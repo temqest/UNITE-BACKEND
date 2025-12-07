@@ -55,7 +55,9 @@ const notificationSchema = new mongoose.Schema({
       'RequestDeleted',       // Request deleted by sys admin
       'NewSignupRequest',     // New stakeholder signup request
       'SignupRequestApproved', // Signup request approved
-      'SignupRequestRejected'  // Signup request rejected
+      'SignupRequestRejected',  // Signup request rejected
+      'NewMessage',           // New chat message received
+      'MessageRead'           // Message marked as read
     ],
     required: true
   },
@@ -77,10 +79,22 @@ const notificationSchema = new mongoose.Schema({
   },
   RescheduledDate: {
     type: Date
-  }
-  ,
+  },
   OriginalDate: {
     type: Date
+  },
+  // Chat-specific fields
+  Message_ID: {
+    type: String,
+    trim: true
+  },
+  Sender_ID: {
+    type: String,
+    trim: true
+  },
+  Conversation_ID: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true

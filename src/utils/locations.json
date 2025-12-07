@@ -33,8 +33,7 @@
           "Canaman",
           "Magarao",
           "Ocampo",
-          "Pili",
-          "Naga City"
+          "Pili"
         ]
       },
       {
@@ -49,8 +48,7 @@
           "San Jose",
           "Siruma",
           "Tigaon",
-          "Tinambac",
-          "Iriga City"
+          "Tinambac"
         ]
       },
       {
@@ -62,6 +60,18 @@
           "Buhi",
           "Bula",
           "Nabua"
+        ]
+      },
+      {
+        "name": "Naga City",
+        "municipalities": [
+          "Naga City"
+        ]
+      },
+      {
+        "name": "Iriga City",
+        "municipalities": [
+          "Iriga City"
         ]
       }
     ]

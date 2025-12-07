@@ -13,7 +13,22 @@ const { Province, District, Municipality } = require('../models');
 require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' : '.env' });
 
 // Accept multiple env var names for compatibility with existing .env
-const uri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
+const rawMongoUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
+const mongoDbName = process.env.MONGO_DB_NAME || null; // optional DB name to ensure connection to a specific DB
+
+let uri = rawMongoUri;
+if (mongoDbName) {
+  const idx = rawMongoUri.indexOf('?');
+  const beforeQuery = idx === -1 ? rawMongoUri : rawMongoUri.slice(0, idx);
+  const hasDb = /\/[A-Za-z0-9_\-]+$/.test(beforeQuery);
+  if (!hasDb) {
+    if (idx === -1) {
+      uri = `${rawMongoUri.replace(/\/$/, '')}/${mongoDbName}`;
+    } else {
+      uri = `${rawMongoUri.slice(0, idx).replace(/\/$/, '')}/${mongoDbName}${rawMongoUri.slice(idx)}`;
+    }
+  }
+}
 const dataPath = path.join(__dirname, 'locations.json');
 const dryRun = process.argv.includes('--dry-run');
 
@@ -36,7 +51,9 @@ function loadData() {
         { name: 'District II', municipalities: ['Gainza','Libmanan','Milaor','Minalabac','Pamplona','Pasacao','San Fernando'] },
         { name: 'District III', municipalities: ['Bombon','Calabanga','Camaligan','Canaman','Magarao','Ocampo','Pili'] },
         { name: 'District IV', municipalities: ['Caramoan','Garchitorena','Goa','Lagonoy','Presentacion','Sagnay','San Jose','Siruma','Tigaon','Tinambac'] },
-        { name: 'District V', municipalities: ['Baao','Balatan','Bato','Buhi','Bula','Nabua'] }
+        { name: 'District V', municipalities: ['Baao','Balatan','Bato','Buhi','Bula','Nabua'] },
+        { name: 'Naga City', municipalities: ['Naga City'] },
+        { name: 'Iriga City', municipalities: ['Iriga City'] }
       ]
     },
     {
