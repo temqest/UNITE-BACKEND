@@ -62,11 +62,26 @@ class EventRequestService {
       const endOfDay = new Date(eventDate);
       endOfDay.setHours(23, 59, 59, 999);
 
+      // Only check for approved and pending requests (exclude rejected, cancelled, completed)
+      // Approved statuses: 'approved', 'Accepted_By_Admin', 'review-accepted', 'awaiting-confirmation'
+      // Pending statuses: 'pending-review', 'review-rescheduled', 'Pending', 'Pending_Admin_Review', 'Pending_Coordinator_Review', 'Pending_Stakeholder_Review'
+      const approvedAndPendingStatuses = [
+        'approved',
+        'Accepted_By_Admin',
+        'review-accepted',
+        'awaiting-confirmation',
+        'pending-review',
+        'review-rescheduled',
+        'Pending',
+        'Pending_Admin_Review',
+        'Pending_Coordinator_Review',
+        'Pending_Stakeholder_Review'
+      ];
+
       // Find other events on the same date by same coordinator
       const query = {
         coordinator_id: coordinatorId,
-        Status: { $nin: ['Rejected', 'Rejected_By_Admin'] },
-        // We need to check by event date
+        Status: { $in: approvedAndPendingStatuses }
       };
 
       if (excludeRequestId) {
@@ -674,16 +689,17 @@ class EventRequestService {
         }
       }
 
-      // 1. Check advance booking limit (always enforced, even for admins)
+      // If actor is SystemAdmin, bypass all validation rules
+      const normalizedActorRole = actorRole ? this._normalizeRole(actorRole) : null;
+      if (normalizedActorRole === 'SystemAdmin') {
+        return validationResults; // SystemAdmin bypasses all rules
+      }
+
+      // 1. Check advance booking limit
       const advanceBooking = systemSettings.validateAdvanceBooking(startDate);
       if (!advanceBooking.isValid) {
         validationResults.isValid = false;
         validationResults.errors.push(advanceBooking.message);
-      }
-
-      // If actor is Admin or Coordinator, bypass other validation rules
-      if (actorRole && (String(actorRole).toLowerCase() === 'admin' || String(actorRole).toLowerCase() === 'coordinator')) {
-        return validationResults; // Return with advance booking check result
       }
 
       // 2. Check weekend restriction
@@ -745,8 +761,24 @@ class EventRequestService {
         let hasOverlap = false;
         // If actor is a stakeholder, only consider their own requests for overlap
         if (actorRole && String(actorRole).toLowerCase() === 'stakeholder' && actorId) {
+          // Only check for approved and pending requests (exclude rejected, cancelled, completed)
+          const approvedAndPendingStatuses = [
+            'approved',
+            'Accepted_By_Admin',
+            'review-accepted',
+            'awaiting-confirmation',
+            'pending-review',
+            'review-rescheduled',
+            'Pending',
+            'Pending_Admin_Review',
+            'Pending_Coordinator_Review',
+            'Pending_Stakeholder_Review'
+          ];
           // Find requests created by this stakeholder
-          const requests = await EventRequest.find({ stakeholder_id: actorId, Status: { $nin: ['Rejected', 'Rejected_By_Admin'] } });
+          const requests = await EventRequest.find({ 
+            stakeholder_id: actorId, 
+            Status: { $in: approvedAndPendingStatuses } 
+          });
           for (const request of requests) {
             const event = await Event.findOne({ Event_ID: request.Event_ID });
             if (event && event.Start_Date) {
