@@ -63,20 +63,13 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
 
 const corsOptions = {
   origin: function (origin, callback) {
-    console.log('CORS check for origin:', origin);
-    console.log('NODE_ENV:', process.env.NODE_ENV);
-    console.log('ALLOWED_ORIGINS:', process.env.ALLOWED_ORIGINS);
-    console.log('allowedOrigins array:', allowedOrigins);
-
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
     // Allow requests from allowed origins or in development
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
-      console.log('CORS allowed for origin:', origin);
       callback(null, true);
     } else {
-      console.log('CORS blocked for origin:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -494,6 +487,7 @@ const startServer = async () => {
       console.log(`🌐 Server running on: http://localhost:${PORT}`);
       console.log(`📡 API endpoints: http://localhost:${PORT}/api`);
       console.log(`❤️  Health check: http://localhost:${PORT}/health`);
+      console.log(`🔒 CORS Allowed Origins: ${allowedOrigins.join(', ')}`);
       console.log('🚀 ========================================');
       console.log('');
     });

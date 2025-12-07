@@ -1,34 +1,17 @@
-const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
 
 class EmailService {
   constructor() {
-    this.transporter = nodemailer.createTransport({
-      host: 'smtp.sendgrid.net',
-      port: 587,
-      secure: false, // true for 465, false for 587
-      auth: {
-        user: 'apikey', // SendGrid SMTP username is always 'apikey'
-        pass: process.env.EMAIL_PASS
-      },
-      tls: {
-        rejectUnauthorized: false
-      }
-    });
+    sgMail.setApiKey(process.env.EMAIL_PASS);
 
-    // Verify connection
-    this.transporter.verify((error, success) => {
-      if (error) {
-        console.error('SMTP connection error:', error);
-      } else {
-        console.log('SMTP server is ready to take messages');
-      }
-    });
+    // Note: SendGrid API doesn't require connection verification like SMTP
+    console.log('SendGrid API initialized');
   }
 
   async sendVerificationCode(email, code) {
-    const mailOptions = {
-      from: `"UNITE Blood Bank" <${process.env.EMAIL_USER}>`,
+    const msg = {
       to: email,
+      from: `"UNITE Blood Bank" <${process.env.EMAIL_USER}>`,
       subject: 'Verify Your UNITE Account - Email Verification Code',
       text: `Hello,
 
@@ -72,7 +55,7 @@ unite-bloodbank.com`,
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await sgMail.send(msg);
       console.log(`Verification email sent to ${email}`);
     } catch (error) {
       console.error('Error sending email:', error);
@@ -81,16 +64,16 @@ unite-bloodbank.com`,
   }
 
   async sendEmail(email, subject, text, html) {
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
+    const msg = {
       to: email,
+      from: process.env.EMAIL_USER,
       subject,
       text,
       html
     };
 
     try {
-      await this.transporter.sendMail(mailOptions);
+      await sgMail.send(msg);
       console.log(`Email sent to ${email}`);
     } catch (error) {
       console.error('Error sending email:', error);
