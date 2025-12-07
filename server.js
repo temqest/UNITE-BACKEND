@@ -14,7 +14,7 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production'
-      ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+      ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['https://unite-development.vercel.app'])
       : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000'],
     methods: ['GET', 'POST'],
     credentials: true
@@ -58,18 +58,25 @@ if (mongoDbName) {
 // CORS Configuration
 // For production, update allowedOrigins with your frontend domain
 const allowedOrigins = process.env.NODE_ENV === 'production'
-  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app'])
   : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000'];
 
 const corsOptions = {
   origin: function (origin, callback) {
+    console.log('CORS check for origin:', origin);
+    console.log('NODE_ENV:', process.env.NODE_ENV);
+    console.log('ALLOWED_ORIGINS:', process.env.ALLOWED_ORIGINS);
+    console.log('allowedOrigins array:', allowedOrigins);
+
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
+
     // Allow requests from allowed origins or in development
     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      console.log('CORS allowed for origin:', origin);
       callback(null, true);
     } else {
+      console.log('CORS blocked for origin:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
