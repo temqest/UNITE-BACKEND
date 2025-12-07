@@ -248,6 +248,17 @@ notificationSchema.statics.createAdminActionNotification = async function(recipi
       message = eventTitle ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
       type = 'RequestCancelled';
       break;
+    case 'Approved':
+    case 'Event Published':
+      title = 'Event Published';
+      // Format: "The event [title] has been approved and is now live. Approved by [role] ([name])."
+      const approverLabel = actorLabel.toLowerCase();
+      const approverName = actorName ? ` (${actorName})` : '';
+      message = eventTitle 
+        ? `The event "${eventTitle}" has been approved and is now live. Approved by ${approverLabel}${approverName}.`
+        : `Your event has been approved and is now live. Approved by ${approverLabel}${approverName}.`;
+      type = 'RequestCompleted';
+      break;
     default:
       title = 'Event Request Update';
       message = eventTitle ? `The event "${eventTitle}" has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been updated by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
@@ -404,15 +415,38 @@ notificationSchema.statics.createReviewerDecisionNotification = async function(r
   });
 };
 // Static method to create notification for admin cancellation
-notificationSchema.statics.createAdminCancellationNotification = function(coordinatorId, requestId, eventId, note) {
+notificationSchema.statics.createAdminCancellationNotification = async function(recipientId, requestId, eventId, note, recipientType = 'Coordinator', actorRole = 'Admin', actorName = null) {
+  // Determine actor label
+  let actorLabel = 'Admin';
+  if (actorRole) {
+    const roleLower = String(actorRole).toLowerCase();
+    if (roleLower === 'systemadmin' || roleLower === 'admin') actorLabel = 'Admin';
+    else if (roleLower === 'coordinator') actorLabel = 'Coordinator';
+    else if (roleLower === 'stakeholder') actorLabel = 'Stakeholder';
+    else actorLabel = actorRole;
+  }
+  
+  // Get event title for better context
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {}
+  
+  const title = 'Event Request Cancelled';
+  const message = eventTitle 
+    ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`
+    : `An event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`;
+  
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    Recipient_ID: coordinatorId,
-    RecipientType: 'Coordinator',
+    Recipient_ID: recipientId,
+    RecipientType: recipientType,
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'Event Request Cancelled',
-    Message: `An event request has been cancelled by the admin. ${note ? `Reason: ${note}` : ''}`,
+    Title: title,
+    Message: message,
     NotificationType: 'AdminCancelled',
     ActionTaken: 'Cancelled',
     ActionNote: note || null
@@ -420,15 +454,38 @@ notificationSchema.statics.createAdminCancellationNotification = function(coordi
 };
 
 // Static method to create notification for stakeholder when request is cancelled
-notificationSchema.statics.createStakeholderCancellationNotification = function(stakeholderId, requestId, eventId, note) {
+notificationSchema.statics.createStakeholderCancellationNotification = async function(stakeholderId, requestId, eventId, note, actorRole = 'Admin', actorName = null) {
+  // Determine actor label
+  let actorLabel = 'Admin';
+  if (actorRole) {
+    const roleLower = String(actorRole).toLowerCase();
+    if (roleLower === 'systemadmin' || roleLower === 'admin') actorLabel = 'Admin';
+    else if (roleLower === 'coordinator') actorLabel = 'Coordinator';
+    else if (roleLower === 'stakeholder') actorLabel = 'Stakeholder';
+    else actorLabel = actorRole;
+  }
+  
+  // Get event title for better context
+  let eventTitle = null;
+  try {
+    const Event = mongoose.model('Event');
+    const ev = await Event.findOne({ Event_ID: eventId }).select('Event_Title').lean().exec();
+    if (ev) eventTitle = ev.Event_Title;
+  } catch (e) {}
+  
+  const title = 'Your Event Request Cancelled';
+  const message = eventTitle
+    ? `Your event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`
+    : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`;
+  
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     Recipient_ID: stakeholderId,
     RecipientType: 'Stakeholder',
     Request_ID: requestId,
     Event_ID: eventId,
-    Title: 'Your Event Request Cancelled',
-    Message: `Your event request has been cancelled. ${note ? `Reason: ${note}` : ''}`,
+    Title: title,
+    Message: message,
     NotificationType: 'RequestCancelled',
     ActionTaken: 'Cancelled',
     ActionNote: note || null
@@ -436,7 +493,7 @@ notificationSchema.statics.createStakeholderCancellationNotification = function(
 };
 
 // Static method to create notification for request deletion
-notificationSchema.statics.createRequestDeletionNotification = async function(coordinatorId, requestId, eventId) {
+notificationSchema.statics.createRequestDeletionNotification = async function(recipientId, requestId, eventId, recipientType = 'Coordinator', actorRole = 'Admin', actorName = null) {
   // Attempt to include event title and type for better context
   let eventTitle = null;
   let eventCategory = null;
@@ -476,16 +533,26 @@ notificationSchema.statics.createRequestDeletionNotification = async function(co
     }
   }
 
+  // Determine actor label
+  let actorLabel = 'Admin';
+  if (actorRole) {
+    const roleLower = String(actorRole).toLowerCase();
+    if (roleLower === 'systemadmin' || roleLower === 'admin') actorLabel = 'Admin';
+    else if (roleLower === 'coordinator') actorLabel = 'Coordinator';
+    else if (roleLower === 'stakeholder') actorLabel = 'Stakeholder';
+    else actorLabel = actorRole;
+  }
+  
   const title = 'Event Request Deleted';
   const messageParts = [];
   if (eventTitle) messageParts.push(`"${eventTitle}"`);
   if (eventCategory) messageParts.push(`${eventCategory}`);
-  messageParts.push('request has been permanently deleted by the system administrator.');
+  messageParts.push(`request has been permanently deleted by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`);
   const message = messageParts.join(' ');
   // Avoid creating duplicate deletion notifications for the same recipient+request
   try {
     const recent = await this.findOne({
-      Recipient_ID: coordinatorId,
+      Recipient_ID: recipientId,
       Request_ID: requestId,
       NotificationType: 'RequestDeleted'
     }).sort({ createdAt: -1 }).lean().exec();
@@ -502,8 +569,8 @@ notificationSchema.statics.createRequestDeletionNotification = async function(co
 
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    Recipient_ID: coordinatorId,
-    RecipientType: 'Coordinator',
+    Recipient_ID: recipientId,
+    RecipientType: recipientType,
     Request_ID: requestId,
     Event_ID: eventId,
     Title: title,
@@ -529,11 +596,21 @@ notificationSchema.statics.createStakeholderDeletionNotification = async functio
     // ignore
   }
 
+  // Determine actor label
+  let actorLabel = 'Admin';
+  if (actorRole) {
+    const roleLower = String(actorRole).toLowerCase();
+    if (roleLower === 'systemadmin' || roleLower === 'admin') actorLabel = 'Admin';
+    else if (roleLower === 'coordinator') actorLabel = 'Coordinator';
+    else if (roleLower === 'stakeholder') actorLabel = 'Stakeholder';
+    else actorLabel = actorRole;
+  }
+  
   const title = 'Your Event Request Deleted';
   const messageParts = [];
   if (eventTitle) messageParts.push(`"${eventTitle}"`);
   if (eventCategory) messageParts.push(`${eventCategory}`);
-  messageParts.push('request has been permanently deleted by the system administrator.');
+  messageParts.push(`request has been permanently deleted by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`);
   const message = messageParts.join(' ');
   // Avoid creating duplicate deletion notifications for the same recipient+request
   try {

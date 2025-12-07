@@ -146,10 +146,22 @@ module.exports = {
 function getHumanStatusLabel(status, request = {}) {
   const s = String(status || '').toLowerCase();
   const reviewerRole = request.reviewer && request.reviewer.role ? String(request.reviewer.role).toLowerCase() : null;
+  
+  // IMPORTANT: For SystemAdmin-created requests, reviewer should always be coordinator
+  // If reviewer is not set or is incorrectly set, check the creator role
+  const creatorRole = request.made_by_role || request.creator?.role;
+  const isSystemAdminRequest = creatorRole && String(creatorRole).toLowerCase().includes('admin');
+  
+  // If SystemAdmin created the request, the reviewer should be coordinator (not stakeholder)
+  let effectiveReviewerRole = reviewerRole;
+  if (isSystemAdminRequest && reviewerRole !== 'coordinator' && reviewerRole !== 'systemadmin' && reviewerRole !== 'admin') {
+    // SystemAdmin requests should be reviewed by coordinator, not stakeholder
+    effectiveReviewerRole = 'coordinator';
+  }
 
   if (s.includes('pending')) {
-    if (reviewerRole === 'coordinator') return 'Waiting for Coordinator review';
-    if (reviewerRole === 'systemadmin' || reviewerRole === 'admin') return 'Waiting for Admin review';
+    if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review';
+    if (effectiveReviewerRole === 'systemadmin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
     return 'Waiting for Admin or Coordinator review';
   }
 
