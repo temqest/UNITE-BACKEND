@@ -32,8 +32,8 @@ const decisionSchema = new mongoose.Schema({
   resultStatus: { type: String, trim: true },
   actor: {
     id: { type: String, trim: true, required: true },
-    // Allow 'Admin' legacy value
-    role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator'], required: true },
+    // Allow 'Admin' legacy value and 'Stakeholder' for reschedule flows
+    role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator', 'Stakeholder'], required: true },
     name: { type: String, trim: true }
   },
   payload: {
