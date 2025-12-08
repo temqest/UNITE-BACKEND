@@ -218,7 +218,7 @@ class RequestStateMachine {
     const isSystemAdminRequest = normalizedCreatorRole === ROLES.SYSTEM_ADMIN;
     const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
     
-    if (!isReviewer && isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
+    if (!isReviewer && isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR) {
       // For SystemAdmin requests, if user is coordinator and matches coordinator_id, they are the reviewer
       if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
         // Verify reviewer should be coordinator (check reviewer assignment rule)
@@ -230,7 +230,7 @@ class RequestStateMachine {
     }
     
     // CRITICAL: Additional fallback for Stakeholder-created requests: coordinators are reviewers
-    if (!isReviewer && isStakeholderRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
+    if (!isReviewer && isStakeholderRequest && normalizedRole === ROLES.COORDINATOR) {
       // For Stakeholder requests, if user is coordinator and matches coordinator_id or reviewer.id, they are the reviewer
       if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
         isReviewer = true;
@@ -261,7 +261,7 @@ class RequestStateMachine {
         // This covers cases where `request.reviewer` may not yet be normalized or updated.
         try {
           if (
-            normalizedRole === ROLES.COORDINATOR.toLowerCase() &&
+            normalizedRole === ROLES.COORDINATOR &&
             request.coordinator_id &&
             String(request.coordinator_id) === String(userId)
           ) {
@@ -348,7 +348,7 @@ class RequestStateMachine {
       // This includes checking reviewer assignment, coordinator_id for stakeholder requests, etc.
       const isDefinitelyReviewer = isReviewer || 
         justMadeDecision || // If they just made a decision, they're definitely the reviewer
-        (normalizedRole === ROLES.COORDINATOR.toLowerCase() && isStakeholderRequest && request.coordinator_id && String(request.coordinator_id) === String(userId)) ||
+        (normalizedRole === ROLES.COORDINATOR && isStakeholderRequest && request.coordinator_id && String(request.coordinator_id) === String(userId)) ||
         (normalizedRole === ROLES.SYSTEM_ADMIN && isStakeholderRequest && request.reviewer && request.reviewer.role && this.normalizeRole(request.reviewer.role) === ROLES.SYSTEM_ADMIN);
       
       if (isDefinitelyReviewer) {
@@ -536,7 +536,7 @@ class RequestStateMachine {
     }
 
     // For SystemAdmin-created requests: check if coordinator_id matches and reviewer is coordinator
-    if (isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
+    if (isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR) {
       // If reviewer is coordinator and coordinator_id matches, user is the reviewer
       if (reviewer && reviewer.role && this.normalizeRole(reviewer.role) === ROLES.COORDINATOR) {
         // Check if coordinator_id matches userId
@@ -556,7 +556,7 @@ class RequestStateMachine {
 
     // CRITICAL: For Stakeholder-created requests, coordinators are reviewers
     // Check if user is coordinator and matches coordinator_id or reviewer assignment
-    if (isStakeholderRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
+    if (isStakeholderRequest && normalizedRole === ROLES.COORDINATOR) {
       // If reviewer is set and is coordinator, check if IDs match
       if (reviewer && reviewer.role) {
         const normalizedReviewerRole = this.normalizeRole(reviewer.role);
