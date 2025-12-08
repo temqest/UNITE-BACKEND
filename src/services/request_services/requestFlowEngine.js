@@ -257,6 +257,7 @@ class RequestFlowEngine {
 
       // Update reviewer assignment when rescheduling
       // If coordinator reschedules, admin should review. If admin reschedules, coordinator should review.
+      // If stakeholder reschedules, coordinator (or admin) should review.
       const requesterRole = request.made_by_role || request.creator?.role;
       if (String(actorRole).toLowerCase().includes('coordinator')) {
         // Coordinator rescheduled: assign admin as reviewer
@@ -292,6 +293,84 @@ class RequestFlowEngine {
             // If coordinator lookup fails, keep existing reviewer
           }
         }
+      } else if (String(actorRole).toLowerCase().includes('stakeholder')) {
+        // Stakeholder rescheduled: assign coordinator as reviewer (or admin as fallback)
+        if (request.coordinator_id) {
+          try {
+            const BloodbankStaff = require('../../models/index').BloodbankStaff;
+            const staff = await BloodbankStaff.findOne({ ID: request.coordinator_id }).lean().exec();
+            const coordinatorName = staff ? `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim() : null;
+            request.reviewer = {
+              id: request.coordinator_id,
+              role: 'Coordinator',
+              name: coordinatorName,
+              autoAssigned: true
+            };
+            console.log('[RequestFlowEngine] Stakeholder reschedule: set coordinator as reviewer', {
+              requestId: request.Request_ID,
+              coordinator_id: request.coordinator_id,
+              reviewer: request.reviewer
+            });
+          } catch (e) {
+            // If coordinator lookup fails, try admin as fallback
+            try {
+              const SystemAdmin = require('../../models/index').SystemAdmin;
+              const admin = await SystemAdmin.findOne().lean().exec();
+              if (admin) {
+                const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+                request.reviewer = {
+                  id: admin.Admin_ID,
+                  role: 'SystemAdmin',
+                  name: adminName,
+                  autoAssigned: true
+                };
+              }
+            } catch (e2) {
+              // If admin lookup also fails, keep existing reviewer
+            }
+          }
+        } else {
+          // No coordinator_id, try admin as fallback
+          try {
+            const SystemAdmin = require('../../models/index').SystemAdmin;
+            const admin = await SystemAdmin.findOne().lean().exec();
+            if (admin) {
+              const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+              request.reviewer = {
+                id: admin.Admin_ID,
+                role: 'SystemAdmin',
+                name: adminName,
+                autoAssigned: true
+              };
+            }
+          } catch (e) {
+            // If admin lookup fails, keep existing reviewer
+          }
+        }
+
+        // Force reviewer to coordinator if still not set or set to stakeholder
+        try {
+          const reviewerRoleNorm = request.reviewer?.role
+            ? String(request.reviewer.role).toLowerCase()
+            : null;
+          if (
+            !request.reviewer ||
+            reviewerRoleNorm === 'stakeholder' ||
+            !request.reviewer.id
+          ) {
+            request.reviewer = {
+              id: request.coordinator_id || request.reviewer?.id || null,
+              role: 'Coordinator',
+              name: request.reviewer?.name || null,
+              autoAssigned: true
+            };
+            console.log('[RequestFlowEngine] Stakeholder reschedule: force coordinator as reviewer', {
+              requestId: request.Request_ID,
+              coordinator_id: request.coordinator_id,
+              reviewer: request.reviewer
+            });
+          }
+        } catch (e) {}
       }
 
       // Update event dates if rescheduling

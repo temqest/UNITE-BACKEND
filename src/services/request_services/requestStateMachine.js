@@ -36,6 +36,13 @@ const ROLES = Object.freeze({
   STAKEHOLDER: 'Stakeholder'
 });
 
+// Local copy of review decision constants (matches requestFlow.helpers)
+const REVIEW_DECISIONS = Object.freeze({
+  ACCEPT: 'accept',
+  REJECT: 'reject',
+  RESCHEDULE: 'reschedule'
+});
+
 /**
  * State Transition Rules
  * Each state defines:
@@ -60,14 +67,14 @@ const STATE_TRANSITIONS = {
 
   [REQUEST_STATES.REVIEW_ACCEPTED]: {
     allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.CONFIRM],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.CONFIRM],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.CONFIRM]
+      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW], // Reviewers cannot confirm - only requester can confirm
+      [ROLES.COORDINATOR]: [ACTIONS.VIEW], // Reviewers cannot confirm - only requester can confirm
+      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW] // Reviewers cannot confirm - only requester can confirm
     },
     transitions: {
       [ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED
     },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM]
+    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM] // Only requester can confirm
   },
 
   [REQUEST_STATES.REVIEW_REJECTED]: {
@@ -85,9 +92,9 @@ const STATE_TRANSITIONS = {
 
   [REQUEST_STATES.REVIEW_RESCHEDULED]: {
     allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE, ACTIONS.CONFIRM],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE], // Coordinators can NEVER confirm - only requester confirms
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.RESCHEDULE]
+      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE], // Reviewers cannot confirm - only requester confirms
+      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE], // Reviewers cannot confirm - only requester confirms
+      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.RESCHEDULE] // Reviewers cannot confirm - only requester confirms
     },
     transitions: {
       [ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED, // Reviewer accepts → goes to review-accepted, requiring requester confirmation
@@ -96,20 +103,20 @@ const STATE_TRANSITIONS = {
       [ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Loop back
     },
     requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.RESCHEDULE], // Requester can view, confirm, or reschedule again
-    reviewerActions: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE] // Reviewer can accept, reject, reschedule, or view
+    reviewerActions: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE] // Reviewer can accept, reject, reschedule, or view (NO CONFIRM)
   },
 
   [REQUEST_STATES.AWAITING_CONFIRMATION]: {
     allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT]
+      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW], // Reviewers cannot confirm - only requester can confirm
+      [ROLES.COORDINATOR]: [ACTIONS.VIEW], // Reviewers cannot confirm - only requester can confirm
+      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW] // Reviewers cannot confirm - only requester can confirm
     },
     transitions: {
       [ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED,
       [ACTIONS.REJECT]: REQUEST_STATES.REJECTED
     },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT]
+    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT] // Only requester can confirm or reject
   },
 
   [REQUEST_STATES.APPROVED]: {
@@ -207,7 +214,10 @@ class RequestStateMachine {
     
     // Additional fallback for SystemAdmin-created requests: if coordinator_id matches and reviewer should be coordinator
     const creatorRole = request.made_by_role || request.creator?.role;
-    const isSystemAdminRequest = creatorRole && this.normalizeRole(creatorRole) === ROLES.SYSTEM_ADMIN;
+    const normalizedCreatorRole = creatorRole ? this.normalizeRole(creatorRole) : null;
+    const isSystemAdminRequest = normalizedCreatorRole === ROLES.SYSTEM_ADMIN;
+    const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
+    
     if (!isReviewer && isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
       // For SystemAdmin requests, if user is coordinator and matches coordinator_id, they are the reviewer
       if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
@@ -218,32 +228,70 @@ class RequestStateMachine {
         }
       }
     }
+    
+    // CRITICAL: Additional fallback for Stakeholder-created requests: coordinators are reviewers
+    if (!isReviewer && isStakeholderRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
+      // For Stakeholder requests, if user is coordinator and matches coordinator_id or reviewer.id, they are the reviewer
+      if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
+        isReviewer = true;
+      } else if (request.reviewer && request.reviewer.id && String(request.reviewer.id) === String(userId)) {
+        isReviewer = true;
+      } else if (request.reviewer && request.reviewer.role) {
+        const reviewerRole = this.normalizeRole(request.reviewer.role);
+        if (reviewerRole === ROLES.COORDINATOR) {
+          // If reviewer role is coordinator and no specific ID check, assume coordinator_id matches
+          isReviewer = true;
+        }
+      }
+    }
 
     // Special handling for REVIEW_RESCHEDULED state
     if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-      const rescheduleProposal = request.rescheduleProposal;
-      if (rescheduleProposal && rescheduleProposal.proposedBy) {
-        const proposerId = rescheduleProposal.proposedBy.id;
-        // If the current user is the proposer, they can only VIEW
-        if (proposerId && String(proposerId) === String(userId)) {
-          return [ACTIONS.VIEW];
+        const rescheduleProposal = request.rescheduleProposal;
+        if (rescheduleProposal && rescheduleProposal.proposedBy) {
+          const proposerId = rescheduleProposal.proposedBy.id;
+          // If the current user is the proposer, they can only VIEW
+          if (proposerId && String(proposerId) === String(userId)) {
+            return [ACTIONS.VIEW];
+          }
         }
-      }
+
+        // Additional safeguard: if the request was proposed by a stakeholder and
+        // the current user matches the assigned `coordinator_id`, treat them as the reviewer.
+        // This covers cases where `request.reviewer` may not yet be normalized or updated.
+        try {
+          if (
+            normalizedRole === ROLES.COORDINATOR.toLowerCase() &&
+            request.coordinator_id &&
+            String(request.coordinator_id) === String(userId)
+          ) {
+            // Ensure the current user is not also the proposer
+            const proposerId = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id;
+            if (!proposerId || String(proposerId) !== String(userId)) {
+              if (stateConfig.reviewerActions) return stateConfig.reviewerActions;
+            }
+          }
+        } catch (e) {
+          // ignore and continue to existing logic
+        }
       
-      // If user is the requester (original creator), use requester actions
-      if (isRequester && stateConfig.requesterActions) {
-        return stateConfig.requesterActions;
-      }
-      
-      // If user is the assigned reviewer, use reviewer actions (NOT requester actions)
+      // CRITICAL: If user is a reviewer (even if they're also the requester), they cannot confirm
+      // Reviewers who rescheduled cannot confirm - only the original requester (if not the reviewer) can confirm
       if (isReviewer && stateConfig.reviewerActions) {
-        return stateConfig.reviewerActions;
+        return stateConfig.reviewerActions; // This does NOT include confirm
+      }
+      
+      // If user is the requester (and NOT the reviewer), use requester actions (includes confirm)
+      if (isRequester && !isReviewer && stateConfig.requesterActions) {
+        return stateConfig.requesterActions;
       }
     }
 
     // Special handling for REVIEW_REJECTED state:
     // - If user is the reviewer who rejected, they can only VIEW (not confirm their own rejection)
     // - If user is the requester, they can VIEW and CONFIRM the rejection
+    // CRITICAL: This is handled above in the requiresRequesterConfirmation block
+    // But we keep this for additional validation
     if (normalizedState === REQUEST_STATES.REVIEW_REJECTED) {
       // Check if this user is the one who rejected (check decisionHistory)
       const wasRejectedByThisUser = request.decisionHistory && Array.isArray(request.decisionHistory) &&
@@ -252,36 +300,87 @@ class RequestStateMachine {
           d.actor && String(d.actor.id) === String(userId)
         );
       
-      // If user is the requester (not the reviewer who rejected), they can confirm
-      if (isRequester && !wasRejectedByThisUser && stateConfig.requesterActions) {
-        return stateConfig.requesterActions;
-      }
-      
-      // If user is the reviewer who rejected, they can only VIEW
+      // CRITICAL: Reviewers who rejected can NEVER confirm - handled above, but double-check here
       if (isReviewer && wasRejectedByThisUser) {
         return [ACTIONS.VIEW];
       }
       
-      // If user is reviewer but didn't reject, use reviewer actions
-      if (isReviewer && !wasRejectedByThisUser) {
-        if (stateConfig.allowedActions[normalizedRole]) {
-          return stateConfig.allowedActions[normalizedRole];
-        }
-        const canonicalRole = normalizedRole === ROLES.SYSTEM_ADMIN.toLowerCase() ? ROLES.SYSTEM_ADMIN :
-                             normalizedRole === ROLES.COORDINATOR.toLowerCase() ? ROLES.COORDINATOR :
-                             normalizedRole === ROLES.STAKEHOLDER.toLowerCase() ? ROLES.STAKEHOLDER : null;
-        if (canonicalRole && stateConfig.allowedActions[canonicalRole]) {
-          return stateConfig.allowedActions[canonicalRole];
-        }
+      // If user is the requester (not the reviewer who rejected), they can confirm
+      // This is already handled above, but keeping for clarity
+      if (isRequester && !wasRejectedByThisUser && stateConfig.requesterActions) {
+        return stateConfig.requesterActions;
       }
     }
 
-    // If user is the requester, use requester actions
+    // CRITICAL: For states that require requester confirmation (REVIEW_ACCEPTED, REVIEW_REJECTED, REVIEW_RESCHEDULED)
+    // Reviewers MUST NEVER get confirm action, even if they're somehow identified as requesters
+    // Only the original requester (creator) can confirm
+    // IMPORTANT:
+    // - REVIEW_ACCEPTED and REVIEW_REJECTED require requester confirmation.
+    // - REVIEW_RESCHEDULED does NOT belong here because reviewers still need
+    //   to accept/reject/reschedule; only confirm is requester-only.
+    const requiresRequesterConfirmation = [
+      REQUEST_STATES.REVIEW_ACCEPTED,
+      REQUEST_STATES.REVIEW_REJECTED,
+      REQUEST_STATES.AWAITING_CONFIRMATION
+    ].includes(normalizedState);
+
+    if (requiresRequesterConfirmation) {
+      // CRITICAL: Reviewers MUST NEVER get confirm action, even if they're also the requester
+      // Reviewers who accepted/rejected/rescheduled cannot confirm their own decisions
+      // Only the original requester (who is NOT the reviewer) can confirm
+      
+      // Check if this user just made a decision (accepted/rejected/rescheduled) by checking decisionHistory
+      // This is the most reliable way to identify who is the reviewer
+      let justMadeDecision = false;
+      if (request.decisionHistory && Array.isArray(request.decisionHistory) && request.decisionHistory.length > 0) {
+        // Get the most recent decision
+        const mostRecentDecision = request.decisionHistory[request.decisionHistory.length - 1];
+        if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id) {
+          // Check if this user is the one who made the most recent decision
+          if (String(mostRecentDecision.actor.id) === String(userId)) {
+            justMadeDecision = true;
+          }
+        }
+      }
+      
+      // Check if user is a reviewer by multiple methods to be absolutely sure
+      // This includes checking reviewer assignment, coordinator_id for stakeholder requests, etc.
+      const isDefinitelyReviewer = isReviewer || 
+        justMadeDecision || // If they just made a decision, they're definitely the reviewer
+        (normalizedRole === ROLES.COORDINATOR.toLowerCase() && isStakeholderRequest && request.coordinator_id && String(request.coordinator_id) === String(userId)) ||
+        (normalizedRole === ROLES.SYSTEM_ADMIN && isStakeholderRequest && request.reviewer && request.reviewer.role && this.normalizeRole(request.reviewer.role) === ROLES.SYSTEM_ADMIN);
+      
+      if (isDefinitelyReviewer) {
+        // Reviewers can ONLY view - never confirm
+        console.log('[getAllowedActions] Reviewer detected - blocking confirm action:', {
+          userId,
+          userRole: normalizedRole,
+          isReviewer,
+          justMadeDecision,
+          state: normalizedState,
+          reviewer: request.reviewer,
+          coordinator_id: request.coordinator_id,
+          made_by_role: request.made_by_role
+        });
+        return [ACTIONS.VIEW];
+      }
+      
+      // If user is the requester (original creator) and NOT a reviewer, they can confirm
+      if (isRequester && !isDefinitelyReviewer && stateConfig.requesterActions) {
+        return stateConfig.requesterActions;
+      }
+      
+      // For everyone else (non-requester, non-reviewer), they can only view
+      return [ACTIONS.VIEW];
+    }
+
+    // For other states: If user is the requester, use requester actions
     if (isRequester && stateConfig.requesterActions) {
       return stateConfig.requesterActions;
     }
 
-    // If user is the assigned reviewer, use reviewer actions
+    // For other states: If user is the assigned reviewer, use reviewer actions
     if (isReviewer) {
       // Try exact role match first
       if (stateConfig.allowedActions[normalizedRole]) {
@@ -312,7 +411,8 @@ class RequestStateMachine {
     }
 
     // Admin override: admins can act as reviewers if allowed
-    if (isAdmin && stateConfig.allowedActions[ROLES.SYSTEM_ADMIN]) {
+    // CRITICAL: But NEVER allow confirm in states that require requester confirmation
+    if (isAdmin && stateConfig.allowedActions[ROLES.SYSTEM_ADMIN] && !requiresRequesterConfirmation) {
       // Check if admin override is allowed for this request type
       const creatorRole = this.normalizeRole(request.made_by_role || request.creator?.role);
       const assignmentRule = REVIEWER_ASSIGNMENT_RULES[creatorRole];
@@ -374,8 +474,24 @@ class RequestStateMachine {
    */
   isRequester(userId, request) {
     if (!userId || !request) return false;
+    
+    // Check made_by_id or creator.id (primary check)
     const madeById = request.made_by_id || request.creator?.id;
-    return madeById && String(madeById) === String(userId);
+    if (madeById && String(madeById) === String(userId)) {
+      return true;
+    }
+    
+    // For stakeholder requests, also check stakeholder_id
+    // This handles cases where made_by_id might not match stakeholder_id
+    const requesterRole = request.made_by_role || request.creator?.role;
+    const normalizedRequesterRole = this.normalizeRole(requesterRole);
+    if (normalizedRequesterRole === ROLES.STAKEHOLDER) {
+      if (request.stakeholder_id && String(request.stakeholder_id) === String(userId)) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 
   /**
@@ -390,7 +506,9 @@ class RequestStateMachine {
     // IMPORTANT: For SystemAdmin-created requests, only coordinators can be reviewers
     // Stakeholders should never be reviewers for SystemAdmin-created requests
     const creatorRole = request.made_by_role || request.creator?.role;
-    const isSystemAdminRequest = creatorRole && this.normalizeRole(creatorRole) === ROLES.SYSTEM_ADMIN;
+    const normalizedCreatorRole = creatorRole ? this.normalizeRole(creatorRole) : null;
+    const isSystemAdminRequest = normalizedCreatorRole === ROLES.SYSTEM_ADMIN;
+    const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
     
     if (isSystemAdminRequest && normalizedRole === ROLES.STAKEHOLDER.toLowerCase()) {
       // Stakeholders cannot be reviewers for SystemAdmin-created requests
@@ -431,6 +549,29 @@ class RequestStateMachine {
         }
       }
       // Fallback: if no reviewer is set but coordinator_id matches, assume coordinator is reviewer
+      if (!reviewer && request.coordinator_id && String(request.coordinator_id) === String(userId)) {
+        return true;
+      }
+    }
+
+    // CRITICAL: For Stakeholder-created requests, coordinators are reviewers
+    // Check if user is coordinator and matches coordinator_id or reviewer assignment
+    if (isStakeholderRequest && normalizedRole === ROLES.COORDINATOR.toLowerCase()) {
+      // If reviewer is set and is coordinator, check if IDs match
+      if (reviewer && reviewer.role) {
+        const normalizedReviewerRole = this.normalizeRole(reviewer.role);
+        if (normalizedReviewerRole === ROLES.COORDINATOR) {
+          // Check if reviewer.id matches userId
+          if (reviewer.id && String(reviewer.id) === String(userId)) {
+            return true;
+          }
+          // Also check coordinator_id as fallback
+          if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
+            return true;
+          }
+        }
+      }
+      // Fallback: if reviewer not set but coordinator_id matches, assume coordinator is reviewer
       if (!reviewer && request.coordinator_id && String(request.coordinator_id) === String(userId)) {
         return true;
       }
