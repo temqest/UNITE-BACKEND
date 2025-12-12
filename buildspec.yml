@@ -7,20 +7,20 @@ env:
 phases:
   install:
     runtime-versions:
-      nodejs: 18
+      nodejs: 20
     commands:
       - echo Installing dependencies...
       - npm ci
 
   pre_build:
     commands:
-      - echo Pre-build step (optional)
+      - echo "Pre-build step (optional)"
 
   build:
     commands:
       - echo Building application and packaging artifact...
       # Create an artifact zip suitable for Elastic Beanstalk. Exclude .git and node_modules.
-      - zip -r app.zip . -x "*.git*" "node_modules/*" "*.zip" "*.7z"
+      - zip -r app.zip . -x "./.git/*" "node_modules/*" "*.zip" "*.7z"
 
 artifacts:
   files:
