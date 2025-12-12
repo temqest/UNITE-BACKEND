@@ -28,7 +28,7 @@ artifacts:
   base-directory: artifact
   files:
     - '**/*'
-  discard-paths: yes
+  discard-paths: no
 
 cache:
   paths:
