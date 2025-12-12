@@ -4,7 +4,7 @@
 
 ## Overview
 
-UNITE is a comprehensive backend system designed to streamline the planning, approval, scheduling, and monitoring of blood-related activities for the Bicol Medical Center Blood Bank. The system centralizes event requests, admin workflows, scheduling rules, and event tracking to maintain an organized and capacity-safe operations pipeline.
+UNITE is a comprehensive backend system designed to streamline the planning, approval, scheduling, and monitoring of blood-related activities for the Bicol Medical Center Blood Bank. The system centralizes event requests, admin workflows, scheduling rules, and event tracking to maintain an organized and capacity-safe operations pipeline. checking
 
 ## Architecture
 
