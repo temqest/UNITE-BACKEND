@@ -10,6 +10,11 @@ const socketIo = require('socket.io');
 
 // Initialize Express app
 const app = express();
+// When behind a load balancer (Elastic Beanstalk), trust the proxy headers
+if (process.env.NODE_ENV === 'production') {
+  // trust first proxy (ELB/NLB) so req.protocol, req.secure, and req.ip are correct
+  app.set('trust proxy', 1);
+}
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -58,7 +63,7 @@ if (mongoDbName) {
 // CORS Configuration
 // For production, update allowedOrigins with your frontend domain
 const allowedOrigins = process.env.NODE_ENV === 'production'
-  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app'])
+  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app', 'https://www.unitehealth.tech'])
   : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000'];
 
 const corsOptions = {
@@ -110,6 +115,17 @@ app.use((req, res, next) => {
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, res, next) => {
     console.log(`📥 ${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+  });
+}
+
+// Redirect HTTP -> HTTPS when running in production behind a load balancer
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || '').toString();
+    if (proto === 'http') {
+      return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+    }
     next();
   });
 }
