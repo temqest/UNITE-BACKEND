@@ -18,13 +18,17 @@ phases:
 
   build:
     commands:
-      - echo Building application and packaging artifact...
-      # Create an artifact zip suitable for Elastic Beanstalk. Exclude .git and node_modules.
-      - zip -r app.zip . -x "./.git/*" "node_modules/*" "*.zip" "*.7z"
+      - echo Building application and preparing artifact directory...
+      - mkdir -p artifact
+      # Try to use rsync if available for a reliable copy and excludes; otherwise fallback to cp
+      - if command -v rsync >/dev/null 2>&1; then rsync -a --exclude='.git' --exclude='node_modules' ./ artifact/; else cp -a . artifact/ || true; fi
+      - rm -rf artifact/.git artifact/node_modules artifact/*.zip artifact/*.7z || true
 
 artifacts:
+  base-directory: artifact
   files:
-    - app.zip
+    - '**/*'
+  discard-paths: yes
 
 cache:
   paths:
