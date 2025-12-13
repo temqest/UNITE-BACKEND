@@ -17,6 +17,8 @@ const SystemAdminService = require('../services/users_services/systemAdmin.servi
 
 // Accept multiple env names
 const uri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
+// Database name (optional) — allows connecting to a specific DB in the cluster
+const dbName = process.env.MONGO_DB_NAME || process.env.MONGO_DB || process.env.DB_NAME || null;
 
 function loadConfig() {
   if (fs.existsSync(sysadminPath)) {
@@ -40,13 +42,18 @@ async function run() {
   console.log('Configuration to use:');
   console.log(JSON.stringify({ staff: { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email }, admin }, null, 2));
 
+  // Log which database will be used (shows even for --dry-run)
+  console.log('Database to use:', dbName ? dbName : '(from URI)');
+
   if (dryRun) {
     console.log('--dry-run provided; exiting without writing to DB.');
     return;
   }
 
-  console.log('Connecting to DB:', uri.replace(/(mongodb\+srv:\/\/.*?:).*@/, '$1****@'));
-  await mongoose.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+  console.log('Connecting to DB:', uri.replace(/(mongodb\+srv:\/\/.*?:).*@/, '$1****@'), dbName ? `(using database: ${dbName})` : '');
+  const connectOptions = { useNewUrlParser: true, useUnifiedTopology: true };
+  if (dbName) connectOptions.dbName = dbName;
+  await mongoose.connect(uri, connectOptions);
   try {
     const result = await SystemAdminService.createSystemAdminAccount(staff, admin, null);
     console.log('System admin created successfully:');
