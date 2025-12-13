@@ -10,6 +10,11 @@ const socketIo = require('socket.io');
 
 // Initialize Express app
 const app = express();
+// When behind a load balancer (Elastic Beanstalk), trust the proxy headers
+if (process.env.NODE_ENV === 'production') {
+  // trust first proxy (ELB/NLB) so req.protocol, req.secure, and req.ip are correct
+  app.set('trust proxy', 1);
+}
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -58,7 +63,7 @@ if (mongoDbName) {
 // CORS Configuration
 // For production, update allowedOrigins with your frontend domain
 const allowedOrigins = process.env.NODE_ENV === 'production'
-  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app'])
+  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app', 'https://www.unitehealth.tech'])
   : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000'];
 
 const corsOptions = {
@@ -78,6 +83,22 @@ const corsOptions = {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
+
+// Production explicit CORS header middleware for known frontend domains
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const allowed = ['https://www.unitehealth.tech', 'https://unitehealth.tech'];
+    if (origin && allowed.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+    }
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+}
 
 app.use(cors(corsOptions));
 
@@ -110,6 +131,17 @@ app.use((req, res, next) => {
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, res, next) => {
     console.log(`📥 ${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+  });
+}
+
+// Redirect HTTP -> HTTPS when running in production behind a load balancer
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || '').toString();
+    if (proto === 'http') {
+      return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+    }
     next();
   });
 }
