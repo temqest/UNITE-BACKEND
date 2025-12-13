@@ -1,7 +1,7 @@
 {
   "name": "unite-backend",
   "version": "1.0.0",
-  "description": "UNITE Blood Bank Event Management System Backend",
+  "description": "UNITE Blood Bank System Backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

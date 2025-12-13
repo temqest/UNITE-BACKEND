@@ -1,6 +1,6 @@
 # UNITE Chat System
 
-This document describes the real-time chat system implementation for the UNITE Blood Bank Event Management System.
+This document describes the real-time chat system implementation for the UNITE Blood Bank System.
 
 ## Features
 

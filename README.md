@@ -1,6 +1,6 @@
 # UNITE Backend
 
-**UNITE Blood Bank Event Management System - Backend API**
+**UNITE Blood Bank System - Backend API**
 
 ## Overview
 

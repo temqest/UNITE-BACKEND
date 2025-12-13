@@ -211,7 +211,7 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'UNITE Blood Bank Event Management System API',
+    message: 'UNITE Blood Bank System API',
     version: '1.0.0',
     endpoints: {
       health: '/health',

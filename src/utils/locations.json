@@ -73,6 +73,18 @@
         "municipalities": [
           "Iriga City"
         ]
+      },
+      {
+        "name": "Blood Service Facilities",
+        "municipalities": [
+          "Camarines Sur BSF"
+        ]
+      },
+      {
+        "name": "NGO's & Gov't Agencies",
+        "municipalities": [
+          "Camarines Sur NGO's & Gov't Agencies"
+        ]
       }
     ]
   },
@@ -80,20 +92,32 @@
     "name": "Camarines Norte",
     "districts": [
       {
-        "name": "District I & II",
+        "name": "All LGUs (District I & II)",
         "municipalities": [
+          "Basud",
           "Capalonga",
+          "Daet",
           "Jose Panganiban",
           "Labo",
-          "Paracale",
-          "Sta. Elena",
-          "Basud",
-          "Daet",
           "Mercedes",
+          "Paracale",
           "San Lorenzo Ruiz",
           "San Vicente",
+          "Sta. Elena",
           "Talisay",
           "Vinzons"
+        ]
+      },
+      {
+        "name": "Blood Service Facilities",
+        "municipalities": [
+          "Camarines Norte BSF"
+        ]
+      },
+      {
+        "name": "NGO's & Gov't Agencies",
+        "municipalities": [
+          "Camarines Norte NGO's & Gov't Agencies"
         ]
       }
     ]

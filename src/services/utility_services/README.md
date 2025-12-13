@@ -1,6 +1,6 @@
 # Utility Services Documentation
 
-This directory contains utility services for managing districts and notifications in the UNITE Blood Bank Event Management System.
+This directory contains utility services for managing districts and notifications in the UNITE Blood Bank System.
 
 ## Services Overview
 
