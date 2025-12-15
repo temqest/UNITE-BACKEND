@@ -203,6 +203,7 @@ class CoordinatorService {
             Coordinator_ID: coord.Coordinator_ID,
             province: coord.province,
             district: coord.district,
+            accountType: coord.accountType || '',
             District: district || null,
             Staff: staff ? {
               First_Name: staff.First_Name,
