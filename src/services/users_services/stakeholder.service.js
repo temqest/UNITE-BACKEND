@@ -289,6 +289,7 @@ class StakeholderService {
   async list(filters = {}, page = 1, limit = 20) {
     const query = {};
     if (filters.district_id) query.district = filters.district_id;
+    if (filters.accountType) query.accountType = filters.accountType;
     if (filters.email) query.email = { $regex: filters.email, $options: 'i' };
 
     const skip = (page - 1) * limit;

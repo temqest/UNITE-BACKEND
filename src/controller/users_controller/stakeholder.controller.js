@@ -84,6 +84,7 @@ class StakeholderController {
         }
 
         const actorDistrict = actor.district_id || actor.district || (actor.role_data && actor.role_data.district_id) || null;
+        const actorAccountType = actor.accountType || actor.account_type || actor.role_data?.accountType || actor.role_data?.account_type || null;
         
         // If district_id is not found in token, try to fetch it from the database
         let finalActorDistrict = actorDistrict;
@@ -103,8 +104,25 @@ class StakeholderController {
           return res.status(403).json({ success: false, message: 'Unauthorized: coordinator missing district information' });
         }
 
-        // Override any client-supplied district filter to prevent bypassing
+        // Determine coordinator accountType (must match stakeholder.accountType)
+        let finalActorAccountType = actorAccountType;
+        if (!finalActorAccountType) {
+          try {
+            const { Coordinator } = require('../../models');
+            const coord = await Coordinator.findOne({ Coordinator_ID: actor.id }).lean().exec();
+            if (coord && coord.accountType) finalActorAccountType = coord.accountType;
+          } catch (e) {
+            // ignore DB errors
+          }
+        }
+
+        if (!finalActorAccountType) {
+          return res.status(403).json({ success: false, message: 'Unauthorized: coordinator missing accountType information' });
+        }
+
+        // Override client-supplied filters to prevent bypassing
         filters.district_id = String(finalActorDistrict);
+        filters.accountType = String(finalActorAccountType);
       }
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
