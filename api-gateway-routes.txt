@@ -1,0 +1,181 @@
+# API Gateway routes (fully-qualified)
+
+Base domain:
+https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com
+
+Note: path parameters use {param} notation.
+
+AUTH (mounted under both /api and /api/auth)
+POST https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/login
+GET  https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/me
+POST https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/logout
+POST https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/stakeholders/login
+
+POST https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/auth/login
+GET  https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/auth/me
+POST https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/auth/logout
+POST https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/auth/stakeholders/login
+
+CHAT (/api/chat)
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/messages
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/messages/{conversationId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/messages/{messageId}/read
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/messages/{messageId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/conversations
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/recipients
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/presence/{userId}
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/presence/batch
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/chat/presence/online
+
+EVENTS & CALENDAR
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/public/events
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/calendar/month
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/calendar/week
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/calendar/day
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/calendar/events/{eventId}/category
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/calendar/upcoming
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/{eventId}
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/batch
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/{eventId}/category
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/coordinators/{coordinatorId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/{eventId}/statistics
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/{eventId}/completeness
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/by-status
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/upcoming
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/recent
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/search
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/by-status
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/by-category
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/requests
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/blood-drives
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/coordinators
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/timeline
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/statistics/dashboard
+
+INVENTORY
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/bloodbags
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/bloodbags
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/bloodbags/{bloodBagId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/bloodbags/{bloodBagId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/bloodbags/{bloodBagId}
+
+USERS / ADMINS / COORDINATORS / STAKEHOLDERS
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/{userId}/verify-password
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/{userId}/password
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/{userId}/reset-password
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/{userId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/check-email/{email}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/{userId}/profile
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/{userId}/full-name
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/search
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users/check-staff/{staffId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/users
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}/dashboard
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/statistics
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}/coordinators
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}/coordinators
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/admin/{adminId}/requests/attention
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}/dashboard
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}/events/history
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}/registration-codes
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/coordinators/{coordinatorId}/registration-codes
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/registration-codes/validate
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/stakeholders/register
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/stakeholders
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/stakeholders/{stakeholderId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/stakeholders/{stakeholderId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/stakeholders/{stakeholderId}
+
+REQUESTS & SYSTEM SETTINGS
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/events/direct
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/pending
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/me
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/all
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/coordinator/{coordinatorId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/stakeholder/{stakeholderId}
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/coordinator-action
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/coordinator-confirm
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/stakeholder-action
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/check-overlap
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/check-double-booking
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/validate
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/blood-bags/{date}
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/blood
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/blood
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/blood/{requestId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/blood/{requestId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/blood/{requestId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/admin-action
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/staff
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/stakeholder-confirm
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/requests/{requestId}/delete
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/{settingKey}
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/validate-advance-booking
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/validate-weekend
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/validate-pending-requests
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/min-booking-date
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/max-booking-date
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/staff-assignment-required
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/coordinator-can-assign-staff
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/settings/validate-all-rules
+
+UTILITY (districts, notifications, locations, signup)
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/{districtId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/by-region
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/{districtId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/{districtId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/search
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/statistics
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/districts/{districtId}/exists
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/unread-count
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/{notificationId}/read
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/mark-multiple-read
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/mark-all-read
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/{notificationId}
+DELETE https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/{notificationId}
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/statistics
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/latest
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/new-request
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/admin-action
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/coordinator-action
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/admin-cancellation
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/stakeholder-cancellation
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/request-deletion
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/stakeholder-deletion
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/new-signup-request
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/signup-request-approved
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/notifications/signup-request-rejected
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/locations/provinces
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/locations/provinces/{provinceId}/districts
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/locations/districts/{districtId}/municipalities
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/locations/municipalities
+POST   https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/signup-requests
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/signup-requests/{id}/approve
+PUT    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/signup-requests/{id}/reject
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/signup-requests
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/api/signup-requests/verify-email
+
+HEALTH CHECK
+GET    https://UNITE-Backend-Production-env.eba-6cdmkwxd.ap-southeast-2.elasticbeanstalk.com/health

@@ -73,18 +73,6 @@
         "municipalities": [
           "Iriga City"
         ]
-      },
-      {
-        "name": "Blood Service Facilities",
-        "municipalities": [
-          "Camarines Sur BSF"
-        ]
-      },
-      {
-        "name": "NGO's & Gov't Agencies",
-        "municipalities": [
-          "Camarines Sur NGO's & Gov't Agencies"
-        ]
       }
     ]
   },
@@ -106,18 +94,6 @@
           "Sta. Elena",
           "Talisay",
           "Vinzons"
-        ]
-      },
-      {
-        "name": "Blood Service Facilities",
-        "municipalities": [
-          "Camarines Norte BSF"
-        ]
-      },
-      {
-        "name": "NGO's & Gov't Agencies",
-        "municipalities": [
-          "Camarines Norte NGO's & Gov't Agencies"
         ]
       }
     ]

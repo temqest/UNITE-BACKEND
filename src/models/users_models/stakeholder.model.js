@@ -35,7 +35,12 @@ const stakeholderSchema = new mongoose.Schema({
   phoneNumber: { type: String, required: false, trim: true },
   password: { type: String, required: true },
   organizationInstitution: { type: String, required: false, trim: true },
-  registrationCode: { type: String, required: false, trim: true }
+  registrationCode: { type: String, required: false, trim: true },
+  accountType: {
+    type: String,
+    enum: ["LGU", "Others"],
+    required: true
+  }
 }, {
   timestamps: true
 });
