@@ -120,7 +120,7 @@ const STATE_TRANSITIONS = {
     allowedActions: {
       [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL],
       [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.RESCHEDULE, ACTIONS.CANCEL]
+      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.RESCHEDULE] // Removed CANCEL - only Admin/Coord can cancel
     },
     transitions: {
       [ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED,
@@ -232,6 +232,24 @@ class RequestStateMachine {
     
     if (isRescheduledState) {
       const rescheduleProposal = request.rescheduleProposal;
+      
+      // CRITICAL: If current user is the one who proposed the reschedule, they can only VIEW
+      // This prevents Coordinator/Admin from accepting their own reschedule proposals
+      if (rescheduleProposal && rescheduleProposal.proposedBy && rescheduleProposal.proposedBy.id) {
+        const proposerId = rescheduleProposal.proposedBy.id;
+        if (String(proposerId) === String(userId)) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.log('[getAllowedActions] User is the reschedule proposer -> Only VIEW allowed:', {
+              proposerId,
+              userId,
+              proposerRole: rescheduleProposal.proposedBy.role,
+              userRole: normalizedRole
+            });
+          }
+          return [ACTIONS.VIEW];
+        }
+      }
+      
       const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
       const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
       const isCoordinatorStakeholderCase = normalizedCreatorRole === ROLES.COORDINATOR && hasStakeholder;
@@ -252,10 +270,7 @@ class RequestStateMachine {
         const proposerRole = this.normalizeRole(rescheduleProposal.proposedBy.role);
         const proposerId = rescheduleProposal.proposedBy.id;
 
-        // 1. Proposer (Stakeholder or Coordinator) can only VIEW their own active proposal
-        if (String(proposerId) === String(userId)) {
-          return [ACTIONS.VIEW];
-        }
+        // Note: The proposer check is already handled above, so this section handles the recipient of the proposal
 
         // 2. If STAKEHOLDER proposed -> Coordinator acts (or Admin in Coordinator-Stakeholder cases)
         if (proposerRole === ROLES.STAKEHOLDER && normalizedRole === ROLES.COORDINATOR) {
@@ -505,11 +520,15 @@ class RequestStateMachine {
 
     // Normal State Logic - Check requester AFTER Coordinator-Stakeholder case
     // In Coordinator-Stakeholder cases, Stakeholder is reviewer (not requester), so skip requester check for them
-    if (isRequester && stateConfig.requesterActions && !(isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER)) {
+    // CRITICAL: If user is the reschedule proposer, they should only get VIEW (already handled above, but double-check here)
+    const rescheduleProposalCheck = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id;
+    const isRescheduleProposer = rescheduleProposalCheck && String(request.rescheduleProposal.proposedBy.id) === String(userId);
+    
+    if (isRequester && stateConfig.requesterActions && !(isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) && !isRescheduleProposer) {
       return stateConfig.requesterActions;
     }
 
-    if (isReviewer) {
+    if (isReviewer && !isRescheduleProposer) {
       if (stateConfig.allowedActions[normalizedRole]) {
         return stateConfig.allowedActions[normalizedRole];
       }

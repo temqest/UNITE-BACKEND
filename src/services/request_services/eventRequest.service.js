@@ -1119,9 +1119,13 @@ class EventRequestService {
         // Merge with published event actions
         const publishedActions = [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE];
         const isRequester = this.stateMachine.isRequester(actorId, requestDoc);
-        const isAdmin = this.stateMachine.normalizeRole(actorRole) === 'SystemAdmin';
+        const normalizedActorRole = this.stateMachine.normalizeRole(actorRole);
+        const isAdmin = normalizedActorRole === 'SystemAdmin';
+        const isCoordinator = normalizedActorRole === 'Coordinator';
+        const isStakeholder = normalizedActorRole === 'Stakeholder';
         
-        if (isRequester || isAdmin) {
+        // Only Admin and Coordinator can cancel approved events (not Stakeholders)
+        if ((isRequester || isAdmin || isCoordinator) && !isStakeholder) {
           publishedActions.push(ACTIONS.CANCEL);
         }
         
@@ -1198,13 +1202,12 @@ class EventRequestService {
       const isPublished = event && (String(event.Status) === 'Completed' || String(event.Status) === 'Completed');
 
       // Published: all users see view, edit, manage-staff, resched
-      // For approved events, also allow cancel for admins, stakeholders who created the request, and coordinators who own or manage
+      // For approved events, also allow cancel for admins and coordinators (NOT stakeholders)
       if (isPublished) {
         const actions = ['view', 'edit', 'manage-staff', 'resched'];
         
-        // Allow cancel for approved events
+        // Allow cancel for approved events - only Admin and Coordinator (NOT Stakeholders)
         const isAdmin = role === 'admin' || role === 'systemadmin';
-        const isStakeholder = role === 'stakeholder' && req.stakeholder_id === actorId;
         let isCoordinator = false;
         if (role === 'coordinator') {
           isCoordinator = req.coordinator_id === actorId;
@@ -1219,7 +1222,7 @@ class EventRequestService {
           }
         }
         
-        if (isAdmin || isStakeholder || isCoordinator) {
+        if (isAdmin || isCoordinator) {
           actions.push('cancel');
         }
         
@@ -2540,10 +2543,24 @@ class EventRequestService {
       const action = actionData.action || 'Accepted'; // Accepted, Rejected, Rescheduled
       const normalizedAction = String(action || '').toLowerCase();
 
-      // Stakeholders are not allowed to cancel requests or events, but can reschedule, accept, reject, or cancel
+      // Stakeholders can reschedule, accept, reject, or cancel (pending requests only)
+      // Stakeholders are NOT allowed to cancel approved events - only Admin/Coord can cancel approved events
       const actorRoleNorm = String(actorRole || '').toLowerCase();
-      if (actorRoleNorm === 'stakeholder' && !['rescheduled', 'accepted', 'rejected', 'cancelled'].includes(normalizedAction)) {
-        throw new Error('Unauthorized: Stakeholders are not allowed to cancel requests or events');
+      const requestStatus = request.Status || request.status || '';
+      const isApprovedEvent = String(requestStatus).toLowerCase().includes('completed') || 
+                              String(requestStatus).toLowerCase().includes('approved');
+      
+      if (actorRoleNorm === 'stakeholder') {
+        // Prevent stakeholders from canceling approved events
+        if (normalizedAction === 'cancelled' || normalizedAction === 'cancel') {
+          if (isApprovedEvent) {
+            throw new Error('Unauthorized: Stakeholders are not allowed to cancel approved events. Only Admin and Coordinator can cancel approved events.');
+          }
+        }
+        // Allow other actions for stakeholders
+        if (!['rescheduled', 'accepted', 'rejected', 'cancelled'].includes(normalizedAction)) {
+          throw new Error('Unauthorized: Stakeholders can only reschedule, accept, reject, or cancel pending requests');
+        }
       }
 
       // Normalize actor role for consistent comparisons (accepts 'admin'|'Admin' etc.)
@@ -2849,6 +2866,8 @@ class EventRequestService {
       // can show the before/after dates correctly
       const originalEventStart = event && event.Start_Date ? new Date(event.Start_Date) : null;
       let finalizedByAccept = false;
+      // Track if this is a reschedule of an approved/completed event (for notification purposes)
+      const wasApprovedOrCompleted = event && (String(event.Status).toLowerCase() === 'completed' || String(event.Status).toLowerCase() === 'approved');
       if (event) {
           if (action === 'Rescheduled') {
           // Handle rescheduling logic
@@ -2901,6 +2920,14 @@ class EventRequestService {
 
               request.Status = REQUEST_STATUSES.REVIEW_RESCHEDULED;
               await request.save();
+              
+              // If rescheduling an approved/completed event, ensure notification is sent
+              // The notification will be sent later in the processRequestAction flow,
+              // but we ensure the rescheduleProposal is set correctly here
+              if (wasApprovedOrCompleted && request.rescheduleProposal) {
+                // The notification will be handled in the notification section below
+                // This ensures the rescheduleProposal is available for notification
+              }
             } catch (e) {
               // ignore attach errors
             }
@@ -3354,6 +3381,7 @@ class EventRequestService {
         } else if (action === 'Rescheduled') {
           // Notify the appropriate reviewer/owner for the reschedule proposal.
           // Prefer the assigned reviewer snapshot, then the coordinator, then stakeholder.
+          // IMPORTANT: This notification is sent for ALL reschedules, including approved/completed events
           try {
             if (request.reviewer && request.reviewer.id && String(request.reviewer.id) !== String(actorId)) {
               recipientId = request.reviewer.id;
@@ -3366,9 +3394,23 @@ class EventRequestService {
               recipientId = request.stakeholder_id;
               recipientType = 'Stakeholder';
             } else {
-              // fallback: don't notify the actor (avoid notifying the user who performed the action)
-              recipientId = null;
-              recipientType = null;
+              // fallback: determine recipient based on who created the request
+              // For approved/completed events being rescheduled, notify the original creator
+              if (request.made_by_id && String(request.made_by_id) !== String(actorId)) {
+                recipientId = request.made_by_id;
+                const creatorRole = request.made_by_role || request.creator?.role || 'Coordinator';
+                if (String(creatorRole).toLowerCase().includes('admin') || String(creatorRole).toLowerCase().includes('system')) {
+                  recipientType = 'Admin';
+                } else if (String(creatorRole).toLowerCase().includes('stakeholder')) {
+                  recipientType = 'Stakeholder';
+                } else {
+                  recipientType = 'Coordinator';
+                }
+              } else {
+                // last fallback: don't notify the actor (avoid notifying the user who performed the action)
+                recipientId = null;
+                recipientType = null;
+              }
             }
           } catch (e) {
             // if anything goes wrong, fall back to not notifying
@@ -3498,10 +3540,15 @@ class EventRequestService {
    */
   async assignStaffToEvent(adminId, eventId, staffMembers) {
     try {
-      // Verify admin
+      // Verify admin or coordinator - both can assign staff
+      const SystemAdmin = require('../../models/index').SystemAdmin;
+      const Coordinator = require('../../models/index').Coordinator;
+      
       const admin = await SystemAdmin.findOne({ Admin_ID: adminId });
-      if (!admin) {
-        throw new Error('Admin not found. Only admins can assign staff.');
+      const coordinator = await Coordinator.findOne({ Coordinator_ID: adminId });
+      
+      if (!admin && !coordinator) {
+        throw new Error('Admin or Coordinator not found. Only admins and coordinators can assign staff.');
       }
 
       // Verify event exists
@@ -4248,9 +4295,8 @@ class EventRequestService {
 
       // Authorization checks based on actor role and request status
       if (request.Status === 'Completed') {
-        // For approved events, sys admins, coordinators (own or handle stakeholder), stakeholders (own) can cancel
+        // For approved events, only sys admins and coordinators (own or handle stakeholder) can cancel - NOT stakeholders
         const isAdmin = actorRole === 'SystemAdmin' || actorRole === 'Admin';
-        const isStakeholder = actorRole === 'Stakeholder' && request.stakeholder_id === actorId;
         
         let isCoordinator = false;
         if (actorRole === 'Coordinator') {
@@ -4266,8 +4312,8 @@ class EventRequestService {
           }
         }
         
-        if (!isAdmin && !isStakeholder && !isCoordinator) {
-          throw new Error('Unauthorized: Only sys admins, coordinators (who own the event or handle the stakeholder), or the stakeholder who created this event can cancel approved events');
+        if (!isAdmin && !isCoordinator) {
+          throw new Error('Unauthorized: Only sys admins and coordinators (who own the event or handle the stakeholder) can cancel approved events');
         }
       } else {
         // For pending requests, sys admins, coordinators (own or handle stakeholder), stakeholders (own) can cancel
@@ -4590,13 +4636,24 @@ class EventRequestService {
       console.log('deleteEventRequest: requestId=', requestId, 'current Status=', request.Status, 'allowedStatuses=', ['Cancelled', 'Rejected']);
 
       // Only allow deletion of cancelled or rejected requests
-      const allowedStatuses = ['Cancelled', 'Rejected'];
-      if (!allowedStatuses.includes(request.Status)) {
+      // Check status in a case-insensitive way and also check normalized state
+      const requestStatus = String(request.Status || request.status || '').toLowerCase();
+      const isCancelled = requestStatus.includes('cancel');
+      const isRejected = requestStatus.includes('reject');
+      
+      // Also check normalized state from state machine
+      const normalizedState = this.stateMachine.normalizeState(request.Status || request.status);
+      const { REQUEST_STATES } = require('./requestStateMachine');
+      const isCancelledState = normalizedState === REQUEST_STATES.CANCELLED;
+      const isRejectedState = normalizedState === REQUEST_STATES.REJECTED;
+      
+      if (!isCancelled && !isRejected && !isCancelledState && !isRejectedState) {
         console.log('deleteEventRequest: Status not allowed. Current status:', request.Status);
-        console.log('Allowed statuses:', allowedStatuses);
+        console.log('Normalized state:', normalizedState);
         console.log('Request details:', {
           Request_ID: request.Request_ID,
           Status: request.Status,
+          normalizedState: normalizedState,
           AdminAction: request.AdminAction,
           StakeholderFinalAction: request.StakeholderFinalAction,
           CoordinatorFinalAction: request.CoordinatorFinalAction

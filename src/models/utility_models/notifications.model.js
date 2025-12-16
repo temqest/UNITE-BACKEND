@@ -581,7 +581,7 @@ notificationSchema.statics.createRequestDeletionNotification = async function(re
 };
 
 // Static method to create notification for stakeholder when request is deleted
-notificationSchema.statics.createStakeholderDeletionNotification = async function(stakeholderId, requestId, eventId) {
+notificationSchema.statics.createStakeholderDeletionNotification = async function(stakeholderId, requestId, eventId, actorRole = 'Admin', actorName = null) {
   // Attempt to include event title and type for better context
   let eventTitle = null;
   let eventCategory = null;
