@@ -1,4 +1,4 @@
-UNITE Blood Bank Event Management System
+UNITE Blood Bank System
 Product Vision & Functional Blueprint
 System Purpose
 

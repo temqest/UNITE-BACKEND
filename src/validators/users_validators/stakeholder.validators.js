@@ -14,7 +14,8 @@ const createStakeholderSchema = Joi.object({
   password: Joi.string().required().min(8).pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/),
   registrationCode: Joi.string().allow(null, '').trim().max(100),
   coordinator: Joi.string().allow(null, '').trim().max(200),
-  organizationInstitution: Joi.string().allow(null, '').trim().max(200)
+  organizationInstitution: Joi.string().allow(null, '').trim().max(200),
+  accountType: Joi.string().valid('LGU', 'Others').required()
 });
 
 const updateStakeholderSchema = Joi.object({
@@ -29,7 +30,8 @@ const updateStakeholderSchema = Joi.object({
   phoneNumber: Joi.string().trim().pattern(/^[0-9+\-\s()]+$/).min(10).max(20),
   password: Joi.string().min(8).pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/),
   organizationInstitution: Joi.string().allow(null, '').trim().max(200),
-  registrationCode: Joi.string().allow(null, '').trim().max(100)
+  registrationCode: Joi.string().allow(null, '').trim().max(100),
+  accountType: Joi.string().valid('LGU', 'Others')
 }).min(1);
 
 const validateCreateStakeholder = (req, res, next) => {

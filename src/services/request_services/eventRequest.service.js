@@ -3701,6 +3701,14 @@ class EventRequestService {
     try {
       const skip = (page - 1) * limit;
 
+      // Get the coordinator's district and accountType for scoping
+      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId }).populate('district');
+      if (!coordinator) {
+        throw new Error('Coordinator not found');
+      }
+      const coordinatorDistrict = coordinator.district ? coordinator.district._id : null;
+      const coordinatorAccountType = coordinator.accountType;
+
       // Some older/legacy requests may not have Coordinator_ID populated on
       // the EventRequest document but the linked Event may have
       // MadeByCoordinatorID. To be resilient, query for requests where
@@ -3710,6 +3718,7 @@ class EventRequestService {
       // 1) EventRequest.coordinator_id === coordinatorId
       // 2) Event.MadeByCoordinatorID === coordinatorId (legacy where EventRequest.coordinator_id missing)
       // 3) Stakeholders who belong to this coordinator created requests (stakeholder_id)
+      // 4) Requests in the coordinator's district (scoped access)
 
       const orClauses = [{ coordinator_id: coordinatorId }];
 
@@ -3726,6 +3735,11 @@ class EventRequestService {
       const stakeholderIds = Array.isArray(stakeholderDocs) ? stakeholderDocs.map(s => s.Stakeholder_ID) : [];
       if (stakeholderIds.length > 0) {
         orClauses.push({ stakeholder_id: { $in: stakeholderIds } });
+      }
+
+      // (4) All requests in the coordinator's district (scoped access)
+      if (coordinatorDistrict) {
+        orClauses.push({ district: coordinatorDistrict });
       }
 
       const query = { $or: orClauses };

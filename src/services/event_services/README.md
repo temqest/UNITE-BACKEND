@@ -1,6 +1,6 @@
 # Event Services Documentation
 
-This directory contains all event-related services for viewing, managing, and analyzing events in the UNITE Blood Bank Event Management System.
+This directory contains all event-related services for viewing, managing, and analyzing events in the UNITE Blood Bank System.
 
 ## Services Overview
 

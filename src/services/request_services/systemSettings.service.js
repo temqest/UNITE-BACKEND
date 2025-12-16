@@ -1,7 +1,7 @@
 /**
  * System Settings Service
  * 
- * This service manages configurable system settings for the UNITE Blood Bank Event Management System.
+ * This service manages configurable system settings for the UNITE Blood Bank System.
  * 
  * TODO: Replace hardcoded values with database-driven settings in the future.
  * For now, these are defined here as defaults and can be easily moved to a Settings model.

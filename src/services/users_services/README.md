@@ -1,6 +1,6 @@
 # User Services Documentation
 
-This directory contains all user-related business logic services for the UNITE Blood Bank Event Management System.
+This directory contains all user-related business logic services for the UNITE Blood Bank System.
 
 ## Services Overview
 

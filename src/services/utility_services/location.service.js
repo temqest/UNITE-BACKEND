@@ -101,22 +101,20 @@ class LocationService {
 
     // Send acceptance email
     const acceptanceMessage = `
-Dear ${req.firstName} ${req.lastName},
+  Dear ${req.firstName} ${req.lastName},
 
-Congratulations! Your stakeholder registration request for the UNITE Blood Bank Event Management System has been approved.
+  Congratulations! Your stakeholder registration request for the UNITE Blood Bank System has been approved.
 
-Your account has been created with the following details:
-- Email: ${req.email}
-- Stakeholder ID: ${stakeholderId}
+  Your account has been created with the following details:
+  - Email: ${req.email}
+  - Stakeholder ID: ${stakeholderId}
 
-You can now log in to the system using your registered email and password.
+  You can now log in to the system using your registered email and password.
 
-If you have any questions, please contact your assigned coordinator.
+  If you have any questions, please contact your assigned coordinator.
 
-Note: If you don't see this email in your inbox, please check your spam/junk folder.
-
-Best regards,
-UNITE Blood Bank Team
+  Best regards,
+  UNITE Blood Bank Team
     `.trim();
 
     await emailService.sendEmail(req.email, 'UNITE - Registration Approved', acceptanceMessage, `
@@ -127,7 +125,7 @@ UNITE Blood Bank Team
   </div>
   <div style="padding: 30px 20px; background-color: white;">
     <h3>Dear ${req.firstName} ${req.lastName},</h3>
-    <p style="color: #28a745; font-weight: bold;">Congratulations! Your stakeholder registration request for the UNITE Blood Bank Event Management System has been approved.</p>
+    <p style="color: #28a745; font-weight: bold;">Congratulations! Your stakeholder registration request for the UNITE Blood Bank System has been approved.</p>
     <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 5px;">
       <p style="margin: 0; font-weight: bold;">Your account has been created with the following details:</p>
       <ul style="margin: 10px 0 0 20px;">
@@ -137,10 +135,10 @@ UNITE Blood Bank Team
     </div>
     <p>You can now log in to the system using your registered email and password.</p>
     <p>If you have any questions, please contact your assigned coordinator.</p>
-    <p style="color: #dc3545; font-size: 14px; font-weight: bold;">Note: If you don't see this email in your inbox, please check your spam/junk folder.</p>
+    
   </div>
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unite-bloodbank.com" style="color: #dc3545;">unite-bloodbank.com</a></p>
+    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
   </div>
 </div>`);
 
@@ -163,18 +161,16 @@ UNITE Blood Bank Team
 
     // Send rejection email before deleting
     const rejectionMessage = `
-Dear ${req.firstName} ${req.lastName},
+  Dear ${req.firstName} ${req.lastName},
 
-We regret to inform you that your stakeholder registration request for the UNITE Blood Bank Event Management System has been rejected.
+  We regret to inform you that your stakeholder registration request for the UNITE Blood Bank System has been rejected.
 
-Reason: ${reason || 'Not specified'}
+  Reason: ${reason || 'Not specified'}
 
-If you have any questions, please contact your assigned coordinator.
+  If you have any questions, please contact your assigned coordinator.
 
-Note: If you don't see this email in your inbox, please check your spam/junk folder.
-
-Best regards,
-UNITE Blood Bank Team
+  Best regards,
+  UNITE Blood Bank Team
     `.trim();
 
     await emailService.sendEmail(req.email, 'UNITE - Registration Update', rejectionMessage, `
@@ -185,16 +181,16 @@ UNITE Blood Bank Team
   </div>
   <div style="padding: 30px 20px; background-color: white;">
     <h3>Dear ${req.firstName} ${req.lastName},</h3>
-    <p style="color: #dc3545;">We regret to inform you that your stakeholder registration request for the UNITE Blood Bank Event Management System has been rejected.</p>
+    <p style="color: #dc3545;">We regret to inform you that your stakeholder registration request for the UNITE Blood Bank System has been rejected.</p>
     <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #dc3545;">
       <p style="margin: 0; font-weight: bold;">Reason:</p>
       <p style="margin: 10px 0 0 0;">${reason || 'Not specified'}</p>
     </div>
     <p>If you have any questions, please contact your assigned coordinator.</p>
-    <p style="color: #dc3545; font-size: 14px; font-weight: bold;">Note: If you don't see this email in your inbox, please check your spam/junk folder.</p>
+    
   </div>
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unite-bloodbank.com" style="color: #dc3545;">unite-bloodbank.com</a></p>
+    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
   </div>
 </div>`);
 

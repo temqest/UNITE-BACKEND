@@ -9,6 +9,7 @@ const requestsRoutes = require('./requests.routes');
 const utilityRoutes = require('./utility.routes');
 const inventoryRoutes = require('./inventory.routes');
 const chatRoutes = require('./chat.routes');
+const filesRoutes = require('./files.routes');
 
 // Mount routes
 // Auth routes are mounted under /api/auth (canonical) and also under /api
@@ -21,6 +22,7 @@ router.use('/api', requestsRoutes);
 router.use('/api', utilityRoutes);
 router.use('/api', inventoryRoutes);
 router.use('/api/chat', chatRoutes);
+router.use('/api/files', filesRoutes);
 
 // Health check endpoint
 router.get('/health', (req, res) => {

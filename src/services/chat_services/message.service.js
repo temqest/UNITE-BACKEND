@@ -1,6 +1,9 @@
+// src/services/chat_services/message.service.js
+
 const { Message, Conversation, Presence } = require('../../models');
 const permissionsService = require('./permissions.service');
 const { v4: uuidv4 } = require('uuid');
+const s3 = require('../../utils/s3'); // Add S3 import
 
 class MessageService {
   // Send a message
@@ -104,14 +107,12 @@ class MessageService {
         allowedRecipientsStr.includes(participantId)
       );
 
-      // Bidirectional check: if direct check fails, verify the reverse relationship
-      // (e.g., if coordinator can't see stakeholder in their list, check if stakeholder can see coordinator)
+      // Bidirectional check
       if (!hasPermission && otherParticipantsStr.length === 1) {
         const otherParticipantId = otherParticipantsStr[0];
         try {
           const reverseAllowed = await permissionsService.getAllowedRecipients(otherParticipantId);
           const reverseAllowedStr = reverseAllowed.map(id => String(id));
-          // If the other participant can see this user, allow access (bidirectional permission)
           if (reverseAllowedStr.includes(String(userId))) {
             hasPermission = true;
           }
@@ -130,12 +131,28 @@ class MessageService {
         .skip(skip)
         .limit(limit);
 
-      // Enrich messages with sender details
+      // Enrich messages with sender details and SIGNED URLS
       const enrichedMessages = await Promise.all(
         messages.map(async (message) => {
           const enriched = message.toObject();
           enriched.senderDetails = await this.getUserDetails(message.senderId);
           enriched.receiverDetails = await this.getUserDetails(message.receiverId);
+
+          // Sign S3 URLs so images load correctly
+          if (enriched.attachments && enriched.attachments.length > 0) {
+            enriched.attachments = await Promise.all(enriched.attachments.map(async (att) => {
+              if (att && att.key) {
+                try {
+                  const signedUrl = await s3.getSignedGetUrl(att.key, 3600); // 1 hour expiry
+                  return { ...att, url: signedUrl };
+                } catch (e) {
+                  return att;
+                }
+              }
+              return att;
+            }));
+          }
+
           return enriched;
         })
       );
@@ -192,15 +209,10 @@ class MessageService {
       })
       .sort({ updatedAt: -1 });
 
-      // Note: Conversations are already validated during message sending,
-      // so we don't need additional permission filtering here
-
-      // Enrich conversations with participant details
       const enrichedConversations = await Promise.all(
         conversations.map(async (conversation) => {
           const enriched = conversation.toObject();
 
-          // Get details for other participants
           enriched.participants = await Promise.all(
             conversation.participants.map(async (participant) => {
               const details = await this.getUserDetails(participant.userId);
@@ -226,7 +238,6 @@ class MessageService {
     try {
       const { BloodbankStaff, Stakeholder } = require('../../models');
 
-      // Try BloodbankStaff first
       const staff = await BloodbankStaff.findOne({ ID: userId });
       if (staff) {
         return {
@@ -238,7 +249,6 @@ class MessageService {
         };
       }
 
-      // Try Stakeholder
       const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: userId });
       if (stakeholder) {
         return {
@@ -266,7 +276,7 @@ class MessageService {
     }
   }
 
-  // Delete message (soft delete by marking as deleted)
+  // Delete message
   async deleteMessage(messageId, userId) {
     try {
       const message = await Message.findOneAndDelete({

@@ -17,6 +17,11 @@ const coordinatorSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'District',
     required: true
+  },
+  accountType: {
+    type: String,
+    enum: ["LGU", "Others"],
+    required: true
   }
 }, {
   timestamps: true
