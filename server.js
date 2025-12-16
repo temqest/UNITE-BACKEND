@@ -88,17 +88,23 @@ const corsOptions = {
 };
 
 // Production explicit CORS header middleware for known frontend domains
+// Use configured `allowedOrigins` and only short-circuit OPTIONS when origin is allowed.
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
     const origin = req.headers.origin;
-    const allowed = ['https://www.unitehealth.tech', 'https://unitehealth.tech'];
-    if (origin && allowed.includes(origin)) {
+
+    // `allowedOrigins` is defined above and trimmed when read from env.
+    if (origin && Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+
+      // For preflight requests from an allowed origin, respond early with CORS headers
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
     }
-    if (req.method === 'OPTIONS') return res.sendStatus(204);
+
+    // For other cases, continue to `cors()` middleware which will reject disallowed origins.
     next();
   });
 }
