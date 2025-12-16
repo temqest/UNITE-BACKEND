@@ -93,8 +93,7 @@ class RequestFlowEngine {
     // Normalize role for validation (ensure Admin -> SystemAdmin)
     const normalizedRole = this.stateMachine.normalizeRole(actorRole);
     
-    // Debug logging for action normalization
-    console.log(`[RequestFlowEngine] Action normalization: input="${actionInput}", currentState="${currentState}", normalizedAction="${action}", actorRole="${actorRole}", normalizedRole="${normalizedRole}", request.Status="${request.Status}"`);
+    // Action normalization - no verbose logging
 
     // Validate transition (use normalized role)
     if (!this.stateMachine.isValidTransition(currentState, action, normalizedRole || actorRole, actorId, request)) {
@@ -256,25 +255,57 @@ class RequestFlowEngine {
       };
 
       // Update reviewer assignment when rescheduling
-      // If coordinator reschedules, admin should review. If admin reschedules, coordinator should review.
+      // NEW: Coordinator-Stakeholder cases: If Coordinator reschedules, Stakeholder should review (maintain primary reviewer)
+      // If coordinator reschedules (without stakeholder), admin should review. If admin reschedules, coordinator should review.
       // If stakeholder reschedules, coordinator (or admin) should review.
       const requesterRole = request.made_by_role || request.creator?.role;
+      const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
+      const isCoordinatorRequest = String(requesterRole).toLowerCase().includes('coordinator');
+      
       if (String(actorRole).toLowerCase().includes('coordinator')) {
-        // Coordinator rescheduled: assign admin as reviewer
-        const SystemAdmin = require('../../models/index').SystemAdmin;
-        try {
-          const admin = await SystemAdmin.findOne().lean().exec();
-          if (admin) {
-            const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
-            request.reviewer = {
-              id: admin.Admin_ID,
-              role: 'SystemAdmin',
-              name: adminName,
-              autoAssigned: true
-            };
+        // Coordinator rescheduled: Check if this is a Coordinator-Stakeholder case
+        if (isCoordinatorRequest && hasStakeholder) {
+          // Maintain Stakeholder as primary reviewer in Coordinator-Stakeholder cases
+          const stakeholderId = request.stakeholder_id || request.stakeholderId;
+          if (stakeholderId) {
+            try {
+              const Stakeholder = require('../../models/index').Stakeholder;
+              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+              if (stakeholder) {
+                const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+                const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+                const name = `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+                request.reviewer = {
+                  id: stakeholder.Stakeholder_ID,
+                  role: 'Stakeholder',
+                  name: name,
+                  autoAssigned: true
+                };
+                // Maintained Stakeholder as reviewer - no log needed
+              }
+            } catch (e) {
+              // If stakeholder lookup fails, fall through to admin assignment
+            }
           }
-        } catch (e) {
-          // If admin lookup fails, keep existing reviewer
+        }
+        
+        // If not Coordinator-Stakeholder case or stakeholder lookup failed, assign admin as reviewer
+        if (!request.reviewer || request.reviewer.role !== 'Stakeholder') {
+          const SystemAdmin = require('../../models/index').SystemAdmin;
+          try {
+            const admin = await SystemAdmin.findOne().lean().exec();
+            if (admin) {
+              const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+              request.reviewer = {
+                id: admin.Admin_ID,
+                role: 'SystemAdmin',
+                name: adminName,
+                autoAssigned: true
+              };
+            }
+          } catch (e) {
+            // If admin lookup fails, keep existing reviewer
+          }
         }
       } else if (String(actorRole).toLowerCase().includes('admin') || String(actorRole).toLowerCase().includes('system')) {
         // Admin rescheduled: assign coordinator as reviewer
@@ -294,8 +325,13 @@ class RequestFlowEngine {
           }
         }
       } else if (String(actorRole).toLowerCase().includes('stakeholder')) {
-        // Stakeholder rescheduled: assign coordinator as reviewer (or admin as fallback)
-        if (request.coordinator_id) {
+        // Stakeholder rescheduled: Check if this is a Coordinator-Stakeholder case
+        // In Coordinator-Stakeholder cases, if Stakeholder (as reviewer) reschedules, Coordinator should review
+        const isCoordinatorRequest = String(requesterRole).toLowerCase().includes('coordinator');
+        const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
+        
+        if (isCoordinatorRequest && hasStakeholder && request.coordinator_id) {
+          // Coordinator-Stakeholder case: Stakeholder (reviewer) rescheduled, Coordinator (requester) should review
           try {
             const BloodbankStaff = require('../../models/index').BloodbankStaff;
             const staff = await BloodbankStaff.findOne({ ID: request.coordinator_id }).lean().exec();
@@ -306,13 +342,46 @@ class RequestFlowEngine {
               name: coordinatorName,
               autoAssigned: true
             };
-            console.log('[RequestFlowEngine] Stakeholder reschedule: set coordinator as reviewer', {
-              requestId: request.Request_ID,
-              coordinator_id: request.coordinator_id,
-              reviewer: request.reviewer
-            });
+            // Assigned Coordinator as reviewer - no log needed
           } catch (e) {
-            // If coordinator lookup fails, try admin as fallback
+            // If coordinator lookup fails, fall through to standard logic
+          }
+        }
+        
+        // Standard logic: Stakeholder rescheduled: assign coordinator as reviewer (or admin as fallback)
+        if (!request.reviewer || request.reviewer.role !== 'Coordinator') {
+          if (request.coordinator_id) {
+            try {
+              const BloodbankStaff = require('../../models/index').BloodbankStaff;
+              const staff = await BloodbankStaff.findOne({ ID: request.coordinator_id }).lean().exec();
+              const coordinatorName = staff ? `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim() : null;
+              request.reviewer = {
+                id: request.coordinator_id,
+                role: 'Coordinator',
+                name: coordinatorName,
+                autoAssigned: true
+              };
+              // Set coordinator as reviewer - no log needed
+            } catch (e) {
+              // If coordinator lookup fails, try admin as fallback
+              try {
+                const SystemAdmin = require('../../models/index').SystemAdmin;
+                const admin = await SystemAdmin.findOne().lean().exec();
+                if (admin) {
+                  const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
+                  request.reviewer = {
+                    id: admin.Admin_ID,
+                    role: 'SystemAdmin',
+                    name: adminName,
+                    autoAssigned: true
+                  };
+                }
+              } catch (e2) {
+                // If admin lookup also fails, keep existing reviewer
+              }
+            }
+          } else {
+            // No coordinator_id, try admin as fallback
             try {
               const SystemAdmin = require('../../models/index').SystemAdmin;
               const admin = await SystemAdmin.findOne().lean().exec();
@@ -325,30 +394,16 @@ class RequestFlowEngine {
                   autoAssigned: true
                 };
               }
-            } catch (e2) {
-              // If admin lookup also fails, keep existing reviewer
+            } catch (e) {
+              // If admin lookup fails, keep existing reviewer
             }
-          }
-        } else {
-          // No coordinator_id, try admin as fallback
-          try {
-            const SystemAdmin = require('../../models/index').SystemAdmin;
-            const admin = await SystemAdmin.findOne().lean().exec();
-            if (admin) {
-              const adminName = `${admin.First_Name || admin.firstName || ''} ${admin.Last_Name || admin.lastName || ''}`.trim() || admin.FullName || null;
-              request.reviewer = {
-                id: admin.Admin_ID,
-                role: 'SystemAdmin',
-                name: adminName,
-                autoAssigned: true
-              };
-            }
-          } catch (e) {
-            // If admin lookup fails, keep existing reviewer
-          }
         }
+      }
 
-        // Force reviewer to coordinator if still not set or set to stakeholder
+      // Force reviewer to coordinator if still not set (but NOT for Coordinator-Stakeholder cases where Stakeholder is reviewer)
+      // Only force if this is NOT a Coordinator-Stakeholder case where Stakeholder should remain as reviewer
+      const isCoordinatorStakeholderCase = String(requesterRole).toLowerCase().includes('coordinator') && !!(request.stakeholder_id || request.stakeholderId);
+      if (!isCoordinatorStakeholderCase) {
         try {
           const reviewerRoleNorm = request.reviewer?.role
             ? String(request.reviewer.role).toLowerCase()
@@ -364,13 +419,10 @@ class RequestFlowEngine {
               name: request.reviewer?.name || null,
               autoAssigned: true
             };
-            console.log('[RequestFlowEngine] Stakeholder reschedule: force coordinator as reviewer', {
-              requestId: request.Request_ID,
-              coordinator_id: request.coordinator_id,
-              reviewer: request.reviewer
-            });
+              // Force coordinator as reviewer - no log needed
           }
         } catch (e) {}
+      }
       }
 
       // Update event dates if rescheduling
@@ -474,14 +526,7 @@ class RequestFlowEngine {
 
     // Send notifications for confirmation actions (when event becomes approved/rejected)
     if (action === ACTIONS.CONFIRM && (nextState === REQUEST_STATES.APPROVED || nextState === REQUEST_STATES.REJECTED)) {
-      console.log('[RequestFlowEngine] Sending event finalized notification:', {
-        action,
-        nextState,
-        requestId: request.Request_ID,
-        eventId: request.Event_ID,
-        actorRole: actorSnapshot?.role,
-        actorName: actorSnapshot?.name
-      });
+      // Sending event finalized notification - no verbose log
       await this.notifyEventFinalized(request, event, nextState, actorSnapshot, note);
     }
   }

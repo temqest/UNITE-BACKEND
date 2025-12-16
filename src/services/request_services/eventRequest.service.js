@@ -207,9 +207,16 @@ class EventRequestService {
           district
         }
       );
+      
+      // Simple log: show who is assigned as reviewer
+      if (reviewer) {
+        console.log(`[Reviewer] ${creatorRole} request → Reviewer: ${reviewer.role} (${reviewer.id})${stakeholderId ? ' [Stakeholder involved]' : ''}`);
+      }
+      
       return reviewer;
     } catch (error) {
       // Fallback to old logic if new service fails
+      console.error(`[Reviewer] Assignment failed for ${creatorRole}:`, error.message);
       const normalizedCreator = this._normalizeRole(creatorRole);
 
       if (normalizedCreator === 'SystemAdmin') {
@@ -226,6 +233,27 @@ class EventRequestService {
       }
 
       if (normalizedCreator === 'Coordinator') {
+        // NEW: Coordinator-Stakeholder involvement case
+        // If Coordinator creates request WITH Stakeholder, Stakeholder is primary reviewer
+        if (stakeholderId) {
+          try {
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+            if (stakeholder) {
+              const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+              const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+              const name = `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+              return {
+                id: stakeholder.Stakeholder_ID,
+                role: 'Stakeholder',
+                name: name || null,
+                autoAssigned: true
+              };
+            }
+          } catch (e) {
+            // If stakeholder lookup fails, fall through to admin assignment
+          }
+        }
+        // Coordinator-only request: SystemAdmin becomes reviewer (existing behavior)
         const admin = await SystemAdmin.findOne().lean().exec();
         if (!admin) {
           throw new Error('No system administrator available to review requests');
@@ -901,7 +929,12 @@ class EventRequestService {
       const normalizedCreatorRole = creatorRole ? this._normalizeRole(creatorRole) : null;
       const isSystemAdminRequest = normalizedCreatorRole === 'SystemAdmin';
       const isStakeholderRequest = normalizedCreatorRole === 'Stakeholder';
+      const isCoordinatorRequest = normalizedCreatorRole === 'Coordinator';
+      const hasStakeholder = !!(requestDoc.stakeholder_id || requestDoc.stakeholderId);
+      const isCoordinatorStakeholderCase = isCoordinatorRequest && hasStakeholder;
       
+      // CRITICAL: Do NOT override reviewer for Coordinator-Stakeholder cases
+      // The reviewer should already be set to Stakeholder during creation
       if (isSystemAdminRequest && !requestDoc.reviewer && requestDoc.coordinator_id) {
         // Ensure reviewer is set to coordinator for SystemAdmin requests
         if (!requestDoc.reviewer) {
@@ -913,6 +946,25 @@ class EventRequestService {
         }
       }
       
+      // CRITICAL: For Coordinator-Stakeholder cases, ensure reviewer is Stakeholder
+      // Do NOT override if it's already set correctly
+      // This check must happen BEFORE any decisionHistory logic to preserve Stakeholder reviewer
+      if (isCoordinatorStakeholderCase) {
+        const stakeholderId = requestDoc.stakeholder_id || requestDoc.stakeholderId;
+        const currentReviewerRole = requestDoc.reviewer?.role ? this._normalizeRole(requestDoc.reviewer.role) : null;
+        
+        // If reviewer is not set or is incorrectly set to Admin/Coordinator, set it to Stakeholder
+        // CRITICAL: Always preserve Stakeholder as reviewer in Coordinator-Stakeholder cases
+        if (!requestDoc.reviewer || (currentReviewerRole !== 'Stakeholder' && stakeholderId)) {
+          requestDoc.reviewer = {
+            id: stakeholderId,
+            role: 'Stakeholder',
+            name: requestDoc.reviewer?.name || null
+          };
+        // Reviewer set to Stakeholder - no log needed
+        }
+      }
+      
       // CRITICAL: Ensure reviewer is set for Stakeholder-created requests
       // For stakeholder requests, coordinator is the reviewer
       if (isStakeholderRequest && !requestDoc.reviewer && requestDoc.coordinator_id) {
@@ -921,44 +973,37 @@ class EventRequestService {
           role: 'Coordinator',
           name: null
         };
-        console.log('[computeAllowedActions] Assigned coordinator as reviewer for stakeholder request', {
-          requestId: requestDoc?.Request_ID || requestDoc?._id,
-          coordinator_id: requestDoc.coordinator_id
-        });
+        // Reviewer set - no log needed
       }
 
       // Ensure coordinator_id is filled from event if missing (common on approved/completed reschedules)
       if (!requestDoc.coordinator_id && requestDoc.event && (requestDoc.event.coordinator_id || requestDoc.event.Coordinator_ID)) {
         requestDoc.coordinator_id = requestDoc.event.coordinator_id || requestDoc.event.Coordinator_ID;
-        console.log('[computeAllowedActions] Filled coordinator_id from event', {
-          requestId: requestDoc?.Request_ID || requestDoc?._id,
-          coordinator_id: requestDoc.coordinator_id
-        });
+        // Coordinator ID filled - no log needed
       }
 
       // HARD OVERRIDE: if coordinator_id exists and creator is stakeholder (or stakeholder proposed reschedule),
       // always set reviewer to Coordinator to avoid stale Stakeholder reviewer snapshots.
+      // BUT: Do NOT override for Coordinator-Stakeholder cases where Stakeholder is the reviewer
       const proposerRoleNormalized =
         requestDoc?.rescheduleProposal?.proposedBy?.role &&
         this._normalizeRole(requestDoc.rescheduleProposal.proposedBy.role);
       const isStakeholderProposer = proposerRoleNormalized === 'Stakeholder';
-      if (requestDoc.coordinator_id && (isStakeholderRequest || isStakeholderProposer)) {
+      if (requestDoc.coordinator_id && (isStakeholderRequest || isStakeholderProposer) && !isCoordinatorStakeholderCase) {
         requestDoc.reviewer = {
           id: requestDoc.coordinator_id,
           role: 'Coordinator',
           name: requestDoc.reviewer?.name || null,
         };
-        console.log('[computeAllowedActions] Hard override: set coordinator as reviewer for stakeholder flow', {
-          requestId: requestDoc?.Request_ID || requestDoc?._id,
-          coordinator_id: requestDoc.coordinator_id,
-          proposerRole: proposerRoleNormalized
-        });
+        // Reviewer override applied - no log needed
       }
 
       // If stakeholder proposed a reschedule, ensure reviewer is set to coordinator (or keep existing if already coordinator)
+      // BUT: Do NOT override for Coordinator-Stakeholder cases where Stakeholder is the reviewer
       if (
         (isStakeholderRequest || proposerRoleNormalized === 'Stakeholder') &&
-        requestDoc.coordinator_id
+        requestDoc.coordinator_id &&
+        !isCoordinatorStakeholderCase
       ) {
         const reviewerRoleNorm = requestDoc.reviewer?.role
           ? this._normalizeRole(requestDoc.reviewer.role)
@@ -969,45 +1014,46 @@ class EventRequestService {
             role: 'Coordinator',
             name: requestDoc.reviewer?.name || null,
           };
-          console.log('[computeAllowedActions] For stakeholder reschedule proposer, set coordinator as reviewer', {
-            requestId: requestDoc?.Request_ID || requestDoc?._id,
-            coordinator_id: requestDoc.coordinator_id,
-            proposerRole
-          });
+          // Reviewer set for reschedule - no log needed
         } else if (!requestDoc.reviewer.id) {
           // Fill missing reviewer id with coordinator_id
           requestDoc.reviewer.id = requestDoc.coordinator_id;
-          console.log('[computeAllowedActions] Filled missing reviewer.id with coordinator_id for stakeholder reschedule', {
-            requestId: requestDoc?.Request_ID || requestDoc?._id,
-            coordinator_id: requestDoc.coordinator_id
-          });
+          // Reviewer ID filled - no log needed
         }
       }
 
       // FINAL GUARD: if the request is in review-rescheduled and coordinator_id exists,
       // always force reviewer to Coordinator (avoid stale Stakeholder reviewer snapshots).
+      // BUT: Do NOT override for Coordinator-Stakeholder cases where Stakeholder is the reviewer
       const normalizedStateForGuard = this.stateMachine.normalizeState(requestDoc?.Status);
-      if (normalizedStateForGuard === REQUEST_STATES.REVIEW_RESCHEDULED && requestDoc.coordinator_id) {
+      if (normalizedStateForGuard === REQUEST_STATES.REVIEW_RESCHEDULED && requestDoc.coordinator_id && !isCoordinatorStakeholderCase) {
         requestDoc.reviewer = {
           id: requestDoc.coordinator_id,
           role: 'Coordinator',
           name: requestDoc.reviewer?.name || null,
         };
-        console.log('[computeAllowedActions] Final guard: force coordinator as reviewer for review-rescheduled', {
-          requestId: requestDoc?.Request_ID || requestDoc?._id,
-          coordinator_id: requestDoc.coordinator_id,
-          reviewer: requestDoc.reviewer
-        });
+        // Reviewer guard applied - no log needed
       }
       
       // Also check decisionHistory to set reviewer if they just made a decision
       // Only update reviewer from decisionHistory when the decision actor is a Coordinator or SystemAdmin.
+      // CRITICAL: Do NOT override for Coordinator-Stakeholder cases where Stakeholder is the reviewer
       if (requestDoc.decisionHistory && Array.isArray(requestDoc.decisionHistory) && requestDoc.decisionHistory.length > 0) {
         const mostRecentDecision = requestDoc.decisionHistory[requestDoc.decisionHistory.length - 1];
         if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id && mostRecentDecision.actor.role) {
           try {
             const actorRoleNorm = this._normalizeRole(mostRecentDecision.actor.role);
-            if (actorRoleNorm === 'Coordinator' || actorRoleNorm === 'SystemAdmin') {
+            
+            // CRITICAL: In Coordinator-Stakeholder cases, NEVER overwrite Stakeholder reviewer
+            const currentReviewerRole = requestDoc.reviewer?.role ? this._normalizeRole(requestDoc.reviewer.role) : null;
+            const isStakeholderReviewer = currentReviewerRole === 'Stakeholder';
+            
+            // Only update from decisionHistory if:
+            // 1. It's NOT a Coordinator-Stakeholder case, OR
+            // 2. It IS a Coordinator-Stakeholder case but the current reviewer is NOT Stakeholder
+            const canUpdateFromDecisionHistory = !isCoordinatorStakeholderCase || !isStakeholderReviewer;
+            
+            if (canUpdateFromDecisionHistory && (actorRoleNorm === 'Coordinator' || actorRoleNorm === 'SystemAdmin')) {
               // If reviewer is not set or doesn't match the most recent decision maker, update it
               if (!requestDoc.reviewer || String(requestDoc.reviewer.id) !== String(mostRecentDecision.actor.id)) {
                 requestDoc.reviewer = {
@@ -1016,12 +1062,38 @@ class EventRequestService {
                   name: mostRecentDecision.actor.name || null
                 };
               }
-            } else {
-              // If the most recent decision was made by a Stakeholder, do not overwrite the reviewer
+            } else if (actorRoleNorm === 'Stakeholder' && isCoordinatorStakeholderCase) {
+              // If Stakeholder made a decision in Coordinator-Stakeholder case, ensure reviewer is Stakeholder
+              const stakeholderId = requestDoc.stakeholder_id || requestDoc.stakeholderId;
+              if (stakeholderId && String(stakeholderId) === String(mostRecentDecision.actor.id)) {
+                if (!requestDoc.reviewer || this._normalizeRole(requestDoc.reviewer.role) !== 'Stakeholder') {
+                  requestDoc.reviewer = {
+                    id: stakeholderId,
+                    role: 'Stakeholder',
+                    name: mostRecentDecision.actor.name || null
+                  };
+                }
+              }
             }
           } catch (e) {
             // Defensive: if normalization fails, don't overwrite reviewer
           }
+        }
+      }
+      
+      // FINAL SAFEGUARD: Re-check Coordinator-Stakeholder cases after decisionHistory processing
+      // This ensures the Stakeholder reviewer is preserved even if decisionHistory logic tried to overwrite it
+      if (isCoordinatorStakeholderCase) {
+        const stakeholderId = requestDoc.stakeholder_id || requestDoc.stakeholderId;
+        const currentReviewerRole = requestDoc.reviewer?.role ? this._normalizeRole(requestDoc.reviewer.role) : null;
+        
+        // If reviewer is not Stakeholder, fix it
+        if (stakeholderId && currentReviewerRole !== 'Stakeholder') {
+          requestDoc.reviewer = {
+            id: stakeholderId,
+            role: 'Stakeholder',
+            name: requestDoc.reviewer?.name || null
+          };
         }
       }
       
@@ -1031,27 +1103,13 @@ class EventRequestService {
         actorId,
         requestDoc
       );
-      console.log('[computeAllowedActions] Allowed actions (state machine)', {
-        requestId: requestDoc?.Request_ID || requestDoc?._id,
-        actorRole,
-        actorId,
-        normalizedState,
-        reviewer: requestDoc?.reviewer,
-        coordinator_id: requestDoc?.coordinator_id,
-        allowed,
-      });
-      
-      // Debug logging for SystemAdmin-created requests
-      if (isSystemAdminRequest && this._normalizeRole(actorRole) === 'Coordinator') {
-        const isReviewer = this.stateMachine.isReviewer(actorId, actorRole, requestDoc);
-        console.log('[computeAllowedActions] SystemAdmin request, Coordinator reviewer check:', {
-          actorId,
-          coordinator_id: requestDoc.coordinator_id,
-          reviewer: requestDoc.reviewer,
-          isReviewer,
-          allowed
-        });
+      // Simple log: show who can do what
+      if (allowed && allowed.length > 1) {
+        const reviewerInfo = requestDoc?.reviewer ? `${requestDoc.reviewer.role} (${requestDoc.reviewer.id})` : 'none';
+        console.log(`[Actions] ${actorRole} (${actorId}) → [${allowed.join(', ')}] | Reviewer: ${reviewerInfo} | State: ${normalizedState}`);
       }
+      
+      // Reviewer check - no verbose logging
       
       // If event is published/completed, add additional actions
       const event = eventDoc || (requestDoc ? requestDoc.event : null) || {};
@@ -1072,9 +1130,36 @@ class EventRequestService {
       }
       
       // CRITICAL: Remove confirm from allowed actions if user is a reviewer
-      // This is a final safeguard to ensure reviewers never get confirm, even if state machine somehow allows it
+      // EXCEPTIONS:
+      // 1. In reschedule loops, reviewers need CONFIRM to accept reschedule proposals
+      // 2. In review-accepted state, Admins need CONFIRM if they're the requester or reviewer
       const isReviewerCheck = this.stateMachine.isReviewer(actorId, actorRole, requestDoc);
       const isRequesterCheck = this.stateMachine.isRequester(actorId, requestDoc);
+      
+      // Check if this is a reschedule proposal case where reviewer should have CONFIRM
+      const rescheduleProposal = requestDoc.rescheduleProposal;
+      const isRescheduleProposalCase = rescheduleProposal && rescheduleProposal.proposedBy;
+      const proposerRole = isRescheduleProposalCase ? this._normalizeRole(rescheduleProposal.proposedBy.role) : null;
+      const proposerId = isRescheduleProposalCase ? rescheduleProposal.proposedBy.id : null;
+      const normalizedActorRole = this._normalizeRole(actorRole);
+      const isCoordinatorProposal = proposerRole === 'Coordinator' && String(proposerId) !== String(actorId);
+      const isStakeholderReviewer = normalizedActorRole === 'Stakeholder' && isReviewerCheck;
+      const shouldAllowConfirmForReschedule = isRescheduleProposalCase && isCoordinatorProposal && isStakeholderReviewer;
+      
+      // Check if Admin should be allowed to confirm in review-accepted state
+      const requestStatus = String(requestDoc.Status || requestDoc.status || '').toLowerCase();
+      const isReviewAcceptedState = requestStatus.includes('review') && requestStatus.includes('accepted');
+      const isAdmin = normalizedActorRole === 'SystemAdmin';
+      // Reuse normalizedCreatorRole from earlier in the function (line 929)
+      const isAdminRequester = normalizedCreatorRole === 'SystemAdmin';
+      const isCoordinatorRequester = normalizedCreatorRole === 'Coordinator';
+      const isAdminReviewer = isAdmin && requestDoc.reviewer && requestDoc.reviewer.id && 
+                              String(requestDoc.reviewer.id) === String(actorId) &&
+                              requestDoc.reviewer.role && 
+                              (String(requestDoc.reviewer.role).toLowerCase() === 'systemadmin' || 
+                               String(requestDoc.reviewer.role).toLowerCase() === 'admin');
+      const shouldAllowConfirmForAdmin = isReviewAcceptedState && isAdmin && 
+                                         (isAdminRequester || (isCoordinatorRequester && isAdminReviewer));
       
       // Check decisionHistory to see if this user just made a decision
       let justMadeDecision = false;
@@ -1088,17 +1173,12 @@ class EventRequestService {
       }
       
       // If user is a reviewer (by any method), remove confirm from allowed actions
-      if ((isReviewerCheck || justMadeDecision) && !isRequesterCheck) {
+      // EXCEPTIONS: 
+      // 1. Allow CONFIRM in reschedule proposal cases where Stakeholder needs to accept Coordinator's proposal
+      // 2. Allow CONFIRM in review-accepted state for Admins who are requester or reviewer
+      if ((isReviewerCheck || justMadeDecision) && !isRequesterCheck && !shouldAllowConfirmForReschedule && !shouldAllowConfirmForAdmin) {
         const filteredAllowed = allowed.filter(action => action !== 'confirm' && action !== ACTIONS.CONFIRM);
-        console.log('[computeAllowedActions] Final safeguard: Removed confirm from reviewer actions', {
-          actorId,
-          actorRole,
-          originalAllowed: allowed,
-          filteredAllowed,
-          isReviewerCheck,
-          justMadeDecision,
-          isRequesterCheck
-        });
+        // Removed confirm from reviewer - no log needed
         return filteredAllowed;
       } else {
         return allowed;
@@ -1264,12 +1344,7 @@ class EventRequestService {
           
           // If user is a reviewer, they can ONLY view (no confirm)
           if (isReviewer) {
-            console.log('[computeAllowedActions] Legacy: Reviewer detected in review-accepted, blocking confirm', {
-              actorId,
-              actorRole: role,
-              reviewer: req.reviewer,
-              coordinator_id: req.coordinator_id
-            });
+            // Reviewer blocking confirm - no log needed
             return ['view'];
           }
           
@@ -1454,6 +1529,16 @@ class EventRequestService {
       const legacyActions = ['view'];
       
       // CRITICAL: Remove confirm from legacy actions if user is a reviewer
+      // EXCEPTION: In reschedule loops, reviewers need CONFIRM to accept reschedule proposals
+      // Check if this is a reschedule proposal case where reviewer should have CONFIRM
+      const rescheduleProposalLegacy = req.rescheduleProposal;
+      const isRescheduleProposalCaseLegacy = rescheduleProposalLegacy && rescheduleProposalLegacy.proposedBy;
+      const proposerRoleLegacy = isRescheduleProposalCaseLegacy ? this._normalizeRole(rescheduleProposalLegacy.proposedBy.role) : null;
+      const proposerIdLegacy = isRescheduleProposalCaseLegacy ? rescheduleProposalLegacy.proposedBy.id : null;
+      const isCoordinatorProposalLegacy = proposerRoleLegacy === 'Coordinator' && String(proposerIdLegacy) !== String(actorId);
+      const isStakeholderReviewerLegacy = role === 'stakeholder';
+      const shouldAllowConfirmForRescheduleLegacy = isRescheduleProposalCaseLegacy && isCoordinatorProposalLegacy && isStakeholderReviewerLegacy;
+      
       // Check if this user just made a decision (they're the reviewer)
       let isReviewerInLegacy = false;
       if (req.decisionHistory && Array.isArray(req.decisionHistory) && req.decisionHistory.length > 0) {
@@ -1476,13 +1561,10 @@ class EventRequestService {
       }
       
       // Remove confirm if user is a reviewer
+      // EXCEPTION: Allow CONFIRM in reschedule proposal cases where Stakeholder needs to accept Coordinator's proposal
       const filteredLegacyActions = legacyActions.filter(action => {
-        if (isReviewerInLegacy && (action === 'confirm' || action === 'Confirm')) {
-          console.log('[computeAllowedActions] Legacy: Removed confirm from reviewer in legacy path', {
-            actorId,
-            actorRole: role,
-            isReviewerInLegacy
-          });
+        if (isReviewerInLegacy && (action === 'confirm' || action === 'Confirm') && !shouldAllowConfirmForRescheduleLegacy) {
+          // Removed confirm from reviewer - no log needed
           return false;
         }
         return true;
@@ -1498,10 +1580,38 @@ class EventRequestService {
     let result = await computeActions();
     
     // CRITICAL FINAL SAFEGUARD: Remove confirm from ANY returned actions if user is a reviewer
-    // This is the ultimate fallback to ensure reviewers NEVER get confirm, regardless of code path
+    // EXCEPTIONS:
+    // 1. In reschedule loops, reviewers need CONFIRM to accept reschedule proposals
+    // 2. In review-accepted state, Admins need CONFIRM if they're the requester or reviewer
     if (!result || !Array.isArray(result)) {
       result = ['view'];
     }
+    
+    // Check if this is a reschedule proposal case where reviewer should have CONFIRM
+    const rescheduleProposal = originalRequestDoc?.rescheduleProposal;
+    const isRescheduleProposalCase = rescheduleProposal && rescheduleProposal.proposedBy;
+    const proposerRole = isRescheduleProposalCase ? this._normalizeRole(rescheduleProposal.proposedBy.role) : null;
+    const proposerId = isRescheduleProposalCase ? rescheduleProposal.proposedBy.id : null;
+    const normalizedActorRoleFinal = originalActorRole ? this._normalizeRole(originalActorRole) : null;
+    const isCoordinatorProposalFinal = proposerRole === 'Coordinator' && String(proposerId) !== String(originalActorId);
+    const isStakeholderReviewerFinal = normalizedActorRoleFinal === 'Stakeholder';
+    const shouldAllowConfirmForRescheduleFinal = isRescheduleProposalCase && isCoordinatorProposalFinal && isStakeholderReviewerFinal;
+    
+    // Check if Admin should be allowed to confirm in review-accepted state
+    const requestStatusFinal = String(originalRequestDoc?.Status || originalRequestDoc?.status || '').toLowerCase();
+    const isReviewAcceptedStateFinal = requestStatusFinal.includes('review') && requestStatusFinal.includes('accepted');
+    const isAdminFinal = normalizedActorRoleFinal === 'SystemAdmin';
+    const creatorRoleFinal = originalRequestDoc?.made_by_role || originalRequestDoc?.creator?.role;
+    const normalizedCreatorRoleFinal = creatorRoleFinal ? this._normalizeRole(creatorRoleFinal) : null;
+    const isAdminRequesterFinal = normalizedCreatorRoleFinal === 'SystemAdmin';
+    const isCoordinatorRequesterFinal = normalizedCreatorRoleFinal === 'Coordinator';
+    const isAdminReviewerFinal = isAdminFinal && originalRequestDoc?.reviewer && originalRequestDoc.reviewer.id && 
+                                  String(originalRequestDoc.reviewer.id) === String(originalActorId) &&
+                                  originalRequestDoc.reviewer.role && 
+                                  (String(originalRequestDoc.reviewer.role).toLowerCase() === 'systemadmin' || 
+                                   String(originalRequestDoc.reviewer.role).toLowerCase() === 'admin');
+    const shouldAllowConfirmForAdminFinal = isReviewAcceptedStateFinal && isAdminFinal && 
+                                            (isAdminRequesterFinal || (isCoordinatorRequesterFinal && isAdminReviewerFinal));
     
     // Check if user is a reviewer using multiple methods
     let isReviewerFinal = false;
@@ -1544,7 +1654,10 @@ class EventRequestService {
     }
     
     // If user is a reviewer (and not the requester), remove confirm
-    if (isReviewerFinal && !isRequesterFinal) {
+    // EXCEPTIONS:
+    // 1. Allow CONFIRM in reschedule proposal cases where Stakeholder needs to accept Coordinator's proposal
+    // 2. Allow CONFIRM in review-accepted state for Admins who are requester or reviewer
+    if (isReviewerFinal && !isRequesterFinal && !shouldAllowConfirmForRescheduleFinal && !shouldAllowConfirmForAdminFinal) {
       const originalResult = [...result];
       result = result.filter(action => {
         const actionLower = String(action).toLowerCase();
@@ -1552,15 +1665,7 @@ class EventRequestService {
       });
       
       if (originalResult.length !== result.length) {
-        console.log('[computeAllowedActions] ULTIMATE SAFEGUARD: Removed confirm from final result', {
-          actorId: originalActorId,
-          actorRole: originalActorRole,
-          isReviewerFinal,
-          isRequesterFinal,
-          originalResult,
-          filteredResult: result,
-          state: originalRequestDoc?.Status
-        });
+        // Ultimate safeguard applied - no log needed
       }
     }
     
@@ -1711,6 +1816,9 @@ class EventRequestService {
 
       const stakeholderId = eventData.stakeholder_id || eventData.Stakeholder_ID || null;
       const stakeholderPresent = !!stakeholderId;
+      
+      // Normalize stakeholderId to string if it exists
+      const normalizedStakeholderId = stakeholderId ? String(stakeholderId).trim() : null;
 
       const event = new Event({
         Event_ID: eventId,
@@ -1722,7 +1830,7 @@ class EventRequestService {
         Email: eventData.Email,
         Phone_Number: eventData.Phone_Number,
         coordinator_id: coordinatorId,
-        stakeholder_id: stakeholderId || undefined,
+        stakeholder_id: normalizedStakeholderId || undefined,
         made_by_id: creatorId,
         made_by_role: normalizedCreatorRole,
         Category: categoryType,
@@ -1734,10 +1842,32 @@ class EventRequestService {
       const reviewer = await this._assignReviewerContext({
         creatorRole: normalizedCreatorRole,
         coordinatorId,
-        stakeholderId,
+        stakeholderId: normalizedStakeholderId,
         province: eventData.province || coordinator.province,
         district: eventData.district || coordinator.district
       });
+
+      // Verify reviewer is set correctly for Coordinator-Stakeholder cases
+      if (normalizedCreatorRole === 'Coordinator' && normalizedStakeholderId && reviewer) {
+        if (reviewer.role !== 'Stakeholder') {
+          console.warn(`[Reviewer] WARNING: Coordinator-Stakeholder case but reviewer is ${reviewer.role}, not Stakeholder!`);
+          // Force correct reviewer
+          try {
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: normalizedStakeholderId }).lean().exec();
+            if (stakeholder) {
+              const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+              const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+              const name = `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+              reviewer.id = stakeholder.Stakeholder_ID;
+              reviewer.role = 'Stakeholder';
+              reviewer.name = name;
+              console.log(`[Reviewer] Fixed: Set Stakeholder (${stakeholder.Stakeholder_ID}) as reviewer`);
+            }
+          } catch (e) {
+            console.error('[Reviewer] Failed to fix reviewer assignment:', e.message);
+          }
+        }
+      }
 
       const eventForSummary = event.toObject();
       eventForSummary.categoryDoc = categoryData ? categoryData.toObject ? categoryData.toObject() : categoryData : null;
@@ -1751,7 +1881,7 @@ class EventRequestService {
         Request_ID: requestId,
         Event_ID: eventId,
         coordinator_id: coordinatorId,
-        stakeholder_id: stakeholderId || undefined,
+        stakeholder_id: normalizedStakeholderId || undefined,
         made_by_id: creatorId,
         made_by_role: normalizedCreatorRole,
         creator: creatorSnapshot,
@@ -1772,6 +1902,34 @@ class EventRequestService {
         expiresAt,
         summaryTemplate: categoryType
       });
+
+      // FINAL VERIFICATION: Ensure reviewer is correct for Coordinator-Stakeholder cases
+      if (normalizedCreatorRole === 'Coordinator' && normalizedStakeholderId) {
+        if (!request.reviewer || request.reviewer.role !== 'Stakeholder') {
+          try {
+            const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: normalizedStakeholderId }).lean().exec();
+            if (stakeholder) {
+              const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+              const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+              const name = `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+              const fixedReviewer = {
+                id: stakeholder.Stakeholder_ID,
+                role: 'Stakeholder',
+                name: name || null,
+                autoAssigned: true
+              };
+              request.reviewer = fixedReviewer;
+              reviewer = fixedReviewer; // Also update the reviewer variable for notifications
+              console.log(`[Reviewer] FIXED: Coordinator-Stakeholder case → Reviewer: Stakeholder (${stakeholder.Stakeholder_ID})`);
+            }
+          } catch (e) {
+            console.error('[Reviewer] Failed to fix reviewer:', e.message);
+          }
+        } else {
+          // Reviewer is already correct, just log it
+          console.log(`[Reviewer] Coordinator-Stakeholder case → Reviewer: Stakeholder (${request.reviewer.id})`);
+        }
+      }
 
       await request.save();
       await EventRequestHistory.logCreation({
