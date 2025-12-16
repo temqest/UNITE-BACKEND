@@ -98,4 +98,16 @@
       }
     ]
   }
+  ,
+  {
+    "name": "Masbate",
+    "districts": [
+      {
+        "name": "District I",
+        "municipalities": [
+          "San Pascual"
+        ]
+      }
+    ]
+  }
 ]

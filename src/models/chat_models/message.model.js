@@ -1,3 +1,5 @@
+// src/models/chat_models/message.model.js
+
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
@@ -11,7 +13,7 @@ const messageSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    ref: 'BloodbankStaff' // or other user models
+    ref: 'BloodbankStaff'
   },
   receiverId: {
     type: String,
@@ -21,8 +23,9 @@ const messageSchema = new mongoose.Schema({
   },
   content: {
     type: String,
-    required: true,
-    trim: true
+    required: function() { return this.messageType === 'text'; },
+    trim: true,
+    default: ''
   },
   messageType: {
     type: String,
@@ -32,7 +35,9 @@ const messageSchema = new mongoose.Schema({
   attachments: [{
     filename: String,
     url: String,
-    type: String,
+    key: String,
+    mime: String,
+    fileType: String, // Renamed from 'type' to fix Mongoose CastError
     size: Number
   }],
   timestamp: {

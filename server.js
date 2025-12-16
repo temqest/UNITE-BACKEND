@@ -26,6 +26,9 @@ const io = socketIo(server, {
   }
 });
 
+// Expose io through the Express app for controllers to emit events
+app.set('io', io);
+
 // ==================== ENVIRONMENT VARIABLES ====================
 const PORT = process.env.PORT || 3000;
 // Accept multiple env names for compatibility
@@ -231,6 +234,7 @@ app.use('/', routes);
 const { messageService, presenceService, typingService, permissionsService } = require('./src/services/chat_services');
 const { Notification: NotificationModel, BloodbankStaff } = require('./src/models');
 const notificationService = require('./src/services/utility_services/notification.service');
+const s3 = require('./src/utils/s3');
 
 // Store connected users: userId -> socketId
 const connectedUsers = new Map();
@@ -248,8 +252,8 @@ io.use(async (socket, next) => {
     const { verifyToken } = require('./src/utils/jwt');
     const decoded = verifyToken(token);
 
-    socket.userId = decoded.id;
-    socket.user = decoded;
+    socket.userId = String(decoded.id);
+    socket.user = { ...decoded, id: String(decoded.id) };
     next();
   } catch (error) {
     next(new Error('Authentication failed'));
@@ -272,7 +276,7 @@ io.on('connection', (socket) => {
   socket.join(socket.userId);
 
   // Send message
-  socket.on('send_message', async (data) => {
+    socket.on('send_message', async (data) => {
     try {
       const { receiverId, content, messageType = 'text', attachments = [] } = data;
 
@@ -284,13 +288,29 @@ io.on('connection', (socket) => {
         attachments
       );
 
+      // Prepare emitted copy with signed GET URLs for attachments
+      let emittedMessage = message && message.toObject ? message.toObject() : message;
+      if (emittedMessage && Array.isArray(emittedMessage.attachments) && emittedMessage.attachments.length > 0) {
+        emittedMessage.attachments = await Promise.all(emittedMessage.attachments.map(async (att) => {
+          if (att && att.key) {
+            try {
+              const signed = await s3.getSignedGetUrl(att.key, 60 * 60);
+              return { ...att, url: signed };
+            } catch (e) {
+              return att;
+            }
+          }
+          return att;
+        }));
+      }
+
       // Send to sender
-      socket.emit('message_sent', message);
+      socket.emit('message_sent', emittedMessage);
 
       // Send to receiver if online
       const receiverSocketId = connectedUsers.get(receiverId);
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('new_message', message);
+        io.to(receiverSocketId).emit('new_message', emittedMessage);
 
         // Mark as delivered
         await messageService.markAsDelivered(message.messageId, receiverId);
@@ -318,7 +338,7 @@ io.on('connection', (socket) => {
 
       // Emit to conversation room (for future group chats)
       const conversationId = [socket.userId, receiverId].sort().join('_');
-      socket.to(conversationId).emit('new_message', message);
+      socket.to(conversationId).emit('new_message', emittedMessage);
 
     } catch (error) {
       socket.emit('message_error', { error: error.message });
@@ -508,7 +528,27 @@ const startServer = async () => {
   try {
     // Connect to database first
     await connectDB();
-    
+    // Check AWS S3 connectivity (non-blocking failures)
+    try {
+      const s3Util = require('./src/utils/s3');
+      if (s3Util && s3Util.BUCKET) {
+        console.log(`🔐 S3 bucket configured: ${s3Util.BUCKET}`);
+        s3Util.checkBucketConnectivity().then(result => {
+          if (result.ok) {
+            console.log(`✅ AWS S3 reachable and bucket '${result.bucket}' is accessible`);
+          } else {
+            console.warn(`⚠️  AWS S3 bucket check failed: ${result.error}`);
+          }
+        }).catch(err => {
+          console.warn('⚠️  AWS S3 bucket check threw an error:', err && err.message ? err.message : err);
+        });
+      } else {
+        console.warn('⚠️  No S3_BUCKET_NAME configured; file uploads to S3 will be disabled');
+      }
+    } catch (err) {
+      console.warn('⚠️  Failed to initialize S3 connectivity check:', err && err.message ? err.message : err);
+    }
+
     // Start listening
     server.listen(PORT, () => {
       console.log('');
