@@ -38,9 +38,21 @@ class ReviewerAssignmentService {
           reviewer = await this.assignCoordinatorReviewer(context.coordinatorId);
         }
       }
-      // Coordinator creates request -> SystemAdmin becomes reviewer
+      // Coordinator creates request -> Check if Stakeholder is involved
       else if (normalizedRole === ROLES.COORDINATOR) {
-        reviewer = await this.assignSystemAdminReviewer();
+        // NEW RULE: If Coordinator creates request WITH Stakeholder, Stakeholder is primary reviewer
+        if (context.stakeholderId) {
+          try {
+            reviewer = await this.assignStakeholderReviewer(context.stakeholderId);
+          } catch (error) {
+            console.error(`[Reviewer] Failed to assign Stakeholder (${context.stakeholderId}):`, error.message);
+            // Fall through to admin assignment
+            reviewer = await this.assignSystemAdminReviewer();
+          }
+        } else {
+          // Coordinator-only request: SystemAdmin becomes reviewer (existing behavior)
+          reviewer = await this.assignSystemAdminReviewer();
+        }
       }
       // Stakeholder creates request -> Coordinator becomes primary reviewer
       else if (normalizedRole === ROLES.STAKEHOLDER) {
@@ -118,6 +130,45 @@ class ReviewerAssignmentService {
     return {
       id: admin.Admin_ID,
       role: ROLES.SYSTEM_ADMIN,
+      name: name || null
+    };
+  }
+
+  /**
+   * Assign a stakeholder as reviewer
+   * @param {string} stakeholderId - Stakeholder ID
+   * @returns {Promise<Object>} Reviewer assignment
+   */
+  async assignStakeholderReviewer(stakeholderId) {
+    if (!stakeholderId) {
+      throw new Error('Stakeholder ID is required to assign stakeholder as reviewer');
+    }
+    
+    // Try multiple field formats for stakeholder lookup
+    let stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId }).lean().exec();
+    if (!stakeholder) {
+      // Try as string
+      stakeholder = await Stakeholder.findOne({ Stakeholder_ID: String(stakeholderId) }).lean().exec();
+    }
+    if (!stakeholder) {
+      // Try as ObjectId if it's a valid ObjectId
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(stakeholderId)) {
+        stakeholder = await Stakeholder.findById(stakeholderId).lean().exec();
+      }
+    }
+    
+    if (!stakeholder) {
+      throw new Error(`Stakeholder with ID ${stakeholderId} not found`);
+    }
+
+    const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+    const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+    const name = `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
+
+    return {
+      id: stakeholder.Stakeholder_ID,
+      role: ROLES.STAKEHOLDER,
       name: name || null
     };
   }
@@ -214,6 +265,13 @@ class ReviewerAssignmentService {
       const admin = await SystemAdmin.findOne({ Admin_ID: newReviewerId }).lean().exec();
       if (admin) {
         reviewerName = `${admin.First_Name || ''} ${admin.Last_Name || ''}`.trim() || admin.FullName || null;
+      }
+    } else if (normalizedReviewerRole === ROLES.STAKEHOLDER) {
+      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: newReviewerId }).lean().exec();
+      if (stakeholder) {
+        const first = stakeholder.firstName || stakeholder.First_Name || stakeholder.FirstName || '';
+        const last = stakeholder.lastName || stakeholder.Last_Name || stakeholder.LastName || '';
+        reviewerName = `${first} ${last}`.trim() || stakeholder.organizationInstitution || null;
       }
     }
 

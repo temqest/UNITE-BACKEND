@@ -10,7 +10,8 @@ const actorSnapshotSchema = new mongoose.Schema({
 const reviewerSchema = new mongoose.Schema({
   id: { type: String, trim: true, required: true },
   // Accept legacy 'Admin' alongside 'SystemAdmin' for backward compatibility
-  role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator'], required: true },
+  // Include 'Stakeholder' to support Coordinator-Stakeholder involvement cases
+  role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator', 'Stakeholder'], required: true },
   name: { type: String, trim: true },
   assignedAt: { type: Date, default: Date.now },
   autoAssigned: { type: Boolean, default: true },
