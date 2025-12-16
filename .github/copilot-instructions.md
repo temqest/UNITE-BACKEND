@@ -1,6 +1,60 @@
 # GitHub Copilot Instructions — UNITE Backend
 
 Purpose
+- Get an AI coding agent productive quickly on the UNITE backend and the Next.js frontend.
+
+Top-level architecture (big picture)
+- Backend: Node.js + Express (CommonJS). Entry: [server.js](server.js) — sets up middleware, socket.io, DB, and routes.
+- Layers: routes -> controllers -> services -> models. Trace requests in that order.
+- Data layer: [src/models/index.js](src/models/index.js) exports Mongoose models.
+- Frontend: `UNITE/` is a Next.js TypeScript app that calls backend APIs and listens for socket events.
+
+Files to read first
+- [server.js](server.js) — startup, CORS, sockets, DB connection.
+- [src/routes/index.js](src/routes/index.js) and route files under [src/routes/].
+- Request flow: [src/services/request_services/requestFlowEngine.js](src/services/request_services/requestFlowEngine.js) and [src/services/request_services/requestStateMachine.js](src/services/request_services/requestStateMachine.js).
+- Models and helpers: [src/models/index.js](src/models/index.js), `src/utils/`, `src/services/*`.
+
+Repo conventions & patterns
+- Backend uses CommonJS: use `require` / `module.exports`. Frontend uses ESM/TS.
+- Keep controllers small: validation/auth -> call service -> return response.
+- Services house business logic. When changing stateful flows, update both `requestStateMachine` and `requestFlowEngine`.
+- Notifications and history are important: services call `Notification.*` and `EventRequestHistory`. Preserve payload shapes.
+
+Integration points
+- MongoDB via Mongoose: `MONGO_URI`, optional `MONGO_DB_NAME` (see `.env`).
+- AWS S3 helpers: `src/utils/s3` and env vars `S3_BUCKET_NAME`, `AWS_*`.
+- Socket.IO: configured in `server.js`; controllers can access `app.get('io')` to emit events.
+- Email: SMTP config via `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_PORT`.
+
+Developer workflows
+- Start backend (dev): `nodemon server.js` or `node server.js` for single run.
+- Start frontend: `cd UNITE && npm run dev`.
+- Build frontend: `cd UNITE && npm run build`.
+- Seed scripts: `src/utils/seedLocations.js`, `src/utils/createSysAdmin.js`.
+
+Common edit checklist
+- When adding a request ACTION/state:
+  - add the constant in `requestStateMachine.js` (ACTIONS)
+  - add transition in `STATE_TRANSITIONS`
+  - update `requestFlowEngine.normalizeAction`, `validateAction`, and `executeTransition` as needed
+  - update any notification or history calls that depend on the transition payload
+
+Debugging tips
+- CORS & preflight: `server.js` centralizes CORS — check `ALLOWED_ORIGINS` formatting and the production middleware if preflight fails.
+- Socket auth failures: inspect the `io.use()` token verification in `server.js`.
+- DB connection logs: `mongoose.connection` events are logged in `server.js`.
+
+Why this structure
+- Clear separation of concerns (routes/controllers/services/models) keeps business logic testable and services reusable.
+- The state-machine + engine ensures consistent, auditable transitions for multi-role request workflows.
+
+If you want more
+- I can add: startup logging of effective `ALLOWED_ORIGINS`, or a short cookbook demonstrating exactly how to add a new request action.
+Please tell me which to add.
+# GitHub Copilot Instructions — UNITE Backend
+
+Purpose
 - Help an AI coding agent become productive quickly in this repository: backend API (Node/Express) and the UNITE Next.js frontend.
 
 Big picture (what to read first)
