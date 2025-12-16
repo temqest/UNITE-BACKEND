@@ -1,0 +1,35 @@
+version: 0.2
+
+env:
+  variables:
+    NODE_ENV: production
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo Installing dependencies...
+      - npm ci
+
+  pre_build:
+    commands:
+      - echo "Pre-build step (optional)"
+
+  build:
+    commands:
+      - echo Building application and preparing artifact directory...
+      - mkdir -p artifact
+      # Try to use rsync if available for a reliable copy and excludes; otherwise fallback to cp
+      - if command -v rsync >/dev/null 2>&1; then rsync -a --exclude='.git' --exclude='node_modules' ./ artifact/; else cp -a . artifact/ || true; fi
+      - rm -rf artifact/.git artifact/node_modules artifact/*.zip artifact/*.7z || true
+
+artifacts:
+  base-directory: artifact
+  files:
+    - '**/*'
+  discard-paths: no
+
+cache:
+  paths:
+    - node_modules/**/*

@@ -25,6 +25,14 @@ const createCoordinatorSchema = Joi.object({
     .messages({
       'string.min': 'Province must be at least 2 characters long',
       'string.max': 'Province must not exceed 100 characters'
+    }),
+
+  accountType: Joi.string()
+    .valid('LGU', 'Others')
+    .required()
+    .messages({
+      'any.only': 'Account type must be either LGU or Others',
+      'any.required': 'Account type is required'
     })
 });
 
@@ -63,6 +71,12 @@ const updateCoordinatorSchema = Joi.object({
     .trim()
     .messages({
       'string.empty': 'province cannot be empty'
+    }),
+
+  accountType: Joi.string()
+    .valid('LGU', 'Others')
+    .messages({
+      'any.only': 'Account type must be either LGU or Others'
     })
 ,
   // Allow updating staff fields as part of coordinator update

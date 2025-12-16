@@ -75,7 +75,8 @@ class CoordinatorService {
       const coordinator = new Coordinator({
         Coordinator_ID: coordinatorId,
         province: coordinatorData.province,
-        district: coordinatorData.district
+        district: coordinatorData.district,
+        accountType: coordinatorData.accountType
       });
 
       const savedCoordinator = await coordinator.save();
@@ -87,6 +88,7 @@ class CoordinatorService {
           Coordinator_ID: savedCoordinator.Coordinator_ID,
           province: savedCoordinator.province,
           district: savedCoordinator.district,
+          accountType: savedCoordinator.accountType,
           District: district,
           Staff: {
             ID: savedStaff.ID,
@@ -144,6 +146,7 @@ class CoordinatorService {
           Coordinator_ID: coordinator.Coordinator_ID,
           province: coordinator.province,
           district: coordinator.district,
+          accountType: coordinator.accountType,
           District: district,
           Staff: {
             ID: staff.ID,
@@ -200,6 +203,7 @@ class CoordinatorService {
             Coordinator_ID: coord.Coordinator_ID,
             province: coord.province,
             district: coord.district,
+            accountType: coord.accountType || '',
             District: district || null,
             Staff: staff ? {
               First_Name: staff.First_Name,
@@ -260,6 +264,11 @@ class CoordinatorService {
       // Update province if provided
       if (updateData.province) {
         coordinator.province = updateData.province;
+      }
+
+      // Update accountType if provided
+      if (updateData.accountType) {
+        coordinator.accountType = updateData.accountType;
       }
 
       await coordinator.save();

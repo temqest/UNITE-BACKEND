@@ -57,7 +57,8 @@ class StakeholderService {
       phoneNumber: stakeholderData.phoneNumber,
       password: hashed,
       organizationInstitution: stakeholderData.organizationInstitution || null,
-      registrationCode: stakeholderData.registrationCode || null
+      registrationCode: stakeholderData.registrationCode || null,
+      accountType: stakeholderData.accountType
     });
     const saved = await stakeholder.save();
 
@@ -80,6 +81,7 @@ class StakeholderService {
         municipality: saved.municipality,
         coordinator: saved.coordinator,
         organizationInstitution: saved.organizationInstitution,
+        accountType: saved.accountType,
         created_at: saved.createdAt
       }
     };
@@ -101,7 +103,8 @@ class StakeholderService {
         phoneNumber: stakeholder.phoneNumber,
         district: stakeholder.district,
         coordinator: stakeholder.coordinator,
-        province: stakeholder.province
+        province: stakeholder.province,
+        accountType: stakeholder.accountType
       }
     };
   }
@@ -123,6 +126,7 @@ class StakeholderService {
         municipality: s.municipality,
         organizationInstitution: s.organizationInstitution,
         coordinator: s.coordinator,
+        accountType: s.accountType,
         created_at: s.createdAt
       }
     };
@@ -159,6 +163,9 @@ class StakeholderService {
     // Organization
     if ('organizationInstitution' in updateData) map.organizationInstitution = updateData.organizationInstitution;
     if ('Organization_Institution' in updateData) map.organizationInstitution = updateData.Organization_Institution;
+
+    // Account type
+    if ('accountType' in updateData) map.accountType = updateData.accountType;
 
     // Coordinator reference
     if ('coordinator' in updateData) map.coordinator = updateData.coordinator;
@@ -266,7 +273,8 @@ class StakeholderService {
         Province_Name: saved.Province_Name,
         City_Municipality: saved.City_Municipality,
         Organization_Institution: saved.Organization_Institution,
-        Coordinator_ID: saved.Coordinator_ID
+        Coordinator_ID: saved.Coordinator_ID,
+        accountType: saved.accountType
       }
     }
   }
@@ -281,6 +289,7 @@ class StakeholderService {
   async list(filters = {}, page = 1, limit = 20) {
     const query = {};
     if (filters.district_id) query.district = filters.district_id;
+    if (filters.accountType) query.accountType = filters.accountType;
     if (filters.email) query.email = { $regex: filters.email, $options: 'i' };
 
     const skip = (page - 1) * limit;
@@ -300,6 +309,7 @@ class StakeholderService {
         province: s.province,
         municipality: s.municipality,
         organizationInstitution: s.organizationInstitution,
+        accountType: s.accountType,
         created_at: s.createdAt
       })),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) }

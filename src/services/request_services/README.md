@@ -1,6 +1,6 @@
 # Event Request Services Documentation
 
-This directory contains all event request and scheduling logic for the UNITE Blood Bank Event Management System.
+This directory contains all event request and scheduling logic for the UNITE Blood Bank System.
 
 ## Services Overview
 

@@ -10,6 +10,11 @@ const socketIo = require('socket.io');
 
 // Initialize Express app
 const app = express();
+// When behind a load balancer (Elastic Beanstalk), trust the proxy headers
+if (process.env.NODE_ENV === 'production') {
+  // trust first proxy (ELB/NLB) so req.protocol, req.secure, and req.ip are correct
+  app.set('trust proxy', 1);
+}
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -20,6 +25,9 @@ const io = socketIo(server, {
     credentials: true
   }
 });
+
+// Expose io through the Express app for controllers to emit events
+app.set('io', io);
 
 // ==================== ENVIRONMENT VARIABLES ====================
 const PORT = process.env.PORT || 3000;
@@ -58,7 +66,7 @@ if (mongoDbName) {
 // CORS Configuration
 // For production, update allowedOrigins with your frontend domain
 const allowedOrigins = process.env.NODE_ENV === 'production'
-  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app'])
+  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : ['https://unite-development.vercel.app', 'https://www.unitehealth.tech'])
   : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:3000'];
 
 const corsOptions = {
@@ -78,6 +86,22 @@ const corsOptions = {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
+
+// Production explicit CORS header middleware for known frontend domains
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const allowed = ['https://www.unitehealth.tech', 'https://unitehealth.tech'];
+    if (origin && allowed.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+    }
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+}
 
 app.use(cors(corsOptions));
 
@@ -110,6 +134,17 @@ app.use((req, res, next) => {
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, res, next) => {
     console.log(`📥 ${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+  });
+}
+
+// Redirect HTTP -> HTTPS when running in production behind a load balancer
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || '').toString();
+    if (proto === 'http') {
+      return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+    }
     next();
   });
 }
@@ -179,7 +214,7 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'UNITE Blood Bank Event Management System API',
+    message: 'UNITE Blood Bank System API',
     version: '1.0.0',
     endpoints: {
       health: '/health',
@@ -199,6 +234,7 @@ app.use('/', routes);
 const { messageService, presenceService, typingService, permissionsService } = require('./src/services/chat_services');
 const { Notification: NotificationModel, BloodbankStaff } = require('./src/models');
 const notificationService = require('./src/services/utility_services/notification.service');
+const s3 = require('./src/utils/s3');
 
 // Store connected users: userId -> socketId
 const connectedUsers = new Map();
@@ -216,8 +252,8 @@ io.use(async (socket, next) => {
     const { verifyToken } = require('./src/utils/jwt');
     const decoded = verifyToken(token);
 
-    socket.userId = decoded.id;
-    socket.user = decoded;
+    socket.userId = String(decoded.id);
+    socket.user = { ...decoded, id: String(decoded.id) };
     next();
   } catch (error) {
     next(new Error('Authentication failed'));
@@ -240,7 +276,7 @@ io.on('connection', (socket) => {
   socket.join(socket.userId);
 
   // Send message
-  socket.on('send_message', async (data) => {
+    socket.on('send_message', async (data) => {
     try {
       const { receiverId, content, messageType = 'text', attachments = [] } = data;
 
@@ -252,13 +288,29 @@ io.on('connection', (socket) => {
         attachments
       );
 
+      // Prepare emitted copy with signed GET URLs for attachments
+      let emittedMessage = message && message.toObject ? message.toObject() : message;
+      if (emittedMessage && Array.isArray(emittedMessage.attachments) && emittedMessage.attachments.length > 0) {
+        emittedMessage.attachments = await Promise.all(emittedMessage.attachments.map(async (att) => {
+          if (att && att.key) {
+            try {
+              const signed = await s3.getSignedGetUrl(att.key, 60 * 60);
+              return { ...att, url: signed };
+            } catch (e) {
+              return att;
+            }
+          }
+          return att;
+        }));
+      }
+
       // Send to sender
-      socket.emit('message_sent', message);
+      socket.emit('message_sent', emittedMessage);
 
       // Send to receiver if online
       const receiverSocketId = connectedUsers.get(receiverId);
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('new_message', message);
+        io.to(receiverSocketId).emit('new_message', emittedMessage);
 
         // Mark as delivered
         await messageService.markAsDelivered(message.messageId, receiverId);
@@ -286,7 +338,7 @@ io.on('connection', (socket) => {
 
       // Emit to conversation room (for future group chats)
       const conversationId = [socket.userId, receiverId].sort().join('_');
-      socket.to(conversationId).emit('new_message', message);
+      socket.to(conversationId).emit('new_message', emittedMessage);
 
     } catch (error) {
       socket.emit('message_error', { error: error.message });
@@ -476,7 +528,27 @@ const startServer = async () => {
   try {
     // Connect to database first
     await connectDB();
-    
+    // Check AWS S3 connectivity (non-blocking failures)
+    try {
+      const s3Util = require('./src/utils/s3');
+      if (s3Util && s3Util.BUCKET) {
+        console.log(`🔐 S3 bucket configured: ${s3Util.BUCKET}`);
+        s3Util.checkBucketConnectivity().then(result => {
+          if (result.ok) {
+            console.log(`✅ AWS S3 reachable and bucket '${result.bucket}' is accessible`);
+          } else {
+            console.warn(`⚠️  AWS S3 bucket check failed: ${result.error}`);
+          }
+        }).catch(err => {
+          console.warn('⚠️  AWS S3 bucket check threw an error:', err && err.message ? err.message : err);
+        });
+      } else {
+        console.warn('⚠️  No S3_BUCKET_NAME configured; file uploads to S3 will be disabled');
+      }
+    } catch (err) {
+      console.warn('⚠️  Failed to initialize S3 connectivity check:', err && err.message ? err.message : err);
+    }
+
     // Start listening
     server.listen(PORT, () => {
       console.log('');

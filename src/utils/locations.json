@@ -80,20 +80,32 @@
     "name": "Camarines Norte",
     "districts": [
       {
-        "name": "District I & II",
+        "name": "All LGUs (District I & II)",
         "municipalities": [
+          "Basud",
           "Capalonga",
+          "Daet",
           "Jose Panganiban",
           "Labo",
-          "Paracale",
-          "Sta. Elena",
-          "Basud",
-          "Daet",
           "Mercedes",
+          "Paracale",
           "San Lorenzo Ruiz",
           "San Vicente",
+          "Sta. Elena",
           "Talisay",
           "Vinzons"
+        ]
+      }
+    ]
+  }
+  ,
+  {
+    "name": "Masbate",
+    "districts": [
+      {
+        "name": "District I",
+        "municipalities": [
+          "San Pascual"
         ]
       }
     ]
