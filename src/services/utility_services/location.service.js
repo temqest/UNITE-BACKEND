@@ -73,6 +73,42 @@ class LocationService {
     const existingStakeholder = await Stakeholder.findOne({ email: req.email });
     if (existingStakeholder) throw new Error('A stakeholder with this email already exists');
 
+    // Get coordinator's accountType to set on stakeholder (required for filtering)
+    // This is critical: stakeholders must have accountType matching their coordinator's accountType
+    // for coordinators to see them in the list
+    let accountType = 'Others'; // Default to 'Others' if coordinator not found
+    if (req.assignedCoordinator) {
+      try {
+        const coordinator = await Coordinator.findById(req.assignedCoordinator).lean().exec();
+        if (coordinator && coordinator.accountType) {
+          accountType = coordinator.accountType;
+        }
+      } catch (e) {
+        console.warn('Failed to fetch assigned coordinator accountType, trying district coordinator:', e.message);
+        // If assigned coordinator lookup fails, try to find a coordinator for the district
+        if (req.district) {
+          try {
+            const districtCoordinator = await Coordinator.findOne({ district: req.district }).lean().exec();
+            if (districtCoordinator && districtCoordinator.accountType) {
+              accountType = districtCoordinator.accountType;
+            }
+          } catch (e2) {
+            console.warn('Failed to fetch district coordinator accountType, using default:', e2.message);
+          }
+        }
+      }
+    } else if (req.district) {
+      // No assigned coordinator, but we have a district - try to find a coordinator for that district
+      try {
+        const districtCoordinator = await Coordinator.findOne({ district: req.district }).lean().exec();
+        if (districtCoordinator && districtCoordinator.accountType) {
+          accountType = districtCoordinator.accountType;
+        }
+      } catch (e) {
+        console.warn('Failed to fetch district coordinator accountType, using default:', e.message);
+      }
+    }
+
     req.status = 'approved';
     req.decisionAt = new Date();
     await req.save();
@@ -96,10 +132,11 @@ class LocationService {
       phoneNumber: req.phoneNumber || null,
       password: hashedPassword,
       organizationInstitution: req.organization,
+      accountType: accountType, // Set accountType to match coordinator's accountType
     });
     await stakeholder.save();
 
-    // Send acceptance email
+    // Send acceptance email (with error handling to prevent blocking)
     const acceptanceMessage = `
   Dear ${req.firstName} ${req.lastName},
 
@@ -117,7 +154,8 @@ class LocationService {
   UNITE Blood Bank Team
     `.trim();
 
-    await emailService.sendEmail(req.email, 'UNITE - Registration Approved', acceptanceMessage, `
+    try {
+      await emailService.sendEmail(req.email, 'UNITE - Registration Approved', acceptanceMessage, `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
     <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
@@ -141,6 +179,11 @@ class LocationService {
     <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
   </div>
 </div>`);
+      console.log(`Approval email sent successfully to ${req.email}`);
+    } catch (emailError) {
+      // Log error but don't fail the approval process
+      console.error(`Failed to send approval email to ${req.email}:`, emailError.message);
+    }
 
     // Create notification for the new stakeholder
     const { Notification } = require('../../models');
@@ -159,7 +202,7 @@ class LocationService {
     if (!req) throw new Error('Sign up request not found');
     if (req.status !== 'pending') throw new Error('Request has already been processed');
 
-    // Send rejection email before deleting
+    // Send rejection email before deleting (with error handling)
     const rejectionMessage = `
   Dear ${req.firstName} ${req.lastName},
 
@@ -173,7 +216,8 @@ class LocationService {
   UNITE Blood Bank Team
     `.trim();
 
-    await emailService.sendEmail(req.email, 'UNITE - Registration Update', rejectionMessage, `
+    try {
+      await emailService.sendEmail(req.email, 'UNITE - Registration Update', rejectionMessage, `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
     <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
@@ -193,6 +237,11 @@ class LocationService {
     <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
   </div>
 </div>`);
+      console.log(`Rejection email sent successfully to ${req.email}`);
+    } catch (emailError) {
+      // Log error but don't fail the rejection process
+      console.error(`Failed to send rejection email to ${req.email}:`, emailError.message);
+    }
 
     // Create notification for the rejected request (using email as recipient ID)
     const { Notification } = require('../../models');
