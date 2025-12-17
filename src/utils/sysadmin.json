@@ -1,11 +1,11 @@
 {
   "staff": {
-    "First_Name": "Test",
+    "First_Name": "BMC",
     "Middle_Name": "",
     "Last_Name": "Admin",
-    "Email": "sysadmin@example.com",
+    "Email": "admin@bmc.com",
     "Phone_Number": "+63 9123456789",
-    "Password": "ChangeMe123!"
+    "Password": "K9!rZ@3Qm#L7E^2xW$A8"
   },
   "admin": {
     "AccessLevel": "super"
