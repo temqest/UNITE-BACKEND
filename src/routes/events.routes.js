@@ -7,6 +7,9 @@ const {
   eventStatisticsController
 } = require('../controller/events_controller');
 
+const authenticate = require('../middleware/authenticate');
+const { requirePermission } = require('../middleware/requirePermission');
+
 // Public events (calendar) - intentionally public so calendar can read approved events
 router.get('/public/events', async (req, res, next) => {
   try {
@@ -19,10 +22,10 @@ router.get('/public/events', async (req, res, next) => {
 
 /**
  * @route   GET /api/calendar/month
- * @desc    Get month view - all events in a month
+ * @desc    Get month view - all events in a month (requires event.read permission)
  * @access  Private
  */
-router.get('/calendar/month', async (req, res, next) => {
+router.get('/calendar/month', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getMonthView(req, res);
   } catch (error) {
@@ -32,10 +35,10 @@ router.get('/calendar/month', async (req, res, next) => {
 
 /**
  * @route   GET /api/calendar/week
- * @desc    Get week view - all events in a week
+ * @desc    Get week view - all events in a week (requires event.read permission)
  * @access  Private
  */
-router.get('/calendar/week', async (req, res, next) => {
+router.get('/calendar/week', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getWeekView(req, res);
   } catch (error) {
@@ -45,10 +48,10 @@ router.get('/calendar/week', async (req, res, next) => {
 
 /**
  * @route   GET /api/calendar/day
- * @desc    Get day view - all events on a specific day
+ * @desc    Get day view - all events on a specific day (requires event.read permission)
  * @access  Private
  */
-router.get('/calendar/day', async (req, res, next) => {
+router.get('/calendar/day', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getDayView(req, res);
   } catch (error) {
@@ -86,10 +89,10 @@ router.get('/calendar/upcoming', async (req, res, next) => {
 
 /**
  * @route   GET /api/events/:eventId
- * @desc    Get complete event details by ID
+ * @desc    Get complete event details by ID (requires event.read permission)
  * @access  Private
  */
-router.get('/events/:eventId', async (req, res, next) => {
+router.get('/events/:eventId', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await eventDetailsController.getEventDetails(req, res);
   } catch (error) {
@@ -166,10 +169,10 @@ router.get('/events/:eventId/completeness', async (req, res, next) => {
 
 /**
  * @route   GET /api/events
- * @desc    Get all events with filtering, sorting, and pagination
+ * @desc    Get all events with filtering, sorting, and pagination (requires event.read permission)
  * @access  Private
  */
-router.get('/events', async (req, res, next) => {
+router.get('/events', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await eventOverviewController.getAllEvents(req, res);
   } catch (error) {
@@ -233,10 +236,10 @@ router.get('/events/search', async (req, res, next) => {
 
 /**
  * @route   GET /api/events/statistics
- * @desc    Get comprehensive event statistics
+ * @desc    Get comprehensive event statistics (requires event.read permission)
  * @access  Private
  */
-router.get('/events/statistics', async (req, res, next) => {
+router.get('/events/statistics', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await eventStatisticsController.getEventStatistics(req, res);
   } catch (error) {

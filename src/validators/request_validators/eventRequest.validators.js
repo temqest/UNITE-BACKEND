@@ -18,21 +18,20 @@ const createEventRequestSchema = Joi.object({
       'string.empty': 'Event ID cannot be empty'
     }),
 
+  // Legacy fields (for backward compatibility)
   coordinator_id: Joi.string()
-    .required()
     .trim()
+    .allow(null, '')
     .messages({
-      'any.required': 'Coordinator ID is required',
-      'string.empty': 'Coordinator ID cannot be empty'
+      'string.empty': 'Coordinator ID cannot be empty if provided'
     }),
 
-  // New hierarchical selection (optional when request is created by a coordinator/sysadmin)
-  province: Joi.string().trim().allow(null, ''),
-  district: Joi.string().trim().allow(null, ''),
-  municipality: Joi.string().trim().allow(null, ''),
-
-  // Optional stakeholder reference (when admin/coordinator attaches a stakeholder)
-  stakeholder_id: Joi.string().trim().allow(null, ''),
+  stakeholder_id: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Stakeholder ID cannot be empty if provided'
+    }),
 
   made_by_id: Joi.string()
     .trim()
@@ -42,11 +41,32 @@ const createEventRequestSchema = Joi.object({
     }),
 
   made_by_role: Joi.string()
-    .valid('Admin', 'Coordinator', 'Stakeholder')
-    .allow(null)
+    .trim()
+    .allow(null, '')
     .messages({
-      'any.only': 'Made by role must be one of: Admin, Coordinator, Stakeholder, or null'
+      'string.empty': 'Made by role cannot be empty if provided'
     }),
+
+  // New role-agnostic fields
+  requester: Joi.object({
+    userId: Joi.string().trim().allow(null, ''),
+    id: Joi.string().trim().allow(null, ''),
+    roleSnapshot: Joi.string().trim().allow(null, ''),
+    name: Joi.string().trim().allow(null, '')
+  }).allow(null),
+
+  // New flexible location structure
+  location: Joi.object({
+    province: Joi.string().trim().allow(null, ''),
+    district: Joi.string().trim().allow(null, ''),
+    municipality: Joi.string().trim().allow(null, ''),
+    custom: Joi.string().trim().allow(null, '')
+  }).allow(null),
+
+  // Legacy location fields (for backward compatibility)
+  province: Joi.string().trim().allow(null, ''),
+  district: Joi.string().trim().allow(null, ''),
+  municipality: Joi.string().trim().allow(null, ''),
 
   AdminAction: Joi.string()
     .valid('Accepted', 'Rescheduled', 'Rejected', null)

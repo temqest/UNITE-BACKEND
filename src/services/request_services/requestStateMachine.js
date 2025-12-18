@@ -567,21 +567,103 @@ class RequestStateMachine {
   }
 
   isValidTransition(currentState, action, userRole, userId, request = {}) {
+    // Try permission-based check first (new RBAC approach)
+    if (userId) {
+      const canPerform = this.canPerformAction(currentState, userId, action, request);
+      if (canPerform !== null) {
+        return canPerform;
+      }
+    }
+    
+    // Fallback to role-based check (backward compatibility)
     const allowedActions = this.getAllowedActions(currentState, userRole, userId, request);
     return allowedActions.includes(action);
   }
 
+  /**
+   * Check if user can perform action using RBAC permissions (new approach)
+   * @param {string} state - Current request state
+   * @param {string|ObjectId} userId - User ID
+   * @param {string} action - Action to check
+   * @param {Object} request - Request object
+   * @returns {Promise<boolean>|boolean} True if user can perform action, null if should fallback to role check
+   */
+  async canPerformAction(state, userId, action, request = {}) {
+    const permissionService = require('../users_services/permission.service');
+    
+    // Map actions to required permissions
+    const permissionMap = {
+      [ACTIONS.ACCEPT]: { resource: 'request', action: 'approve' },
+      [ACTIONS.REJECT]: { resource: 'request', action: 'reject' },
+      [ACTIONS.RESCHEDULE]: { resource: 'request', action: 'reschedule' },
+      [ACTIONS.CANCEL]: { resource: 'request', action: 'cancel' },
+      [ACTIONS.DELETE]: { resource: 'request', action: 'delete' },
+      [ACTIONS.CONFIRM]: { resource: 'request', action: 'confirm' },
+      [ACTIONS.DECLINE]: { resource: 'request', action: 'decline' },
+      [ACTIONS.EDIT]: { resource: 'request', action: 'update' },
+      [ACTIONS.VIEW]: { resource: 'request', action: 'read' }
+    };
+
+    const requiredPerm = permissionMap[action];
+    if (!requiredPerm) {
+      return null; // Unknown action, fallback to role check
+    }
+
+    // Get location context
+    const locationId = request.location?.district || request.district;
+
+    // Check permission
+    const hasPermission = await permissionService.checkPermission(
+      userId,
+      requiredPerm.resource,
+      requiredPerm.action,
+      { locationId, requestId: request._id }
+    );
+
+    if (!hasPermission) {
+      return false;
+    }
+
+    // Additional checks: requester can always cancel/confirm/decline their own requests
+    if (['cancel', 'confirm', 'decline'].includes(action)) {
+      const isRequester = this.isRequester(userId, request);
+      if (isRequester) {
+        return true;
+      }
+    }
+
+    // Check state machine transition validity
+    const normalizedState = this.normalizeState(state);
+    const stateConfig = STATE_TRANSITIONS[normalizedState];
+    if (!stateConfig || !stateConfig.transitions || !stateConfig.transitions[action]) {
+      return false; // Invalid transition for this state
+    }
+
+    return true;
+  }
+
   isRequester(userId, request) {
     if (!userId || !request) return false;
+    const userIdStr = userId.toString();
+    
+    // Check new requester field
+    if (request.requester?.userId) {
+      if (request.requester.userId.toString() === userIdStr) return true;
+    }
+    if (request.requester?.id) {
+      if (request.requester.id.toString() === userIdStr) return true;
+    }
+    
+    // Legacy checks
     const madeById = request.made_by_id || request.creator?.id;
-    if (madeById && String(madeById) === String(userId)) return true;
+    if (madeById && String(madeById) === userIdStr) return true;
     // If stakeholder_id explicitly matches the user, treat as requester
-    if (request.stakeholder_id && String(request.stakeholder_id) === String(userId)) return true;
+    if (request.stakeholder_id && String(request.stakeholder_id) === userIdStr) return true;
 
     const requesterRole = request.made_by_role || request.creator?.role;
     const normalizedRequesterRole = this.normalizeRole(requesterRole);
     if (normalizedRequesterRole === ROLES.STAKEHOLDER) {
-      if (request.stakeholder_id && String(request.stakeholder_id) === String(userId)) {
+      if (request.stakeholder_id && String(request.stakeholder_id) === userIdStr) {
         return true;
       }
     }
@@ -590,11 +672,16 @@ class RequestStateMachine {
 
   isReviewer(userId, userRole, request) {
     if (!userId || !request) return false;
-    const normalizedRole = this.normalizeRole(userRole);
+    const userIdStr = userId.toString();
     const reviewer = request.reviewer;
     
-    // Explicit reviewer match
-    if (reviewer && reviewer.id && String(reviewer.id) === String(userId)) return true;
+    // Check new reviewer field (ObjectId)
+    if (reviewer?.userId) {
+      if (reviewer.userId.toString() === userIdStr) return true;
+    }
+    
+    // Explicit reviewer match (legacy ID)
+    if (reviewer && reviewer.id && String(reviewer.id) === userIdStr) return true;
 
     // NEW: Coordinator-Stakeholder involvement case
     // When Coordinator creates request WITH Stakeholder, Stakeholder is the primary reviewer
@@ -603,10 +690,13 @@ class RequestStateMachine {
     const isCoordinatorRequest = normalizedCreatorRole === ROLES.COORDINATOR;
     const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
     
-    if (isCoordinatorRequest && hasStakeholder && normalizedRole === ROLES.STAKEHOLDER) {
+    // Normalize userRole if provided, otherwise check by ID only
+    const normalizedRole = userRole ? this.normalizeRole(userRole) : null;
+    
+    if (isCoordinatorRequest && hasStakeholder && (!normalizedRole || normalizedRole === ROLES.STAKEHOLDER)) {
       // Stakeholder is the primary reviewer in Coordinator-Stakeholder cases
       const stakeholderId = request.stakeholder_id || request.stakeholderId;
-      if (stakeholderId && String(stakeholderId) === String(userId)) {
+      if (stakeholderId && String(stakeholderId) === userIdStr) {
         return true;
       }
     }
@@ -614,8 +704,8 @@ class RequestStateMachine {
     // Stakeholder-created request logic: Coordinator is Reviewer
     const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
 
-    if (isStakeholderRequest && normalizedRole === ROLES.COORDINATOR) {
-        if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
+    if (isStakeholderRequest && (!normalizedRole || normalizedRole === ROLES.COORDINATOR)) {
+        if (request.coordinator_id && String(request.coordinator_id) === userIdStr) {
             return true;
         }
     }

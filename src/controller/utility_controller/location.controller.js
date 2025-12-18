@@ -1,9 +1,19 @@
 const locationService = require('../../services/utility_services/location.service');
+const { Location } = require('../../models');
 
+// Legacy methods (using old Province/District/Municipality models)
 exports.getProvinces = async (req, res) => {
   try {
-    const provinces = await locationService.getProvinces();
-    return res.status(200).json({ success: true, data: provinces });
+    // Try new flexible location system first
+    try {
+      const provinces = await locationService.getProvinces({ includeInactive: req.query.includeInactive === 'true' });
+      return res.status(200).json({ success: true, data: provinces });
+    } catch (newError) {
+      // Fallback to legacy Province model
+      const { Province } = require('../../models');
+      const provinces = await Province.find().sort({ name: 1 });
+      return res.status(200).json({ success: true, data: provinces });
+    }
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
@@ -12,8 +22,19 @@ exports.getProvinces = async (req, res) => {
 exports.getDistrictsByProvince = async (req, res) => {
   try {
     const { provinceId } = req.params;
-    const districts = await locationService.getDistrictsByProvince(provinceId);
-    return res.status(200).json({ success: true, data: districts });
+    // Try new flexible location system first
+    try {
+      const districts = await locationService.getDistrictsByProvince(provinceId, {
+        includeCities: req.query.includeCities !== 'false',
+        includeCombined: req.query.includeCombined !== 'false'
+      });
+      return res.status(200).json({ success: true, data: districts });
+    } catch (newError) {
+      // Fallback to legacy District model
+      const { District } = require('../../models');
+      const districts = await District.find({ province: provinceId }).sort({ name: 1 });
+      return res.status(200).json({ success: true, data: districts });
+    }
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
@@ -22,8 +43,16 @@ exports.getDistrictsByProvince = async (req, res) => {
 exports.getMunicipalitiesByDistrict = async (req, res) => {
   try {
     const { districtId } = req.params;
-    const municipalities = await locationService.getMunicipalitiesByDistrict(districtId);
-    return res.status(200).json({ success: true, data: municipalities });
+    // Try new flexible location system first
+    try {
+      const municipalities = await locationService.getMunicipalitiesByDistrict(districtId);
+      return res.status(200).json({ success: true, data: municipalities });
+    } catch (newError) {
+      // Fallback to legacy Municipality model
+      const { Municipality } = require('../../models');
+      const municipalities = await Municipality.find({ district: districtId }).sort({ name: 1 });
+      return res.status(200).json({ success: true, data: municipalities });
+    }
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
@@ -31,8 +60,16 @@ exports.getMunicipalitiesByDistrict = async (req, res) => {
 
 exports.getAllMunicipalities = async (req, res) => {
   try {
-    const municipalities = await locationService.getAllMunicipalities();
-    return res.status(200).json({ success: true, data: municipalities });
+    // Try new flexible location system first
+    try {
+      const municipalities = await locationService.getLocationsByType('municipality');
+      return res.status(200).json({ success: true, data: municipalities });
+    } catch (newError) {
+      // Fallback to legacy Municipality model
+      const { Municipality } = require('../../models');
+      const municipalities = await Municipality.find().sort({ name: 1 });
+      return res.status(200).json({ success: true, data: municipalities });
+    }
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }

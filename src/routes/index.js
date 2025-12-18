@@ -10,6 +10,8 @@ const utilityRoutes = require('./utility.routes');
 const inventoryRoutes = require('./inventory.routes');
 const chatRoutes = require('./chat.routes');
 const filesRoutes = require('./files.routes');
+const locationsRoutes = require('./locations.routes'); // New flexible location system routes
+const rbacRoutes = require('./rbac.routes'); // RBAC management routes
 
 // Mount routes
 // Auth routes are mounted under /api/auth (canonical) and also under /api
@@ -21,6 +23,8 @@ router.use('/api', eventsRoutes);
 router.use('/api', requestsRoutes);
 router.use('/api', utilityRoutes);
 router.use('/api', inventoryRoutes);
+router.use('/api', locationsRoutes); // New flexible location routes
+router.use('/api', rbacRoutes); // RBAC management routes
 router.use('/api/chat', chatRoutes);
 router.use('/api/files', filesRoutes);
 

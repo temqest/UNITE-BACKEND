@@ -1,0 +1,165 @@
+/**
+ * RBAC Routes
+ * 
+ * Routes for managing roles, permissions, and user role assignments.
+ */
+
+const express = require('express');
+const router = express.Router();
+const authenticate = require('../middleware/authenticate');
+const { requirePermission } = require('../middleware/requirePermission');
+const permissionService = require('../services/users_services/permission.service');
+const { Role, Permission, UserRole, User } = require('../models');
+const roleController = require('../controller/rbac_controller/role.controller');
+const permissionController = require('../controller/rbac_controller/permission.controller');
+const userRoleController = require('../controller/rbac_controller/userRole.controller');
+
+/**
+ * @route   GET /api/roles
+ * @desc    Get all roles
+ * @access  Private (requires role.read permission)
+ */
+router.get('/roles', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await roleController.getAllRoles(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/roles/:roleId
+ * @desc    Get role by ID
+ * @access  Private (requires role.read permission)
+ */
+router.get('/roles/:roleId', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await roleController.getRoleById(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/roles
+ * @desc    Create a new role
+ * @access  Private (requires role.create permission)
+ */
+const { validateCreateRole } = require('../validators/rbac_validators/role.validators');
+router.post('/roles', authenticate, requirePermission('role', 'create'), validateCreateRole, async (req, res, next) => {
+  try {
+    const roleController = require('../controller/rbac_controller/role.controller');
+    await roleController.createRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/roles/:roleId
+ * @desc    Update role
+ * @access  Private (requires role.update permission)
+ */
+const { validateUpdateRole } = require('../validators/rbac_validators/role.validators');
+router.put('/roles/:roleId', authenticate, requirePermission('role', 'update'), validateUpdateRole, async (req, res, next) => {
+  try {
+    await roleController.updateRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/roles/:roleId
+ * @desc    Delete role
+ * @access  Private (requires role.delete permission)
+ */
+router.delete('/roles/:roleId', authenticate, requirePermission('role', 'delete'), async (req, res, next) => {
+  try {
+    await roleController.deleteRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/permissions
+ * @desc    Get all permissions
+ * @access  Private (requires role.read permission)
+ */
+router.get('/permissions', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getAllPermissions(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/users/:userId/roles
+ * @desc    Get all roles assigned to a user
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/roles', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await userRoleController.getUserRoles(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/users/:userId/roles
+ * @desc    Assign role to user
+ * @access  Private (requires user.manage-roles permission)
+ */
+const { validateAssignRole } = require('../validators/rbac_validators/role.validators');
+router.post('/users/:userId/roles', authenticate, requirePermission('user', 'manage-roles'), validateAssignRole, async (req, res, next) => {
+  try {
+    await userRoleController.assignRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/users/:userId/roles/:roleId
+ * @desc    Revoke role from user
+ * @access  Private (requires user.manage-roles permission)
+ */
+router.delete('/users/:userId/roles/:roleId', authenticate, requirePermission('user', 'manage-roles'), async (req, res, next) => {
+  try {
+    await userRoleController.revokeRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/users/:userId/permissions
+ * @desc    Get all permissions for a user
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/permissions', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await userRoleController.getUserPermissions(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/permissions/check
+ * @desc    Check if user has a specific permission
+ * @access  Private
+ */
+const { validateCheckPermission } = require('../validators/rbac_validators/permission.validators');
+router.post('/permissions/check', authenticate, validateCheckPermission, async (req, res, next) => {
+  try {
+    await permissionController.checkPermission(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+module.exports = router;

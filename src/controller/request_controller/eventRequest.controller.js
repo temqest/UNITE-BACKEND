@@ -1267,6 +1267,77 @@ class EventRequestController {
       });
     }
   }
+
+  /**
+   * Execute unified request action (role-agnostic)
+   * POST /api/requests/:requestId/actions
+   */
+  async executeRequestAction(req, res) {
+    try {
+      const { requestId } = req.params;
+      const { action, data = {} } = req.validatedData || req.body;
+      const userId = req.user?.id || req.user?._id;
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication required'
+        });
+      }
+
+      if (!action) {
+        return res.status(400).json({
+          success: false,
+          message: 'Action is required'
+        });
+      }
+
+      const requestActionService = require('../../services/request_services/requestAction.service');
+      const result = await requestActionService.executeAction(requestId, userId, action, data);
+
+      return res.status(200).json({
+        success: true,
+        message: `Action ${action} executed successfully`,
+        data: result
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to execute action'
+      });
+    }
+  }
+
+  /**
+   * Get available actions for a user on a request
+   * GET /api/requests/:requestId/actions
+   */
+  async getAvailableActions(req, res) {
+    try {
+      const { requestId } = req.params;
+      const userId = req.user?.id || req.user?._id;
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication required'
+        });
+      }
+
+      const requestActionService = require('../../services/request_services/requestAction.service');
+      const availableActions = await requestActionService.getAvailableActions(userId, requestId);
+
+      return res.status(200).json({
+        success: true,
+        data: { actions: availableActions }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get available actions'
+      });
+    }
+  }
 }
 
 module.exports = new EventRequestController();

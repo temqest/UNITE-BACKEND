@@ -1,0 +1,195 @@
+/**
+ * Seed Roles and Permissions
+ * 
+ * Creates default roles and permissions for the RBAC system.
+ * Usage: from project root run:
+ *   node src/utils/seedRoles.js [--dry-run]
+ * 
+ * The `--dry-run` flag will report changes without writing.
+ */
+
+const mongoose = require('mongoose');
+const { Role, Permission } = require('../models');
+require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' : '.env' });
+
+// Accept multiple env var names for compatibility with existing .env
+const rawMongoUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
+const mongoDbName = process.env.MONGO_DB_NAME || null;
+
+let uri = rawMongoUri;
+if (mongoDbName) {
+  const idx = rawMongoUri.indexOf('?');
+  const beforeQuery = idx === -1 ? rawMongoUri : rawMongoUri.slice(0, idx);
+  const hasDb = /\/[A-Za-z0-9_\-]+$/.test(beforeQuery);
+  if (!hasDb) {
+    if (idx === -1) {
+      uri = `${rawMongoUri.replace(/\/$/, '')}/${mongoDbName}`;
+    } else {
+      uri = `${rawMongoUri.slice(0, idx).replace(/\/$/, '')}/${mongoDbName}${rawMongoUri.slice(idx)}`;
+    }
+  }
+}
+
+const dryRun = process.argv.includes('--dry-run');
+
+// Default permissions to create
+const defaultPermissions = [
+  // Event permissions
+  { code: 'event.create', name: 'Create Event', resource: 'event', action: 'create', description: 'Create new events' },
+  { code: 'event.read', name: 'Read Event', resource: 'event', action: 'read', description: 'View events' },
+  { code: 'event.update', name: 'Update Event', resource: 'event', action: 'update', description: 'Update existing events' },
+  { code: 'event.delete', name: 'Delete Event', resource: 'event', action: 'delete', description: 'Delete events' },
+  { code: 'event.approve', name: 'Approve Event', resource: 'event', action: 'approve', description: 'Approve events' },
+  
+  // Request permissions
+  { code: 'request.create', name: 'Create Request', resource: 'request', action: 'create', description: 'Create new requests' },
+  { code: 'request.read', name: 'Read Request', resource: 'request', action: 'read', description: 'View requests' },
+  { code: 'request.update', name: 'Update Request', resource: 'request', action: 'update', description: 'Update existing requests' },
+  { code: 'request.delete', name: 'Delete Request', resource: 'request', action: 'delete', description: 'Delete requests' },
+  { code: 'request.review', name: 'Review Request', resource: 'request', action: 'review', description: 'Review requests' },
+  { code: 'request.approve', name: 'Approve Request', resource: 'request', action: 'approve', description: 'Approve requests' },
+  { code: 'request.reject', name: 'Reject Request', resource: 'request', action: 'reject', description: 'Reject requests' },
+  { code: 'request.reschedule', name: 'Reschedule Request', resource: 'request', action: 'reschedule', description: 'Reschedule requests' },
+  { code: 'request.cancel', name: 'Cancel Request', resource: 'request', action: 'cancel', description: 'Cancel requests' },
+  { code: 'request.confirm', name: 'Confirm Request', resource: 'request', action: 'confirm', description: 'Confirm request actions' },
+  { code: 'request.decline', name: 'Decline Request', resource: 'request', action: 'decline', description: 'Decline request actions' },
+  
+  // User permissions
+  { code: 'user.create', name: 'Create User', resource: 'user', action: 'create', description: 'Create new users' },
+  { code: 'user.read', name: 'Read User', resource: 'user', action: 'read', description: 'View users' },
+  { code: 'user.update', name: 'Update User', resource: 'user', action: 'update', description: 'Update existing users' },
+  { code: 'user.delete', name: 'Delete User', resource: 'user', action: 'delete', description: 'Delete users' },
+  { code: 'user.manage-roles', name: 'Manage User Roles', resource: 'user', action: 'manage-roles', description: 'Assign and revoke user roles' },
+  
+  // Location permissions
+  { code: 'location.create', name: 'Create Location', resource: 'location', action: 'create', description: 'Create new locations' },
+  { code: 'location.read', name: 'Read Location', resource: 'location', action: 'read', description: 'View locations' },
+  { code: 'location.update', name: 'Update Location', resource: 'location', action: 'update', description: 'Update existing locations' },
+  { code: 'location.delete', name: 'Delete Location', resource: 'location', action: 'delete', description: 'Delete locations' },
+  
+  // Role permissions
+  { code: 'role.create', name: 'Create Role', resource: 'role', action: 'create', description: 'Create new roles' },
+  { code: 'role.read', name: 'Read Role', resource: 'role', action: 'read', description: 'View roles' },
+  { code: 'role.update', name: 'Update Role', resource: 'role', action: 'update', description: 'Update existing roles' },
+  { code: 'role.delete', name: 'Delete Role', resource: 'role', action: 'delete', description: 'Delete roles' },
+  
+  // Chat permissions
+  { code: 'chat.create', name: 'Create Chat Message', resource: 'chat', action: 'create', description: 'Send chat messages' },
+  { code: 'chat.read', name: 'Read Chat', resource: 'chat', action: 'read', description: 'View chat messages and conversations' },
+  { code: 'chat.update', name: 'Update Chat Message', resource: 'chat', action: 'update', description: 'Update chat messages (e.g., mark as read)' },
+  { code: 'chat.delete', name: 'Delete Chat Message', resource: 'chat', action: 'delete', description: 'Delete chat messages' },
+  
+  // System permissions
+  { code: 'system.settings', name: 'Manage System Settings', resource: 'system', action: 'settings', description: 'Manage system settings' },
+  { code: 'system.audit', name: 'View Audit Logs', resource: 'system', action: 'audit', description: 'View system audit logs' },
+];
+
+// Default roles to create
+const defaultRoles = [
+  {
+    code: 'system-admin',
+    name: 'System Administrator',
+    description: 'Full system access with all permissions',
+    isSystemRole: true,
+    permissions: [
+      { resource: '*', actions: ['*'] } // Full access
+    ]
+  },
+  {
+    code: 'coordinator',
+    name: 'Coordinator',
+    description: 'Event and request coordinator with review and approval capabilities',
+    isSystemRole: true,
+    permissions: [
+      { resource: 'event', actions: ['create', 'read', 'update'] },
+      { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule'] },
+      { resource: 'user', actions: ['read'] },
+      { resource: 'location', actions: ['read'] },
+      { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] }
+    ]
+  },
+  {
+    code: 'stakeholder',
+    name: 'Stakeholder',
+    description: 'Stakeholder with event creation and request confirmation capabilities',
+    isSystemRole: true,
+    permissions: [
+      { resource: 'event', actions: ['create', 'read'] },
+      { resource: 'request', actions: ['create', 'read', 'confirm', 'decline'] },
+      { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] }
+    ]
+  }
+];
+
+async function seedPermissions() {
+  console.log('Seeding permissions...');
+  
+  for (const permData of defaultPermissions) {
+    const existing = await Permission.findOne({ code: permData.code });
+    
+    if (existing) {
+      console.log(`  Permission exists: ${permData.code}`);
+    } else {
+      console.log(`  Will create permission: ${permData.code} (${permData.resource}.${permData.action})`);
+      if (!dryRun) {
+        await Permission.create(permData);
+      }
+    }
+  }
+  
+  console.log(`Permissions seeding ${dryRun ? 'dry-run' : ''} completed`);
+}
+
+async function seedRoles() {
+  console.log('Seeding roles...');
+  
+  for (const roleData of defaultRoles) {
+    const existing = await Role.findOne({ code: roleData.code });
+    
+    if (existing) {
+      console.log(`  Role exists: ${roleData.code} (${roleData.name})`);
+      // Optionally update permissions if they've changed
+      if (!dryRun && JSON.stringify(existing.permissions) !== JSON.stringify(roleData.permissions)) {
+        console.log(`    Updating permissions for role: ${roleData.code}`);
+        existing.permissions = roleData.permissions;
+        await existing.save();
+      }
+    } else {
+      console.log(`  Will create role: ${roleData.code} (${roleData.name})`);
+      if (!dryRun) {
+        await Role.create(roleData);
+      }
+    }
+  }
+  
+  console.log(`Roles seeding ${dryRun ? 'dry-run' : ''} completed`);
+}
+
+async function seed() {
+  if (dryRun) {
+    console.log('Running in dry-run mode — no writes will be performed.');
+  }
+  
+  await mongoose.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+  
+  try {
+    await seedPermissions();
+    await seedRoles();
+    
+    console.log(dryRun ? 'Dry-run completed. No changes written.' : 'Seeding completed successfully.');
+  } catch (err) {
+    console.error('Seeding error:', err);
+    throw err;
+  } finally {
+    await mongoose.disconnect();
+  }
+}
+
+if (require.main === module) {
+  seed().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { seed, defaultPermissions, defaultRoles };
