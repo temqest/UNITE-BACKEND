@@ -5,7 +5,7 @@
  * Uses PermissionService to find users with required permissions instead of hard-coded roles.
  */
 
-const { User, SystemAdmin, Coordinator, Stakeholder } = require('../../models/index');
+const { User } = require('../../models/index');
 const permissionService = require('../users_services/permission.service');
 const locationService = require('../utility_services/location.service');
 const assignmentRules = require('../../config/reviewerAssignmentRules');
@@ -219,14 +219,7 @@ class ReviewerAssignmentService {
     }).limit(1);
 
     if (userRoles.length === 0) {
-      // Fallback to legacy SystemAdmin model
-      const admin = await SystemAdmin.findOne().lean().exec();
-      if (admin) {
-        const user = await User.findByLegacyId(admin.Admin_ID);
-        if (user) {
-          return await this._formatReviewer(user);
-        }
-      }
+      // No users with this role found
       return null;
     }
 

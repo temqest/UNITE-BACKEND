@@ -238,8 +238,9 @@ app.use('/', routes);
 // ==================== SOCKET.IO SETUP ====================
 
 const { messageService, presenceService, typingService, permissionsService } = require('./src/services/chat_services');
-const { Notification: NotificationModel, BloodbankStaff } = require('./src/models');
+const { Notification: NotificationModel, User } = require('./src/models');
 const notificationService = require('./src/services/utility_services/notification.service');
+const permissionService = require('./src/services/users_services/permission.service');
 const s3 = require('./src/utils/s3');
 
 // Store connected users: userId -> socketId
@@ -326,9 +327,11 @@ io.on('connection', (socket) => {
       // Create notification for receiver
       try {
         // Get receiver details to determine recipient type
-        const receiver = await BloodbankStaff.findOne({ ID: receiverId });
+        const receiver = await User.findById(receiverId) || await User.findOne({ userId: receiverId });
         if (receiver) {
-          const recipientType = receiver.StaffType; // Admin or Coordinator
+          // Get user's primary role for recipient type
+          const roles = await permissionService.getUserRoles(receiver._id);
+          const recipientType = roles.length > 0 ? roles[0].code : 'user';
           await notificationService.createNewMessageNotification(
             receiverId,
             recipientType,

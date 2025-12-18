@@ -8,6 +8,7 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/authenticate');
 const { requirePermission } = require('../middleware/requirePermission');
+const { validateCreatePermission, validateUpdatePermission } = require('../validators/rbac_validators/permission.validators');
 const permissionService = require('../services/users_services/permission.service');
 const { Role, Permission, UserRole, User } = require('../models');
 const roleController = require('../controller/rbac_controller/role.controller');
@@ -157,6 +158,97 @@ const { validateCheckPermission } = require('../validators/rbac_validators/permi
 router.post('/permissions/check', authenticate, validateCheckPermission, async (req, res, next) => {
   try {
     await permissionController.checkPermission(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/permissions/:id
+ * @desc    Get permission by ID
+ * @access  Private (requires role.read permission)
+ */
+router.get('/permissions/:id', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getPermissionById(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/permissions
+ * @desc    Create a new permission
+ * @access  Private (requires role.create permission)
+ */
+router.post('/permissions', authenticate, requirePermission('role', 'create'), validateCreatePermission, async (req, res, next) => {
+  try {
+    await permissionController.createPermission(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/permissions/:id
+ * @desc    Update permission
+ * @access  Private (requires role.update permission)
+ */
+router.put('/permissions/:id', authenticate, requirePermission('role', 'update'), validateUpdatePermission, async (req, res, next) => {
+  try {
+    await permissionController.updatePermission(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/permissions/:id
+ * @desc    Delete permission
+ * @access  Private (requires role.delete permission)
+ */
+router.delete('/permissions/:id', authenticate, requirePermission('role', 'delete'), async (req, res, next) => {
+  try {
+    await permissionController.deletePermission(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/permissions/user/:userId/pages
+ * @desc    Get user's accessible pages
+ * @access  Private (requires user.read permission)
+ */
+router.get('/permissions/user/:userId/pages', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getUserPages(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/permissions/user/:userId/features
+ * @desc    Get user's available features
+ * @access  Private (requires user.read permission)
+ */
+router.get('/permissions/user/:userId/features', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getUserFeatures(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/permissions/user/:userId/staff-types/:action
+ * @desc    Get user's allowed staff types for an action
+ * @access  Private (requires user.read permission)
+ */
+router.get('/permissions/user/:userId/staff-types/:action', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getAllowedStaffTypes(req, res);
   } catch (error) {
     next(error);
   }

@@ -27,6 +27,18 @@ const permissionSchema = new mongoose.Schema({
     type: String,
     required: false,
     trim: true
+  },
+  // Permission type: 'resource' (default), 'page', 'feature', 'staff'
+  type: {
+    type: String,
+    enum: ['resource', 'page', 'feature', 'staff'],
+    default: 'resource',
+    trim: true
+  },
+  // Metadata for additional constraints
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   }
 }, {
   timestamps: true
@@ -35,6 +47,8 @@ const permissionSchema = new mongoose.Schema({
 // Index for faster lookups
 permissionSchema.index({ code: 1 }, { unique: true });
 permissionSchema.index({ resource: 1, action: 1 });
+permissionSchema.index({ type: 1 });
+permissionSchema.index({ type: 1, resource: 1 });
 
 const Permission = mongoose.model('Permission', permissionSchema);
 

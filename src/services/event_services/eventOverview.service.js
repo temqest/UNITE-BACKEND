@@ -5,8 +5,7 @@ const {
   Advocacy,
   Training,
   EventStaff,
-  Coordinator,
-  BloodbankStaff
+  User
 } = require('../../models/index');
 
 class EventOverviewService {
@@ -491,25 +490,29 @@ class EventOverviewService {
    */
   async getCoordinatorInfo(coordinatorId) {
     try {
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
-      if (!coordinator) {
+      // Try to find user by ObjectId or legacy userId
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(coordinatorId)) {
+        user = await User.findById(coordinatorId);
+      }
+      if (!user) {
+        user = await User.findOne({ userId: coordinatorId });
+      }
+      if (!user) {
         return null;
       }
 
-      const staff = await BloodbankStaff.findOne({ ID: coordinatorId });
-      if (!staff) {
-        return {
-          id: coordinatorId,
-          district_id: coordinator.District_ID
-        };
-      }
+      // Get user's locations
+      const { UserLocation } = require('../../models');
+      const userLocations = await UserLocation.find({ userId: user._id });
+      const locationIds = userLocations.map(ul => ul.locationId.toString());
 
       return {
-        id: coordinatorId,
-        district_id: coordinator.District_ID,
-        name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
-        email: staff.Email,
-        phone: staff.Phone_Number
+        id: user._id.toString(),
+        userId: user.userId,
+        name: `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        locationIds: locationIds
       };
 
     } catch (error) {

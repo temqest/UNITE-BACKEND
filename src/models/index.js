@@ -3,11 +3,7 @@ const mongoose = require('mongoose');
 // ============================================
 // USER MODELS
 // ============================================
-const User = require('./users_models/user.model'); // Unified User model (replaces BloodbankStaff, SystemAdmin, Coordinator, Stakeholder)
-const BloodbankStaff = require('./users_models/bloodbank.staff'); // Legacy - to be deprecated
-const SystemAdmin = require('./users_models/systemAdmin.model'); // Legacy - to be deprecated
-const Coordinator = require('./users_models/coordinator.model'); // Legacy - to be deprecated
-const Stakeholder = require('./users_models/stakeholder.model'); // Legacy - to be deprecated
+const User = require('./users_models/user.model'); // Unified User model
 
 // ============================================
 // RBAC MODELS
@@ -36,9 +32,6 @@ const BloodBagRequest = require('./request_models/bloodBagRequest.model');
 // ============================================
 // UTILITY MODELS
 // ============================================
-const Province = require('./utility_models/province.model');
-const District = require('./utility_models/distric.model');
-const Municipality = require('./utility_models/municipality.model');
 const Location = require('./utility_models/location.model'); // Flexible location model
 const Notification = require('./utility_models/notifications.model');
 const RegistrationCode = require('./utility_models/registrationCode.model');
@@ -61,13 +54,10 @@ const Presence = require('./chat_models/presence.model');
  * Relationships Documentation:
  * 
  * USER HIERARCHY:
- * - User (Unified Model) - Replaces BloodbankStaff, SystemAdmin, Coordinator, Stakeholder
- *   - User.userId → Legacy ID mapping (BloodbankStaff.ID, SystemAdmin.Admin_ID, etc.)
+ * - User (Unified Model)
+ *   - User.userId → Legacy ID mapping (for backward compatibility during migration)
  *   - User._id → Referenced by UserRole.userId (RBAC)
  *   - User.organizationId → Organization._id (future reference)
- * - SystemAdmin.Admin_ID → BloodbankStaff.ID (FK) [Legacy - to be deprecated]
- * - Coordinator.Coordinator_ID → BloodbankStaff.ID (FK) [Legacy - to be deprecated]
- * - Coordinator.District_ID → District.District_ID (FK) [Legacy - to be deprecated]
  * 
  * RBAC RELATIONSHIPS:
  * - UserRole.userId → User._id (FK)
@@ -84,8 +74,8 @@ const Presence = require('./chat_models/presence.model');
  * - Training.Training_ID → Event.Event_ID (FK)
  * 
  * REQUEST FLOW:
- * - EventRequest.Coordinator_ID → Coordinator.Coordinator_ID (FK)
- * - EventRequest.Admin_ID → SystemAdmin.Admin_ID (FK)
+ * - EventRequest.requester → User._id (FK, with roleSnapshot)
+ * - EventRequest.reviewer → User._id (FK, with roleSnapshot)
  * - EventRequest.Event_ID → Event.Event_ID (FK)
  * - EventRequestHistory.Request_ID → EventRequest.Request_ID (FK)
  * - EventRequestHistory.Event_ID → Event.Event_ID (FK)
@@ -93,7 +83,7 @@ const Presence = require('./chat_models/presence.model');
  * NOTIFICATIONS:
  * - Notification.Request_ID → EventRequest.Request_ID (FK)
  * - Notification.Event_ID → Event.Event_ID (FK)
- * - Notification.Recipient_ID → SystemAdmin.Admin_ID OR Coordinator.Coordinator_ID
+ * - Notification.Recipient_ID → User._id (FK)
  * 
  * LOCATION HIERARCHY:
  * - Location.parent → Location._id (FK, self-referencing)
@@ -106,48 +96,6 @@ const Presence = require('./chat_models/presence.model');
 // ============================================
 // VALIDATION HELPERS
 // ============================================
-
-/**
- * Validates that a Coordinator_ID exists
- * @param {string} coordinatorId - The Coordinator ID to validate
- * @returns {Promise<boolean>}
- */
-const validateCoordinator = async (coordinatorId) => {
-  try {
-    const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
-    return !!coordinator;
-  } catch (error) {
-    return false;
-  }
-};
-
-/**
- * Validates that an Admin_ID exists
- * @param {string} adminId - The Admin ID to validate
- * @returns {Promise<boolean>}
- */
-const validateAdmin = async (adminId) => {
-  try {
-    const admin = await SystemAdmin.findOne({ Admin_ID: adminId });
-    return !!admin;
-  } catch (error) {
-    return false;
-  }
-};
-
-/**
- * Validates that a District_ID exists
- * @param {string} districtId - The District ID to validate
- * @returns {Promise<boolean>}
- */
-const validateDistrict = async (districtId) => {
-  try {
-    const district = await District.findById(districtId);
-    return !!district;
-  } catch (error) {
-    return false;
-  }
-};
 
 /**
  * Validates that an Event_ID exists
@@ -172,20 +120,6 @@ const validateRequest = async (requestId) => {
   try {
     const request = await EventRequest.findOne({ Request_ID: requestId });
     return !!request;
-  } catch (error) {
-    return false;
-  }
-};
-
-/**
- * Validates that a BloodbankStaff ID exists
- * @param {string} staffId - The Staff ID to validate
- * @returns {Promise<boolean>}
- */
-const validateBloodbankStaff = async (staffId) => {
-  try {
-    const staff = await BloodbankStaff.findOne({ ID: staffId });
-    return !!staff;
   } catch (error) {
     return false;
   }
@@ -217,11 +151,7 @@ const validateUser = async (userId) => {
 
 module.exports = {
   // User Models
-  User, // Unified User model (primary)
-  BloodbankStaff, // Legacy - to be deprecated
-  SystemAdmin, // Legacy - to be deprecated
-  Coordinator, // Legacy - to be deprecated
-  Stakeholder, // Legacy - to be deprecated
+  User, // Unified User model
   
   // RBAC Models
   Role,
@@ -242,9 +172,6 @@ module.exports = {
   BloodBagRequest,
   
   // Utility Models
-  Province,
-  District,
-  Municipality,
   Location, // Flexible location model
   Notification,
   RegistrationCode,
@@ -258,14 +185,9 @@ module.exports = {
   Presence,
   
   // Validation Helpers
-  validateCoordinator,
-  validateAdmin,
-  validateDistrict,
   validateEvent,
   validateRequest,
-  validateBloodbankStaff,
   validateUser,
-  
   
   // Mongoose instance (in case needed elsewhere)
   mongoose

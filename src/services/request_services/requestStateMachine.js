@@ -31,9 +31,9 @@ const ACTIONS = Object.freeze({
 });
 
 const ROLES = Object.freeze({
-  SYSTEM_ADMIN: 'SystemAdmin',
-  COORDINATOR: 'Coordinator',
-  STAKEHOLDER: 'Stakeholder'
+  SYSTEM_ADMIN: 'system-admin',
+  COORDINATOR: 'coordinator',
+  STAKEHOLDER: 'stakeholder'
 });
 
 // Local copy of review decision constants (matches requestFlow.helpers)
@@ -201,10 +201,11 @@ class RequestStateMachine {
     const isAdmin = normalizedRole === ROLES.SYSTEM_ADMIN;
     
     // Debug logging for Coordinator-Stakeholder cases
-    const creatorRole = request.made_by_role || request.creator?.role;
+    const creatorRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
     const normalizedCreatorRole = creatorRole ? this.normalizeRole(creatorRole) : null;
     const isCoordinatorRequest = normalizedCreatorRole === ROLES.COORDINATOR;
-    const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
+    // Check if requester is stakeholder or if stakeholder is explicitly referenced
+    const hasStakeholder = !!(request.requester?.roleSnapshot === 'stakeholder' || request.stakeholder_id || request.stakeholderId);
     const isCoordinatorStakeholderCase = isCoordinatorRequest && hasStakeholder;
     
     if (isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER && process.env.NODE_ENV !== 'production') {
@@ -250,7 +251,7 @@ class RequestStateMachine {
         }
       }
       
-      const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
+      const hasStakeholder = !!(request.requester?.roleSnapshot === 'stakeholder' || request.stakeholder_id || request.stakeholderId);
       const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
       const isCoordinatorStakeholderCase = normalizedCreatorRole === ROLES.COORDINATOR && hasStakeholder;
 
@@ -331,26 +332,34 @@ class RequestStateMachine {
     // Note: creatorRole and normalizedCreatorRole are already declared above for debug logging
     const isSystemAdminRequest = normalizedCreatorRole === ROLES.SYSTEM_ADMIN;
     
+    // Check if user is the assigned reviewer
+    if (!isReviewer && request.reviewer) {
+      const reviewerId = request.reviewer.id || request.reviewer.userId;
+      if (reviewerId && String(reviewerId) === String(userId)) {
+        isReviewer = true;
+      }
+    }
+    
+    // Legacy fallback: Check coordinator_id for backward compatibility
     if (!isReviewer && isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR) {
-      if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
+      const requesterId = request.requester?.id || request.requester?.userId;
+      if (requesterId && String(requesterId) === String(userId)) {
         isReviewer = true;
       }
     }
     
     // NEW: Check if this is a Coordinator-Stakeholder case and user is the Stakeholder reviewer
-    // Note: isCoordinatorRequest, hasStakeholder, and isCoordinatorStakeholderCase are already declared above
-    if (!isReviewer) {
-      if (isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) {
-        const stakeholderId = request.stakeholder_id || request.stakeholderId;
-        if (stakeholderId && String(stakeholderId) === String(userId)) {
-          isReviewer = true;
-        }
+    if (!isReviewer && isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) {
+      const stakeholderId = request.requester?.id || request.stakeholder_id || request.stakeholderId;
+      if (stakeholderId && String(stakeholderId) === String(userId)) {
+        isReviewer = true;
       }
     }
     
     // Fallback for Stakeholder requests: coordinators are reviewers
     if (!isReviewer && normalizedCreatorRole === ROLES.STAKEHOLDER && normalizedRole === ROLES.COORDINATOR) {
-      if (request.coordinator_id && String(request.coordinator_id) === String(userId)) {
+      const reviewerId = request.reviewer?.id || request.reviewer?.userId;
+      if (reviewerId && String(reviewerId) === String(userId)) {
         isReviewer = true;
       }
     }
@@ -654,16 +663,16 @@ class RequestStateMachine {
       if (request.requester.id.toString() === userIdStr) return true;
     }
     
-    // Legacy checks
+    // Legacy checks for backward compatibility
     const madeById = request.made_by_id || request.creator?.id;
     if (madeById && String(madeById) === userIdStr) return true;
-    // If stakeholder_id explicitly matches the user, treat as requester
-    if (request.stakeholder_id && String(request.stakeholder_id) === userIdStr) return true;
-
-    const requesterRole = request.made_by_role || request.creator?.role;
+    
+    // Check if requester role is stakeholder and ID matches
+    const requesterRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
     const normalizedRequesterRole = this.normalizeRole(requesterRole);
     if (normalizedRequesterRole === ROLES.STAKEHOLDER) {
-      if (request.stakeholder_id && String(request.stakeholder_id) === userIdStr) {
+      const stakeholderId = request.requester?.id || request.requester?.userId || request.stakeholder_id || request.stakeholderId;
+      if (stakeholderId && String(stakeholderId) === userIdStr) {
         return true;
       }
     }
@@ -685,17 +694,17 @@ class RequestStateMachine {
 
     // NEW: Coordinator-Stakeholder involvement case
     // When Coordinator creates request WITH Stakeholder, Stakeholder is the primary reviewer
-    const creatorRole = request.made_by_role || request.creator?.role;
+    const creatorRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
     const normalizedCreatorRole = this.normalizeRole(creatorRole);
     const isCoordinatorRequest = normalizedCreatorRole === ROLES.COORDINATOR;
-    const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
+    const hasStakeholder = !!(request.requester?.roleSnapshot === 'stakeholder' || request.stakeholder_id || request.stakeholderId);
     
     // Normalize userRole if provided, otherwise check by ID only
     const normalizedRole = userRole ? this.normalizeRole(userRole) : null;
     
     if (isCoordinatorRequest && hasStakeholder && (!normalizedRole || normalizedRole === ROLES.STAKEHOLDER)) {
       // Stakeholder is the primary reviewer in Coordinator-Stakeholder cases
-      const stakeholderId = request.stakeholder_id || request.stakeholderId;
+      const stakeholderId = request.reviewer?.id || request.reviewer?.userId || request.stakeholder_id || request.stakeholderId;
       if (stakeholderId && String(stakeholderId) === userIdStr) {
         return true;
       }
@@ -705,7 +714,8 @@ class RequestStateMachine {
     const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
 
     if (isStakeholderRequest && (!normalizedRole || normalizedRole === ROLES.COORDINATOR)) {
-        if (request.coordinator_id && String(request.coordinator_id) === userIdStr) {
+        const reviewerId = request.reviewer?.id || request.reviewer?.userId;
+        if (reviewerId && String(reviewerId) === userIdStr) {
             return true;
         }
     }
@@ -731,7 +741,7 @@ class RequestStateMachine {
   normalizeRole(role) {
     if (!role) return null;
     const r = String(role).toLowerCase();
-    if (r === 'admin' || r === 'systemadmin' || r === 'sysadmin') return ROLES.SYSTEM_ADMIN;
+    if (r === 'admin' || r === 'systemadmin' || r === 'sysadmin' || r === 'system-admin') return ROLES.SYSTEM_ADMIN;
     if (r === 'coordinator') return ROLES.COORDINATOR;
     if (r === 'stakeholder') return ROLES.STAKEHOLDER;
     return role;

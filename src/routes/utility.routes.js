@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/authenticate');
-const { requireAdminOrCoordinator } = require('../middleware/requireRoles'); // Legacy - kept for backward compatibility
 const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
 
 const {

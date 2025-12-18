@@ -1,91 +1,91 @@
-const { BloodbankStaff, Coordinator, Stakeholder } = require('../../models');
+const { User, UserRole, UserLocation } = require('../../models');
+const permissionService = require('../../services/users_services/permission.service');
 
 class ChatPermissionsService {
   /**
-   * Get allowed recipients for a user based on their role
-   * @param {string} userId - The user's ID
+   * Get allowed recipients for a user based on their roles and permissions
+   * @param {string} userId - The user's ID (ObjectId or legacy userId)
    * @returns {Array} - Array of allowed recipient IDs
    */
   async getAllowedRecipients(userId) {
     try {
       const allowedRecipients = [];
 
-      // First check if user is a Stakeholder (since they won't be in BloodbankStaff)
-      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: userId });
-      if (stakeholder) {
-        // Stakeholder: can chat only with their assigned Coordinator
-        let coordinatorId = null;
-
-        // Try multiple ways to find the coordinator:
-        // 1. Check coordinator ObjectId reference
-        if (stakeholder.coordinator) {
-          const coordinatorRecord = await Coordinator.findById(stakeholder.coordinator);
-          if (coordinatorRecord && coordinatorRecord.Coordinator_ID) {
-            coordinatorId = coordinatorRecord.Coordinator_ID;
-          }
-        }
-
-        // 2. Check Coordinator_ID or coordinator_id string fields (legacy support)
-        if (!coordinatorId) {
-          coordinatorId = stakeholder.Coordinator_ID || stakeholder.coordinator_id || null;
-        }
-
-        // 3. Fallback: Find coordinator by district
-        if (!coordinatorId && stakeholder.district) {
-          const coordinatorByDistrict = await Coordinator.findOne({ district: stakeholder.district });
-          if (coordinatorByDistrict && coordinatorByDistrict.Coordinator_ID) {
-            coordinatorId = coordinatorByDistrict.Coordinator_ID;
-          }
-        }
-
-        if (coordinatorId) {
-          allowedRecipients.push(coordinatorId);
-        }
-
-        // Remove self from allowed recipients
-        return allowedRecipients.filter(id => id !== userId);
+      // Get user by ID (try ObjectId first, then legacy userId)
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId);
       }
-
-      // If not a stakeholder, check if user is BloodbankStaff (Admin/Coordinator)
-      const user = await BloodbankStaff.findOne({ ID: userId });
       if (!user) {
-        // User not found in either Stakeholder or BloodbankStaff
+        user = await User.findOne({ userId: userId });
+      }
+      if (!user) {
         return [];
       }
 
-      if (user.StaffType === 'Admin') {
-        // System Admin: can chat only with Coordinators
-        const coordinators = await BloodbankStaff.find({ StaffType: 'Coordinator' });
-        allowedRecipients.push(...coordinators.map(c => c.ID));
+      // Get user's roles
+      const userRoles = await permissionService.getUserRoles(user._id);
+      if (userRoles.length === 0) {
+        return [];
+      }
 
-      } else if (user.StaffType === 'Coordinator') {
-        // Coordinator: can chat with their assigned Stakeholders and System Admin
-        // First, get the coordinator record
-        const coordinatorRecord = await Coordinator.findOne({ Coordinator_ID: userId });
-        if (coordinatorRecord) {
-          // Get assigned stakeholders (using the Coordinator's _id)
-          const stakeholdersByRef = await Stakeholder.find({ coordinator: coordinatorRecord._id });
-          const stakeholderIdsByRef = stakeholdersByRef.map(s => s.Stakeholder_ID);
-          allowedRecipients.push(...stakeholderIdsByRef);
-          
-          // Also find stakeholders by district (fallback for stakeholders not directly assigned)
-          if (coordinatorRecord.district) {
-            const stakeholdersByDistrict = await Stakeholder.find({ district: coordinatorRecord.district });
-            const stakeholderIdsByDistrict = stakeholdersByDistrict
-              .map(s => s.Stakeholder_ID)
-              .filter(id => !stakeholderIdsByRef.includes(id)); // Avoid duplicates
-            allowedRecipients.push(...stakeholderIdsByDistrict);
-          }
+      const roleCodes = userRoles.map(ur => ur.code);
+
+      // System Admin: can chat with Coordinators
+      if (roleCodes.includes('system-admin')) {
+        const coordinatorRole = await permissionService.getRoleByCode('coordinator');
+        if (coordinatorRole) {
+          const coordinatorUserRoles = await UserRole.find({ roleId: coordinatorRole._id }).populate('userId');
+          const coordinatorIds = coordinatorUserRoles
+            .map(ur => ur.userId)
+            .filter(u => u && u._id)
+            .map(u => u._id.toString());
+          allowedRecipients.push(...coordinatorIds);
+        }
+      }
+
+      // Coordinator: can chat with assigned Stakeholders and System Admins
+      if (roleCodes.includes('coordinator')) {
+        // Get stakeholders (users with stakeholder role)
+        const stakeholderRole = await permissionService.getRoleByCode('stakeholder');
+        if (stakeholderRole) {
+          const stakeholderUserRoles = await UserRole.find({ roleId: stakeholderRole._id }).populate('userId');
+          const stakeholderIds = stakeholderUserRoles
+            .map(ur => ur.userId)
+            .filter(u => u && u._id)
+            .map(u => u._id.toString());
+          allowedRecipients.push(...stakeholderIds);
         }
 
-        // Add System Admin
-        const systemAdmins = await BloodbankStaff.find({ StaffType: 'Admin' });
-        const adminIds = systemAdmins.map(a => a.ID);
-        allowedRecipients.push(...adminIds);
+        // Add System Admins
+        const adminRole = await permissionService.getRoleByCode('system-admin');
+        if (adminRole) {
+          const adminUserRoles = await UserRole.find({ roleId: adminRole._id }).populate('userId');
+          const adminIds = adminUserRoles
+            .map(ur => ur.userId)
+            .filter(u => u && u._id)
+            .map(u => u._id.toString());
+          allowedRecipients.push(...adminIds);
+        }
+      }
+
+      // Stakeholder: can chat with their assigned Coordinator
+      if (roleCodes.includes('stakeholder')) {
+        // Find coordinators (users with coordinator role)
+        const coordinatorRole = await permissionService.getRoleByCode('coordinator');
+        if (coordinatorRole) {
+          const coordinatorUserRoles = await UserRole.find({ roleId: coordinatorRole._id }).populate('userId');
+          const coordinatorIds = coordinatorUserRoles
+            .map(ur => ur.userId)
+            .filter(u => u && u._id)
+            .map(u => u._id.toString());
+          allowedRecipients.push(...coordinatorIds);
+        }
       }
 
       // Remove self from allowed recipients
-      return allowedRecipients.filter(id => id !== userId);
+      const userIdStr = user._id.toString();
+      return allowedRecipients.filter(id => id !== userIdStr);
     } catch (error) {
       throw new Error(`Failed to get allowed recipients: ${error.message}`);
     }
@@ -130,32 +130,34 @@ class ChatPermissionsService {
 
   /**
    * Get user role and details for chat permissions
-   * @param {string} userId - User ID
+   * @param {string} userId - User ID (ObjectId or legacy userId)
    * @returns {Object} - User role information
    */
   async getUserChatRole(userId) {
     try {
-      // First check if Stakeholder (since they won't be in BloodbankStaff)
-      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: userId });
-      if (stakeholder) {
-        return {
-          role: 'Stakeholder',
-          userType: 'stakeholder',
-          user: stakeholder
-        };
+      // Get user by ID
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId);
+      }
+      if (!user) {
+        user = await User.findOne({ userId: userId });
+      }
+      if (!user) {
+        return null;
       }
 
-      // Check if BloodbankStaff (Admin/Coordinator)
-      const staff = await BloodbankStaff.findOne({ ID: userId });
-      if (staff) {
-        return {
-          role: staff.StaffType,
-          userType: 'staff',
-          user: staff
-        };
-      }
+      // Get user's roles
+      const userRoles = await permissionService.getUserRoles(user._id);
+      const roleCodes = userRoles.map(ur => ur.code);
+      const primaryRole = roleCodes[0] || 'user';
 
-      return null;
+      return {
+        role: primaryRole,
+        roles: roleCodes,
+        userType: primaryRole,
+        user: user
+      };
     } catch (error) {
       throw new Error(`Failed to get user chat role: ${error.message}`);
     }
@@ -163,7 +165,7 @@ class ChatPermissionsService {
 
   /**
    * Get detailed information about allowed recipients
-   * @param {string} userId - User's ID
+   * @param {string} userId - User's ID (ObjectId or legacy userId)
    * @returns {Array} - Array of recipient objects with details
    */
   async getAllowedRecipientsWithDetails(userId) {
@@ -174,30 +176,22 @@ class ChatPermissionsService {
       for (const recipientId of allowedIds) {
         if (!recipientId) continue; // Skip null/undefined IDs
 
-        // Check if recipient is BloodbankStaff (Admin/Coordinator)
-        const staff = await BloodbankStaff.findOne({ ID: recipientId });
-        if (staff) {
-          recipients.push({
-            id: recipientId,
-            name: `${staff.First_Name || ''} ${staff.Last_Name || ''}`.trim() || 'Unknown',
-            role: staff.StaffType || 'Staff',
-            email: staff.Email || '',
-            type: 'staff'
-          });
-          continue;
-        }
+        // Get user by ObjectId
+        const user = await User.findById(recipientId);
+        if (user) {
+          // Get user's roles
+          const userRoles = await permissionService.getUserRoles(user._id);
+          const roleCodes = userRoles.map(ur => ur.code);
+          const primaryRole = roleCodes[0] || 'user';
 
-        // Check if recipient is Stakeholder
-        const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: recipientId });
-        if (stakeholder) {
           recipients.push({
-            id: recipientId,
-            name: `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim() || 'Unknown',
-            role: 'Stakeholder',
-            email: stakeholder.email || '',
-            type: 'stakeholder'
+            id: user._id.toString(),
+            name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown',
+            role: primaryRole,
+            roles: roleCodes,
+            email: user.email || '',
+            type: primaryRole
           });
-          continue;
         }
       }
 

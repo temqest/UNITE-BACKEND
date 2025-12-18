@@ -246,19 +246,45 @@ class PermissionService {
       if (!role || !role.permissions) continue;
 
       for (const perm of role.permissions) {
-        const key = `${perm.resource}:${perm.actions.join(',')}`;
+        // Use resource as key to merge all permissions for same resource
+        const key = perm.resource;
         if (!permissionsMap.has(key)) {
           permissionsMap.set(key, {
             resource: perm.resource,
-            actions: [...perm.actions]
+            actions: [...perm.actions],
+            metadata: perm.metadata ? { ...perm.metadata } : {}
           });
         } else {
           // Merge actions
           const existing = permissionsMap.get(key);
           const newActions = [...new Set([...existing.actions, ...perm.actions])];
+          
+          // Merge metadata (for staff types, combine arrays)
+          const mergedMetadata = { ...existing.metadata };
+          if (perm.metadata) {
+            if (perm.metadata.allowedStaffTypes && existing.metadata.allowedStaffTypes) {
+              // If either has '*', allow all types
+              if (existing.metadata.allowedStaffTypes.includes('*') || perm.metadata.allowedStaffTypes.includes('*')) {
+                mergedMetadata.allowedStaffTypes = ['*'];
+              } else {
+                mergedMetadata.allowedStaffTypes = [
+                  ...new Set([...existing.metadata.allowedStaffTypes, ...perm.metadata.allowedStaffTypes])
+                ];
+              }
+            } else if (perm.metadata.allowedStaffTypes) {
+              mergedMetadata.allowedStaffTypes = perm.metadata.allowedStaffTypes;
+            } else if (existing.metadata.allowedStaffTypes) {
+              // Keep existing if new doesn't have it
+              mergedMetadata.allowedStaffTypes = existing.metadata.allowedStaffTypes;
+            }
+            // Merge other metadata fields
+            Object.assign(mergedMetadata, perm.metadata);
+          }
+          
           permissionsMap.set(key, {
             resource: perm.resource,
-            actions: newActions
+            actions: newActions,
+            metadata: mergedMetadata
           });
         }
       }
@@ -371,6 +397,200 @@ class PermissionService {
       return await Role.find().sort({ name: 1 });
     } catch (error) {
       console.error('Error getting all roles:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Check if user can access a specific page
+   * @param {string|ObjectId} userId - User ID
+   * @param {string} pageRoute - Page route (e.g., '/dashboard', '/events', '/requests')
+   * @param {Object} context - Optional context
+   * @returns {Promise<boolean>} True if user can access the page
+   */
+  async canAccessPage(userId, pageRoute, context = {}) {
+    try {
+      // Normalize page route (remove leading/trailing slashes, convert to lowercase)
+      const normalizedRoute = pageRoute.replace(/^\/+|\/+$/g, '').toLowerCase();
+      
+      // Check for page permission
+      return await this.checkPermission(userId, 'page', normalizedRoute, context);
+    } catch (error) {
+      console.error('Error checking page access:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if user can use a specific feature
+   * @param {string|ObjectId} userId - User ID
+   * @param {string} featureCode - Feature code (e.g., 'create-event', 'request-blood', 'manage-inventory')
+   * @param {Object} context - Optional context
+   * @returns {Promise<boolean>} True if user can use the feature
+   */
+  async canUseFeature(userId, featureCode, context = {}) {
+    try {
+      return await this.checkPermission(userId, 'feature', featureCode, context);
+    } catch (error) {
+      console.error('Error checking feature access:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if user can manage staff with specific constraints
+   * @param {string|ObjectId} userId - User ID
+   * @param {string} action - Action (e.g., 'create', 'update', 'delete')
+   * @param {string} staffType - Staff type to check (e.g., 'coordinator', 'stakeholder', 'system-admin')
+   * @param {Object} context - Optional context
+   * @returns {Promise<boolean>} True if user can perform the action on the staff type
+   */
+  async canManageStaff(userId, action, staffType = null, context = {}) {
+    try {
+      // First check if user has general staff management permission
+      const hasGeneralPermission = await this.checkPermission(userId, 'staff', action, context);
+      if (!hasGeneralPermission) {
+        return false;
+      }
+
+      // If staffType is specified, check metadata constraints
+      if (staffType) {
+        const userRoles = await UserRole.find({ 
+          userId, 
+          isActive: true,
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: new Date() } }
+          ]
+        }).populate('roleId');
+
+        if (context.locationId) {
+          const filteredRoles = await this.filterByLocationScope(userRoles, context.locationId);
+          if (filteredRoles.length === 0) return false;
+        }
+
+        const permissions = await this.aggregatePermissions(userRoles);
+        
+        // Check if any permission allows this staff type
+        for (const perm of permissions) {
+          if (perm.resource === 'staff' && (perm.actions.includes('*') || perm.actions.includes(action))) {
+            // Check metadata for allowed staff types
+            // If metadata.allowedStaffTypes exists, check if staffType is in the list
+            // If metadata.allowedStaffTypes doesn't exist or is empty, allow all types
+            if (perm.metadata && perm.metadata.allowedStaffTypes) {
+              if (perm.metadata.allowedStaffTypes.includes(staffType) || 
+                  perm.metadata.allowedStaffTypes.includes('*')) {
+                return true;
+              }
+            } else {
+              // No metadata constraint, allow all types
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      }
+
+      return hasGeneralPermission;
+    } catch (error) {
+      console.error('Error checking staff management permission:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get all pages user can access
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} context - Optional context
+   * @returns {Promise<Array>} Array of page routes user can access
+   */
+  async getAccessiblePages(userId, context = {}) {
+    try {
+      const permissions = await this.getUserPermissions(userId, context.locationId);
+      const pages = [];
+      
+      for (const perm of permissions) {
+        if (perm.resource === 'page') {
+          // Actions array contains page routes
+          pages.push(...perm.actions);
+        }
+      }
+      
+      return [...new Set(pages)]; // Remove duplicates
+    } catch (error) {
+      console.error('Error getting accessible pages:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get all features user can use
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} context - Optional context
+   * @returns {Promise<Array>} Array of feature codes user can use
+   */
+  async getAvailableFeatures(userId, context = {}) {
+    try {
+      const permissions = await this.getUserPermissions(userId, context.locationId);
+      const features = [];
+      
+      for (const perm of permissions) {
+        if (perm.resource === 'feature') {
+          // Actions array contains feature codes
+          features.push(...perm.actions);
+        }
+      }
+      
+      return [...new Set(features)]; // Remove duplicates
+    } catch (error) {
+      console.error('Error getting available features:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get staff types user can manage
+   * @param {string|ObjectId} userId - User ID
+   * @param {string} action - Action (e.g., 'create', 'update', 'delete')
+   * @param {Object} context - Optional context
+   * @returns {Promise<Array>} Array of staff types user can manage
+   */
+  async getAllowedStaffTypes(userId, action, context = {}) {
+    try {
+      const userRoles = await UserRole.find({ 
+        userId, 
+        isActive: true,
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } }
+        ]
+      }).populate('roleId');
+
+      if (context.locationId) {
+        const filteredRoles = await this.filterByLocationScope(userRoles, context.locationId);
+        if (filteredRoles.length === 0) return [];
+      }
+
+      const permissions = await this.aggregatePermissions(userRoles);
+      const allowedTypes = new Set();
+      
+      for (const perm of permissions) {
+        if (perm.resource === 'staff' && (perm.actions.includes('*') || perm.actions.includes(action))) {
+          if (perm.metadata && perm.metadata.allowedStaffTypes) {
+            perm.metadata.allowedStaffTypes.forEach(type => allowedTypes.add(type));
+          } else {
+            // No metadata constraint means all types allowed
+            return ['*']; // Return wildcard to indicate all types
+          }
+        }
+      }
+      
+      return Array.from(allowedTypes);
+    } catch (error) {
+      console.error('Error getting allowed staff types:', error);
       return [];
     }
   }

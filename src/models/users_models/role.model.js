@@ -32,7 +32,11 @@ const roleSchema = new mongoose.Schema({
       type: String,
       required: true,
       trim: true
-    }]
+    }],
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    }
   }]
 }, {
   timestamps: true

@@ -82,6 +82,31 @@ const defaultPermissions = [
   // System permissions
   { code: 'system.settings', name: 'Manage System Settings', resource: 'system', action: 'settings', description: 'Manage system settings' },
   { code: 'system.audit', name: 'View Audit Logs', resource: 'system', action: 'audit', description: 'View system audit logs' },
+  
+  // Page permissions
+  { code: 'page.dashboard', name: 'Access Dashboard', resource: 'page', action: 'dashboard', type: 'page', description: 'Access main dashboard page' },
+  { code: 'page.events', name: 'Access Events Page', resource: 'page', action: 'events', type: 'page', description: 'Access events management page' },
+  { code: 'page.requests', name: 'Access Requests Page', resource: 'page', action: 'requests', type: 'page', description: 'Access requests management page' },
+  { code: 'page.users', name: 'Access Users Page', resource: 'page', action: 'users', type: 'page', description: 'Access users management page' },
+  { code: 'page.inventory', name: 'Access Inventory Page', resource: 'page', action: 'inventory', type: 'page', description: 'Access blood bag inventory page' },
+  { code: 'page.locations', name: 'Access Locations Page', resource: 'page', action: 'locations', type: 'page', description: 'Access locations management page' },
+  { code: 'page.reports', name: 'Access Reports Page', resource: 'page', action: 'reports', type: 'page', description: 'Access reports and analytics page' },
+  { code: 'page.settings', name: 'Access Settings Page', resource: 'page', action: 'settings', type: 'page', description: 'Access system settings page' },
+  { code: 'page.chat', name: 'Access Chat Page', resource: 'page', action: 'chat', type: 'page', description: 'Access chat/messaging page' },
+  
+  // Feature permissions
+  { code: 'feature.create-event', name: 'Create Event Feature', resource: 'feature', action: 'create-event', type: 'feature', description: 'Can create new events' },
+  { code: 'feature.request-blood', name: 'Request Blood Feature', resource: 'feature', action: 'request-blood', type: 'feature', description: 'Can request blood bags' },
+  { code: 'feature.manage-inventory', name: 'Manage Inventory Feature', resource: 'feature', action: 'manage-inventory', type: 'feature', description: 'Can manage blood bag inventory' },
+  { code: 'feature.view-reports', name: 'View Reports Feature', resource: 'feature', action: 'view-reports', type: 'feature', description: 'Can view reports and analytics' },
+  { code: 'feature.export-data', name: 'Export Data Feature', resource: 'feature', action: 'export-data', type: 'feature', description: 'Can export data' },
+  { code: 'feature.send-notifications', name: 'Send Notifications Feature', resource: 'feature', action: 'send-notifications', type: 'feature', description: 'Can send system notifications' },
+  
+  // Staff management permissions
+  { code: 'staff.create', name: 'Create Staff', resource: 'staff', action: 'create', type: 'staff', description: 'Create new staff members', metadata: {} },
+  { code: 'staff.read', name: 'Read Staff', resource: 'staff', action: 'read', type: 'staff', description: 'View staff members' },
+  { code: 'staff.update', name: 'Update Staff', resource: 'staff', action: 'update', type: 'staff', description: 'Update existing staff members', metadata: {} },
+  { code: 'staff.delete', name: 'Delete Staff', resource: 'staff', action: 'delete', type: 'staff', description: 'Delete staff members', metadata: {} },
 ];
 
 // Default roles to create
@@ -105,7 +130,10 @@ const defaultRoles = [
       { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule'] },
       { resource: 'user', actions: ['read'] },
       { resource: 'location', actions: ['read'] },
-      { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] }
+      { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
+      { resource: 'page', actions: ['dashboard', 'events', 'requests', 'chat'] },
+      { resource: 'feature', actions: ['create-event', 'request-blood', 'view-reports'] },
+      { resource: 'staff', actions: ['read'], metadata: { allowedStaffTypes: ['stakeholder'] } }
     ]
   },
   {
@@ -116,7 +144,9 @@ const defaultRoles = [
     permissions: [
       { resource: 'event', actions: ['create', 'read'] },
       { resource: 'request', actions: ['create', 'read', 'confirm', 'decline'] },
-      { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] }
+      { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
+      { resource: 'page', actions: ['dashboard', 'events', 'requests', 'chat'] },
+      { resource: 'feature', actions: ['create-event', 'request-blood'] }
     ]
   }
 ];

@@ -145,56 +145,42 @@ module.exports = {
 
 function getHumanStatusLabel(status, request = {}) {
   const s = String(status || '').toLowerCase();
-  const reviewerRole = request.reviewer && request.reviewer.role ? String(request.reviewer.role).toLowerCase() : null;
+  const reviewerRole = request.reviewer && request.reviewer.roleSnapshot ? String(request.reviewer.roleSnapshot).toLowerCase() : null;
   
-  // IMPORTANT: For SystemAdmin-created requests, reviewer should always be coordinator
-  // If reviewer is not set or is incorrectly set, check the creator role
-  const creatorRole = request.made_by_role || request.creator?.role;
-  const isSystemAdminRequest = creatorRole && String(creatorRole).toLowerCase().includes('admin');
+  // Use requester.roleSnapshot from new model structure (fallback to legacy made_by_role for backward compatibility)
+  const creatorRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
+  const normalizedCreatorRole = creatorRole ? String(creatorRole).toLowerCase() : null;
   
-  // Check for Coordinator-Stakeholder involvement case
-  const isCoordinatorRequest = creatorRole && String(creatorRole).toLowerCase().includes('coordinator');
-  const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
-  const isCoordinatorStakeholderCase = isCoordinatorRequest && hasStakeholder;
-  
-  // Determine effective reviewer role
+  // Determine effective reviewer role from reviewer field
   let effectiveReviewerRole = reviewerRole;
   
-  // CRITICAL: If it's a Coordinator-Stakeholder case, the reviewer MUST be Stakeholder
-  // This takes priority over any other reviewer assignment
-  if (isCoordinatorStakeholderCase) {
-    // Force Stakeholder as reviewer for Coordinator-Stakeholder cases
-    effectiveReviewerRole = 'stakeholder';
-    
-    // Debug logging (can be removed later)
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('[getHumanStatusLabel] Coordinator-Stakeholder case detected:', {
-        creatorRole,
-        stakeholderId: request.stakeholder_id || request.stakeholderId,
-        reviewerRole,
-        effectiveReviewerRole,
-        status: s
-      });
+  // If no reviewer role set, infer from requester role (for backward compatibility)
+  if (!effectiveReviewerRole && normalizedCreatorRole) {
+    // System admin requests are typically reviewed by coordinators
+    if (normalizedCreatorRole.includes('admin') || normalizedCreatorRole.includes('system')) {
+      effectiveReviewerRole = 'coordinator';
+    } else if (normalizedCreatorRole.includes('coordinator')) {
+      // Coordinator requests might be reviewed by stakeholders if stakeholder_id is present
+      if (request.requester?.id && request.stakeholderId) {
+        effectiveReviewerRole = 'stakeholder';
+      } else {
+        effectiveReviewerRole = 'coordinator';
+      }
+    } else if (normalizedCreatorRole.includes('stakeholder')) {
+      effectiveReviewerRole = 'coordinator';
     }
-  }
-  
-  // If SystemAdmin created the request, the reviewer should be coordinator (not stakeholder)
-  // But only if it's NOT a Coordinator-Stakeholder case (which we already handled above)
-  if (!isCoordinatorStakeholderCase && isSystemAdminRequest && effectiveReviewerRole !== 'coordinator' && effectiveReviewerRole !== 'systemadmin' && effectiveReviewerRole !== 'admin') {
-    // SystemAdmin requests should be reviewed by coordinator, not stakeholder
-    effectiveReviewerRole = 'coordinator';
   }
 
   if (s.includes('pending')) {
     if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review';
     if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review';
-    if (effectiveReviewerRole === 'systemadmin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
-    return 'Waiting for Admin or Coordinator review';
+    if (effectiveReviewerRole === 'system-admin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
+    return 'Waiting for review';
   }
 
   if (s.includes('review')) {
     // review-accepted / review-rescheduled etc.
-    if (s.includes('accepted')) return 'Waiting for Coordinator confirmation';
+    if (s.includes('accepted')) return 'Waiting for confirmation';
     if (s.includes('resched') || s.includes('reschedule') || s.includes('rescheduled')) {
       if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review (reschedule)';
       if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review (reschedule)';
@@ -203,8 +189,8 @@ function getHumanStatusLabel(status, request = {}) {
     // For other review states, use effective reviewer role
     if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review';
     if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review';
-    if (effectiveReviewerRole === 'systemadmin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
-    return 'Waiting for Admin or Coordinator review';
+    if (effectiveReviewerRole === 'system-admin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
+    return 'Waiting for review';
   }
 
   // Handle legacy or non-review rescheduled statuses like 'Rescheduled_By_Admin'

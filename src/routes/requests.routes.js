@@ -7,7 +7,6 @@ const {
 const { bloodBagRequestController } = require('../controller/request_controller');
 
 const authenticate = require('../middleware/authenticate');
-const { requireAdmin } = require('../middleware/requireRoles'); // Legacy - kept for backward compatibility
 const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
 
 const {

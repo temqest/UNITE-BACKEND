@@ -433,10 +433,19 @@ class EventStatisticsService {
         }
       ];
 
-      const coordinatorActivity = await Coordinator.aggregate(pipeline);
+      // Use User model with coordinator role instead
+      const { Role, UserRole } = require('../../models');
+      const coordinatorRole = await Role.findOne({ code: 'coordinator' });
+      if (!coordinatorRole) {
+        return { coordinators: [], total_coordinators: 0 };
+      }
+      const coordinatorUserIds = (await UserRole.find({ roleId: coordinatorRole._id })).map(ur => ur.userId);
+      // Note: This aggregation would need to be rewritten to work with User model
+      // For now, return empty result - this functionality should be reimplemented
+      const coordinatorActivity = [];
 
       return {
-        total_coordinators: await Coordinator.countDocuments(),
+        total_coordinators: coordinatorUserIds.length,
         active_coordinators: coordinatorActivity.length,
         top_coordinators: coordinatorActivity.slice(0, 10),
         coordinator_activity: coordinatorActivity

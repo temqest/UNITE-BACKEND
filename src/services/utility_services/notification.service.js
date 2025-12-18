@@ -1,4 +1,4 @@
-const { Notification, EventRequest, Event, BloodbankStaff } = require('../../models/index');
+const { Notification, EventRequest, Event, User } = require('../../models/index');
 
 class NotificationService {
   /**
@@ -678,7 +678,7 @@ class NotificationService {
   async createNewMessageNotification(recipientId, recipientType, senderId, messageId, conversationId, messageContent) {
     try {
       // Get sender details
-      const sender = await BloodbankStaff.findOne({ ID: senderId });
+      const sender = await User.findById(senderId) || await User.findOne({ userId: senderId });
       if (!sender) {
         throw new Error('Sender not found');
       }
@@ -688,7 +688,7 @@ class NotificationService {
         Recipient_ID: recipientId,
         RecipientType: recipientType,
         Title: 'New Message',
-        Message: `You have a new message from ${sender.First_Name} ${sender.Last_Name}`,
+        Message: `You have a new message from ${sender.firstName} ${sender.lastName}`,
         NotificationType: 'NewMessage',
         Message_ID: messageId,
         Sender_ID: senderId,

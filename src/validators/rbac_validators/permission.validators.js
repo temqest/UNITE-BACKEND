@@ -59,7 +59,19 @@ const createPermissionSchema = Joi.object({
     .allow(null, '')
     .messages({
       'string.max': 'Description must not exceed 500 characters'
-    })
+    }),
+
+  type: Joi.string()
+    .valid('resource', 'page', 'feature', 'staff')
+    .default('resource')
+    .messages({
+      'any.only': 'Type must be one of: resource, page, feature, staff'
+    }),
+
+  metadata: Joi.object({
+    allowedStaffTypes: Joi.array().items(Joi.string()).optional(),
+    // Add other metadata fields as needed
+  }).optional()
 });
 
 // Validation schema for updating an existing permission
@@ -80,7 +92,17 @@ const updatePermissionSchema = Joi.object({
     .allow(null, '')
     .messages({
       'string.max': 'Description must not exceed 500 characters'
-    })
+    }),
+
+  type: Joi.string()
+    .valid('resource', 'page', 'feature', 'staff')
+    .messages({
+      'any.only': 'Type must be one of: resource, page, feature, staff'
+    }),
+
+  metadata: Joi.object({
+    allowedStaffTypes: Joi.array().items(Joi.string()).optional(),
+  }).optional()
 }).min(1).messages({
   'object.min': 'At least one field must be provided for update'
 });
