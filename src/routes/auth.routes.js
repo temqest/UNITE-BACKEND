@@ -28,6 +28,19 @@ router.post('/login', rateLimiter.auth, async (req, res, next) => {
 });
 
 /**
+ * @route POST /api/auth/refresh
+ * @desc  Refresh access token
+ * @access Private (requires valid token)
+ */
+router.post('/refresh', authenticate, async (req, res, next) => {
+  try {
+    await userController.refreshToken(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route GET /api/auth/me
  * @desc  Get current authenticated user info
  * @access Private

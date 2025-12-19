@@ -266,35 +266,29 @@ class UserController {
         });
       }
 
-      // Get user roles to determine primary role
-      const roles = await permissionService.getUserRoles(user._id);
-      const primaryRole = roles.length > 0 ? roles[0] : null;
-      const roleCode = primaryRole ? primaryRole.code : null;
-
       // Update last login
       await user.updateLastLogin();
 
-      // Create JWT token payload
+      // Create JWT token payload (minimal - only id and email for security)
+      // Role and permissions should be fetched from server, not embedded in token
       const tokenPayload = {
         id: user._id.toString(),
-        email: user.email,
-        role: roleCode,
-        isSystemAdmin: user.isSystemAdmin || false
+        email: user.email
       };
 
-      // Sign token
-      const token = signToken(tokenPayload);
+      // Sign token with shorter expiration (30 minutes default, configurable via env)
+      const tokenExpiration = process.env.JWT_EXPIRES_IN || '30m';
+      const token = signToken(tokenPayload, { expiresIn: tokenExpiration });
 
-      // Prepare user response (without password)
-      const userResponse = user.toObject({ virtuals: true });
-      delete userResponse.password;
+      // Prepare minimal user response for frontend
+      // Full user data should be fetched via /api/auth/me endpoint
+      const displayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
 
       // Set cookie as fallback (optional, for cookie-based auth)
+      // Cookie also uses minimal data for security
       const cookieData = JSON.stringify({
         id: user._id.toString(),
-        email: user.email,
-        role: roleCode,
-        isAdmin: user.isSystemAdmin || false
+        email: user.email
       });
 
       res.cookie('unite_user', cookieData, {
@@ -304,17 +298,14 @@ class UserController {
         maxAge: 12 * 60 * 60 * 1000 // 12 hours
       });
 
+      // Return minimal user data - frontend should call /api/auth/me for full user info
       return res.status(200).json({
         success: true,
         token,
         user: {
           id: user._id.toString(),
           email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          fullName: userResponse.fullName,
-          role: roleCode,
-          isSystemAdmin: user.isSystemAdmin || false
+          displayName: displayName
         }
       });
     } catch (error) {
@@ -326,8 +317,90 @@ class UserController {
   }
 
   /**
+   * Refresh access token
+   * POST /api/auth/refresh
+   * 
+   * Refreshes the access token if the current token is valid.
+   * This allows extending the session without requiring re-login.
+   * 
+   * Note: This is a simple refresh mechanism. For production, consider implementing
+   * a proper refresh token system with HttpOnly cookies and database storage.
+   */
+  async refreshToken(req, res) {
+    try {
+      // req.user is set by authenticate middleware
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized'
+        });
+      }
+
+      // Verify user still exists and is active
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      if (!user.isActive) {
+        return res.status(401).json({
+          success: false,
+          message: 'Account is inactive'
+        });
+      }
+
+      // Create new token with minimal payload
+      const tokenPayload = {
+        id: user._id.toString(),
+        email: user.email
+      };
+
+      // Sign new token with same expiration as configured
+      const tokenExpiration = process.env.JWT_EXPIRES_IN || '30m';
+      const token = signToken(tokenPayload, { expiresIn: tokenExpiration });
+
+      // Prepare minimal user response
+      const displayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
+
+      return res.status(200).json({
+        success: true,
+        token,
+        user: {
+          id: user._id.toString(),
+          email: user.email,
+          displayName: displayName
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to refresh token'
+      });
+    }
+  }
+
+  /**
    * Get current authenticated user
    * GET /api/auth/me
+   * 
+   * SECURITY NOTE: This endpoint returns full user data including roles, permissions, and locations.
+   * This data should be:
+   * - Fetched fresh from the server when needed (e.g., on app load, page refresh)
+   * - Stored in memory only (React Context/State) - NEVER persisted to localStorage/sessionStorage
+   * - Re-validated periodically to ensure permissions are up-to-date
+   * 
+   * The frontend should NOT persist this data to localStorage as it contains sensitive authorization
+   * information that could be tampered with. All authorization decisions should be made server-side
+   * via permission checking endpoints (/api/permissions/check, /api/pages/check, etc.).
+   * 
+   * Use this endpoint to:
+   * - Validate the current session on app load
+   * - Get fresh user data after login
+   * - Re-validate user state on page refresh
+   * - Check current user's roles/permissions for UI display (not for authorization decisions)
    */
   async getCurrentUser(req, res) {
     try {
@@ -348,7 +421,7 @@ class UserController {
         });
       }
 
-      // Get user roles and permissions
+      // Get user roles and permissions from database (single source of truth)
       const roles = await permissionService.getUserRoles(user._id);
       const permissions = await permissionService.getUserPermissions(user._id);
       const locations = await locationService.getUserLocations(user._id);
