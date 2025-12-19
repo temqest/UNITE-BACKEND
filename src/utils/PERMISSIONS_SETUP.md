@@ -28,11 +28,16 @@ node src/utils/seedRoles.js
 ```
 
 **What it does:**
-- Creates all permission definitions (event.*, request.*, page.*, etc.)
+- Creates all permission definitions (event.*, request.*, page.*, settings.*, etc.)
 - Creates default roles:
   - `system-admin` - Full access (wildcard permissions)
   - `coordinator` - Event/request coordinator with staff management
   - `stakeholder` - Stakeholder with event creation capabilities
+
+**Settings Permissions Created:**
+- `settings.edit-requesting` - Edit requesting settings
+- `settings.edit-location` - Edit location settings
+- `settings.edit-staff` - Edit staff settings
 
 **Page Permissions Created:**
 - `page.campaign` - Campaign/requests page
@@ -165,6 +170,10 @@ node src/utils/setupAdminPermissions.js --email=admin@example.com --dry-run
 - **Permissions:** `{ resource: '*', actions: ['*'] }` (wildcard - all access)
 - **Accessible Pages:** All pages (handled by wildcard)
 - **Staff Management:** All staff types
+- **Settings Management:** All settings permissions including:
+  - `settings.edit-requesting` - Edit requesting settings
+  - `settings.edit-location` - Edit location settings
+  - `settings.edit-staff` - Edit staff settings
 
 ### coordinator
 - **Page Access:** campaign, calendar, chat, notification, settings, stakeholder-management

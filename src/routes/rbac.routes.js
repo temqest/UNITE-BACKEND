@@ -71,6 +71,19 @@ router.put('/roles/:roleId', authenticate, requirePermission('role', 'update'), 
 });
 
 /**
+ * @route   GET /api/roles/:roleId/users-count
+ * @desc    Get count of users assigned to a role
+ * @access  Private (requires role.read permission)
+ */
+router.get('/roles/:roleId/users-count', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await roleController.getRoleUsersCount(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   DELETE /api/roles/:roleId
  * @desc    Delete role
  * @access  Private (requires role.delete permission)

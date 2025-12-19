@@ -83,6 +83,11 @@ const defaultPermissions = [
   { code: 'system.settings', name: 'Manage System Settings', resource: 'system', action: 'settings', description: 'Manage system settings' },
   { code: 'system.audit', name: 'View Audit Logs', resource: 'system', action: 'audit', description: 'View system audit logs' },
   
+  // Settings permissions
+  { code: 'settings.edit-requesting', name: 'Edit Requesting Settings', resource: 'settings', action: 'edit-requesting', description: 'Edit requesting settings' },
+  { code: 'settings.edit-location', name: 'Edit Location Settings', resource: 'settings', action: 'edit-location', description: 'Edit location settings' },
+  { code: 'settings.edit-staff', name: 'Edit Staff Settings', resource: 'settings', action: 'edit-staff', description: 'Edit staff settings' },
+  
   // Page permissions
   { code: 'page.dashboard', name: 'Access Dashboard', resource: 'page', action: 'dashboard', type: 'page', description: 'Access main dashboard page' },
   { code: 'page.campaign', name: 'Access Campaign Page', resource: 'page', action: 'campaign', type: 'page', description: 'Access campaign/requests page' },

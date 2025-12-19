@@ -3,7 +3,7 @@
  * Handles HTTP requests related to role management
  */
 
-const { Role, Permission } = require('../../models');
+const { Role, Permission, UserRole } = require('../../models');
 const permissionService = require('../../services/users_services/permission.service');
 
 class RoleController {
@@ -105,6 +105,36 @@ class RoleController {
   }
 
   /**
+   * Get count of users assigned to a role
+   * GET /api/roles/:roleId/users-count
+   */
+  async getRoleUsersCount(req, res) {
+    try {
+      const { roleId } = req.params;
+      
+      const activeUserCount = await UserRole.countDocuments({
+        roleId,
+        isActive: true,
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } }
+        ]
+      });
+      
+      return res.status(200).json({
+        success: true,
+        data: { userCount: activeUserCount }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get user count'
+      });
+    }
+  }
+
+  /**
    * Delete role
    * DELETE /api/roles/:roleId
    */
@@ -125,6 +155,25 @@ class RoleController {
         return res.status(400).json({
           success: false,
           message: 'System roles cannot be deleted'
+        });
+      }
+
+      // Check for active user assignments
+      const activeUserCount = await UserRole.countDocuments({
+        roleId,
+        isActive: true,
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } }
+        ]
+      });
+
+      if (activeUserCount > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot delete role: ${activeUserCount} user(s) are currently assigned to this role`,
+          data: { userCount: activeUserCount }
         });
       }
 
