@@ -510,12 +510,31 @@ class PermissionService {
     try {
       const permissions = await this.getUserPermissions(userId, context.locationId);
       const pages = [];
+      let hasWildcard = false;
       
       for (const perm of permissions) {
+        // Check for wildcard permission (system-admin)
+        if (perm.resource === '*' && (perm.actions.includes('*') || perm.actions.includes('page'))) {
+          hasWildcard = true;
+          break; // Wildcard grants all access, no need to check further
+        }
+        
         if (perm.resource === 'page') {
           // Actions array contains page routes
           pages.push(...perm.actions);
         }
+      }
+      
+      // If user has wildcard permission, return all available page routes
+      if (hasWildcard) {
+        // Get all page permissions from database to return all possible pages
+        // Permission is already imported at the top of the file
+        const allPagePermissions = await Permission.find({ 
+          resource: 'page',
+          type: 'page'
+        }).select('action -_id');
+        
+        return allPagePermissions.map(p => p.action);
       }
       
       return [...new Set(pages)]; // Remove duplicates

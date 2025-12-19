@@ -85,6 +85,8 @@ const defaultPermissions = [
   
   // Page permissions
   { code: 'page.dashboard', name: 'Access Dashboard', resource: 'page', action: 'dashboard', type: 'page', description: 'Access main dashboard page' },
+  { code: 'page.campaign', name: 'Access Campaign Page', resource: 'page', action: 'campaign', type: 'page', description: 'Access campaign/requests page' },
+  { code: 'page.calendar', name: 'Access Calendar Page', resource: 'page', action: 'calendar', type: 'page', description: 'Access calendar page' },
   { code: 'page.events', name: 'Access Events Page', resource: 'page', action: 'events', type: 'page', description: 'Access events management page' },
   { code: 'page.requests', name: 'Access Requests Page', resource: 'page', action: 'requests', type: 'page', description: 'Access requests management page' },
   { code: 'page.users', name: 'Access Users Page', resource: 'page', action: 'users', type: 'page', description: 'Access users management page' },
@@ -93,6 +95,9 @@ const defaultPermissions = [
   { code: 'page.reports', name: 'Access Reports Page', resource: 'page', action: 'reports', type: 'page', description: 'Access reports and analytics page' },
   { code: 'page.settings', name: 'Access Settings Page', resource: 'page', action: 'settings', type: 'page', description: 'Access system settings page' },
   { code: 'page.chat', name: 'Access Chat Page', resource: 'page', action: 'chat', type: 'page', description: 'Access chat/messaging page' },
+  { code: 'page.notification', name: 'Access Notifications Page', resource: 'page', action: 'notification', type: 'page', description: 'Access notifications page' },
+  { code: 'page.stakeholder-management', name: 'Access Stakeholder Management Page', resource: 'page', action: 'stakeholder-management', type: 'page', description: 'Access stakeholder management page' },
+  { code: 'page.coordinator-management', name: 'Access Coordinator Management Page', resource: 'page', action: 'coordinator-management', type: 'page', description: 'Access coordinator management page' },
   
   // Feature permissions
   { code: 'feature.create-event', name: 'Create Event Feature', resource: 'feature', action: 'create-event', type: 'feature', description: 'Can create new events' },
@@ -131,9 +136,9 @@ const defaultRoles = [
       { resource: 'user', actions: ['read'] },
       { resource: 'location', actions: ['read'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
-      { resource: 'page', actions: ['dashboard', 'events', 'requests', 'chat'] },
+      { resource: 'page', actions: ['campaign', 'calendar', 'chat', 'notification', 'settings', 'stakeholder-management'] },
       { resource: 'feature', actions: ['create-event', 'request-blood', 'view-reports'] },
-      { resource: 'staff', actions: ['read'], metadata: { allowedStaffTypes: ['stakeholder'] } }
+      { resource: 'staff', actions: ['read', 'create', 'update', 'delete'], metadata: { allowedStaffTypes: ['stakeholder'] } }
     ]
   },
   {
@@ -145,7 +150,7 @@ const defaultRoles = [
       { resource: 'event', actions: ['create', 'read'] },
       { resource: 'request', actions: ['create', 'read', 'confirm', 'decline'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
-      { resource: 'page', actions: ['dashboard', 'events', 'requests', 'chat'] },
+      { resource: 'page', actions: ['campaign', 'calendar', 'chat', 'notification', 'settings'] },
       { resource: 'feature', actions: ['create-event', 'request-blood'] }
     ]
   }
