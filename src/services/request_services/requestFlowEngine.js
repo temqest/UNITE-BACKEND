@@ -96,9 +96,10 @@ class RequestFlowEngine {
     // Action normalization - no verbose logging
 
     // Validate transition (use normalized role)
-    if (!this.stateMachine.isValidTransition(currentState, action, normalizedRole || actorRole, actorId, request)) {
+    const isValid = await this.stateMachine.isValidTransition(currentState, action, normalizedRole || actorRole, actorId, request);
+    if (!isValid) {
       // Get allowed actions for better error message
-      const allowedActions = this.stateMachine.getAllowedActions(currentState, normalizedRole || actorRole, actorId, request);
+      const allowedActions = await this.stateMachine.getAllowedActions(currentState, normalizedRole || actorRole, actorId, request);
       throw new Error(`Action '${action}' is not allowed in state '${currentState}' for role '${actorRole}' (normalized: ${normalizedRole}). Allowed actions: ${allowedActions.join(', ')}`);
     }
 

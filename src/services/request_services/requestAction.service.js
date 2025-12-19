@@ -212,7 +212,7 @@ class RequestActionService {
     }
 
     const stateMachine = new RequestStateMachine();
-    const availableActions = stateMachine.getAllowedActions(
+    const availableActions = await stateMachine.getAllowedActions(
       request.Status,
       null, // role (not needed with permissions)
       userId,

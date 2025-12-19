@@ -1,4 +1,5 @@
-const { Province, District, Municipality, SignUpRequest, Coordinator, Location, UserLocation, User } = require('../../models');
+const { Province, District, Municipality, SignUpRequest, Location, UserLocation, User } = require('../../models');
+const permissionService = require('../users_services/permission.service');
 const crypto = require('crypto');
 const { signToken, verifyToken } = require('../../utils/jwt');
 const emailService = require('./email.service');
@@ -32,8 +33,29 @@ class LocationService {
     const municipality = await Municipality.findOne({ _id: data.municipality, district: district._id, province: province._id });
     if (!municipality) throw new Error('Municipality not found or does not belong to district/province');
 
-    // find coordinator for the district (first match)
-    const coordinator = await Coordinator.findOne({ district: district._id });
+    // find coordinator for the district (first match) - using User model with coordinator role
+    const { UserRole, Role, UserLocation } = require('../../models');
+    const coordinatorRole = await Role.findOne({ code: 'coordinator' });
+    let coordinator = null;
+    if (coordinatorRole && district) {
+      // Find users assigned to this district location
+      const locationUsers = await UserLocation.findLocationUsers(district._id);
+      
+      // Filter to only coordinators
+      for (const locationUser of locationUsers) {
+        if (locationUser.userId) {
+          const userRoles = await UserRole.find({ 
+            userId: locationUser.userId._id,
+            roleId: coordinatorRole._id,
+            isActive: true
+          });
+          if (userRoles.length > 0) {
+            coordinator = locationUser.userId;
+            break;
+          }
+        }
+      }
+    }
 
     // Generate 6-digit verification code
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -68,73 +90,48 @@ class LocationService {
     if (!req) throw new Error('Sign up request not found');
     if (req.status !== 'pending') throw new Error('Request has already been processed');
 
-    // Check if stakeholder with this email already exists
-    const { Stakeholder } = require('../../models');
-    const existingStakeholder = await Stakeholder.findOne({ email: req.email });
-    if (existingStakeholder) throw new Error('A stakeholder with this email already exists');
-
-    // Get coordinator's accountType to set on stakeholder (required for filtering)
-    // This is critical: stakeholders must have accountType matching their coordinator's accountType
-    // for coordinators to see them in the list
-    let accountType = 'Others'; // Default to 'Others' if coordinator not found
-    if (req.assignedCoordinator) {
-      try {
-        const coordinator = await Coordinator.findById(req.assignedCoordinator).lean().exec();
-        if (coordinator && coordinator.accountType) {
-          accountType = coordinator.accountType;
-        }
-      } catch (e) {
-        console.warn('Failed to fetch assigned coordinator accountType, trying district coordinator:', e.message);
-        // If assigned coordinator lookup fails, try to find a coordinator for the district
-        if (req.district) {
-          try {
-            const districtCoordinator = await Coordinator.findOne({ district: req.district }).lean().exec();
-            if (districtCoordinator && districtCoordinator.accountType) {
-              accountType = districtCoordinator.accountType;
-            }
-          } catch (e2) {
-            console.warn('Failed to fetch district coordinator accountType, using default:', e2.message);
-          }
-        }
-      }
-    } else if (req.district) {
-      // No assigned coordinator, but we have a district - try to find a coordinator for that district
-      try {
-        const districtCoordinator = await Coordinator.findOne({ district: req.district }).lean().exec();
-        if (districtCoordinator && districtCoordinator.accountType) {
-          accountType = districtCoordinator.accountType;
-        }
-      } catch (e) {
-        console.warn('Failed to fetch district coordinator accountType, using default:', e.message);
-      }
-    }
+    // Check if user with this email already exists
+    const existingUser = await User.findOne({ email: req.email.toLowerCase() });
+    if (existingUser) throw new Error('A user with this email already exists');
 
     req.status = 'approved';
     req.decisionAt = new Date();
     await req.save();
 
-    // Hash the password before creating stakeholder account
+    // Hash the password before creating user account
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(req.password, saltRounds);
 
-    // Create stakeholder account
-    const stakeholderId = 'STK-' + Date.now() + Math.random().toString(36).substr(2, 5).toUpperCase();
-    const stakeholder = new Stakeholder({
-      Stakeholder_ID: stakeholderId,
-      province: req.province,
-      district: req.district,
-      municipality: req.municipality,
-      coordinator: req.assignedCoordinator,
+    // Create user account with stakeholder role
+    const user = new User({
+      email: req.email.toLowerCase(),
       firstName: req.firstName,
-      middleName: req.middleName,
+      middleName: req.middleName || null,
       lastName: req.lastName,
-      email: req.email,
       phoneNumber: req.phoneNumber || null,
       password: hashedPassword,
-      organizationInstitution: req.organization,
-      accountType: accountType, // Set accountType to match coordinator's accountType
+      organizationType: req.organizationType || null,
+      organizationInstitution: req.organization || null,
+      isActive: true
     });
-    await stakeholder.save();
+    await user.save();
+
+    // Assign stakeholder role
+    const stakeholderRole = await permissionService.getRoleByCode('stakeholder');
+    if (stakeholderRole) {
+      await permissionService.assignRole(user._id, stakeholderRole._id, [], null, null);
+    }
+
+    // Assign locations if provided
+    if (req.district) {
+      await this.assignUserToLocation(user._id, req.district, 'exact', { isPrimary: true });
+    }
+    if (req.province) {
+      await this.assignUserToLocation(user._id, req.province, 'hierarchical', { isPrimary: false });
+    }
+    if (req.municipality) {
+      await this.assignUserToLocation(user._id, req.municipality, 'exact', { isPrimary: false });
+    }
 
     // Send acceptance email (with error handling to prevent blocking)
     const acceptanceMessage = `
@@ -144,7 +141,6 @@ class LocationService {
 
   Your account has been created with the following details:
   - Email: ${req.email}
-  - Stakeholder ID: ${stakeholderId}
 
   You can now log in to the system using your registered email and password.
 
@@ -168,7 +164,6 @@ class LocationService {
       <p style="margin: 0; font-weight: bold;">Your account has been created with the following details:</p>
       <ul style="margin: 10px 0 0 20px;">
         <li><strong>Email:</strong> ${req.email}</li>
-        <li><strong>Stakeholder ID:</strong> ${stakeholderId}</li>
       </ul>
     </div>
     <p>You can now log in to the system using your registered email and password.</p>
@@ -189,7 +184,7 @@ class LocationService {
     const { Notification } = require('../../models');
     const stakeholderName = `${req.firstName} ${req.lastName}`;
     await Notification.createSignupRequestApprovedNotification(
-      stakeholder.Stakeholder_ID,
+      user._id.toString(),
       req._id.toString(),
       stakeholderName
     );
@@ -258,14 +253,30 @@ class LocationService {
   }
 
   async getSignUpRequests(user) {
-    if (user.role === 'Admin') {
+    // Check permissions instead of roles
+    const permissionService = require('../users_services/permission.service');
+    const hasFullAccess = await permissionService.checkPermission(user.id, '*', '*', {});
+    const canManageLocations = await permissionService.checkPermission(user.id, 'location', 'read', {});
+    
+    if (user.isSystemAdmin || hasFullAccess) {
       return SignUpRequest.find({ status: 'pending', emailVerified: true }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
-    } else if (user.role === 'Coordinator') {
-      // Find coordinator record to get their district and province
-      const coord = await Coordinator.findOne({ Coordinator_ID: user.id });
-      if (!coord) return [];
-      // Show all pending requests in the coordinator's province and district
-      return SignUpRequest.find({ province: coord.province, district: coord.district, status: 'pending', emailVerified: true }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
+    } else if (canManageLocations) {
+      // Find coordinator user to get their locations
+      const coordinatorUser = await User.findById(user.id);
+      if (!coordinatorUser) return [];
+      const locationService = require('./location.service');
+      const locations = await locationService.getUserLocations(coordinatorUser._id);
+      const locationIds = locations.map(loc => loc.locationId);
+      // Show all pending requests in the coordinator's locations
+      return SignUpRequest.find({ 
+        $or: [
+          { district: { $in: locationIds } },
+          { province: { $in: locationIds } },
+          { municipality: { $in: locationIds } }
+        ],
+        status: 'pending', 
+        emailVerified: true 
+      }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
     }
     return [];
   }

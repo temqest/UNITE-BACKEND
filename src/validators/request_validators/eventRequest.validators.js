@@ -308,7 +308,8 @@ const validateUpdateEventRequest = (req, res, next) => {
   // We ignore any actor ids that may be present in the body to prevent
   // clients from spoofing roles. The route should be protected by
   // authentication middleware so req.user is available.
-  const actorPresent = !!(req.user && (req.user.role === 'Admin' || req.user.staff_type === 'Admin' || req.user.role === 'Coordinator' || req.user.staff_type === 'Coordinator' || req.user.role === 'Stakeholder' || req.user.staff_type === 'Stakeholder'));
+  // Check if user is authenticated (role checks removed - permissions are checked in middleware/controllers)
+  const actorPresent = !!(req.user && req.user.id);
 
   // Sanitize admin-related action fields (AdminAction/AdminNote/RescheduledDate)
   // from the incoming payload for all update requests. Admin actions should be

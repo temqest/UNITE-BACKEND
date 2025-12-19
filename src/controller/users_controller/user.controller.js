@@ -8,6 +8,7 @@ const { User, UserRole, UserLocation } = require('../../models');
 const permissionService = require('../../services/users_services/permission.service');
 const locationService = require('../../services/utility_services/location.service');
 const bcrypt = require('bcrypt');
+const { signToken } = require('../../utils/jwt');
 
 class UserController {
   /**
@@ -220,6 +221,160 @@ class UserController {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to delete user'
+      });
+    }
+  }
+
+  /**
+   * Authenticate user (login)
+   * POST /api/auth/login
+   */
+  async authenticateUser(req, res) {
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email and password are required'
+        });
+      }
+
+      // Find user by email
+      const user = await User.findByEmail(email);
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid email or password'
+        });
+      }
+
+      // Check if account is active
+      if (!user.isActive) {
+        return res.status(401).json({
+          success: false,
+          message: 'Account is inactive. Please contact an administrator.'
+        });
+      }
+
+      // Verify password
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid email or password'
+        });
+      }
+
+      // Get user roles to determine primary role
+      const roles = await permissionService.getUserRoles(user._id);
+      const primaryRole = roles.length > 0 ? roles[0] : null;
+      const roleCode = primaryRole ? primaryRole.code : null;
+
+      // Update last login
+      await user.updateLastLogin();
+
+      // Create JWT token payload
+      const tokenPayload = {
+        id: user._id.toString(),
+        email: user.email,
+        role: roleCode,
+        isSystemAdmin: user.isSystemAdmin || false
+      };
+
+      // Sign token
+      const token = signToken(tokenPayload);
+
+      // Prepare user response (without password)
+      const userResponse = user.toObject({ virtuals: true });
+      delete userResponse.password;
+
+      // Set cookie as fallback (optional, for cookie-based auth)
+      const cookieData = JSON.stringify({
+        id: user._id.toString(),
+        email: user.email,
+        role: roleCode,
+        isAdmin: user.isSystemAdmin || false
+      });
+
+      res.cookie('unite_user', cookieData, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 12 * 60 * 60 * 1000 // 12 hours
+      });
+
+      return res.status(200).json({
+        success: true,
+        token,
+        user: {
+          id: user._id.toString(),
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          fullName: userResponse.fullName,
+          role: roleCode,
+          isSystemAdmin: user.isSystemAdmin || false
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Authentication failed'
+      });
+    }
+  }
+
+  /**
+   * Get current authenticated user
+   * GET /api/auth/me
+   */
+  async getCurrentUser(req, res) {
+    try {
+      // req.user is set by authenticate middleware
+      if (!req.user || !req.user.id) {
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized'
+        });
+      }
+
+      // Find user
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Get user roles and permissions
+      const roles = await permissionService.getUserRoles(user._id);
+      const permissions = await permissionService.getUserPermissions(user._id);
+      const locations = await locationService.getUserLocations(user._id);
+
+      // Prepare user response
+      const userResponse = user.toObject({ virtuals: true });
+      delete userResponse.password;
+
+      return res.status(200).json({
+        success: true,
+        user: {
+          ...userResponse,
+          roles: roles.map(r => ({
+            _id: r._id,
+            code: r.code,
+            name: r.name,
+            description: r.description
+          })),
+          permissions,
+          locations
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get user'
       });
     }
   }

@@ -156,7 +156,7 @@ router.post('/notifications', validateCreateNotification, async (req, res, next)
 
 /**
  * @route   GET /api/notifications
- * @desc    Get notifications for a user (Admin or Coordinator)
+ * @desc    Get notifications for a user (requires appropriate permissions)
  * @access  Private
  */
 router.get('/notifications', async (req, res, next) => {

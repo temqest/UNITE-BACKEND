@@ -233,30 +233,30 @@ class MessageService {
     }
   }
 
-  // Helper method to get user details
+  // Helper method to get user details using User model
   async getUserDetails(userId) {
     try {
-      const { BloodbankStaff, Stakeholder } = require('../../models');
+      const { User } = require('../../models');
+      const permissionService = require('../users_services/permission.service');
 
-      const staff = await BloodbankStaff.findOne({ ID: userId });
-      if (staff) {
-        return {
-          id: userId,
-          name: `${staff.First_Name} ${staff.Last_Name}`,
-          role: staff.StaffType,
-          email: staff.Email,
-          type: 'staff'
-        };
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId);
+      } else {
+        user = await User.findByLegacyId(userId);
       }
 
-      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: userId });
-      if (stakeholder) {
+      if (user) {
+        // Get user roles
+        const roles = await permissionService.getUserRoles(user._id);
+        const primaryRole = roles.length > 0 ? roles[0].code : null;
+
         return {
-          id: userId,
-          name: `${stakeholder.firstName} ${stakeholder.lastName}`,
-          role: 'Stakeholder',
-          email: stakeholder.email,
-          type: 'stakeholder'
+          id: user._id.toString(),
+          name: user.fullName || `${user.firstName} ${user.lastName}`,
+          role: primaryRole,
+          email: user.email,
+          type: primaryRole || 'user'
         };
       }
 

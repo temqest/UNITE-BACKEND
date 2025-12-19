@@ -145,36 +145,14 @@ module.exports = {
 
 function getHumanStatusLabel(status, request = {}) {
   const s = String(status || '').toLowerCase();
-  const reviewerRole = request.reviewer && request.reviewer.roleSnapshot ? String(request.reviewer.roleSnapshot).toLowerCase() : null;
   
-  // Use requester.roleSnapshot from new model structure (fallback to legacy made_by_role for backward compatibility)
-  const creatorRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
-  const normalizedCreatorRole = creatorRole ? String(creatorRole).toLowerCase() : null;
+  // Get reviewer name if available for more personalized labels
+  const reviewerName = request.reviewer?.name || null;
   
-  // Determine effective reviewer role from reviewer field
-  let effectiveReviewerRole = reviewerRole;
-  
-  // If no reviewer role set, infer from requester role (for backward compatibility)
-  if (!effectiveReviewerRole && normalizedCreatorRole) {
-    // System admin requests are typically reviewed by coordinators
-    if (normalizedCreatorRole.includes('admin') || normalizedCreatorRole.includes('system')) {
-      effectiveReviewerRole = 'coordinator';
-    } else if (normalizedCreatorRole.includes('coordinator')) {
-      // Coordinator requests might be reviewed by stakeholders if stakeholder_id is present
-      if (request.requester?.id && request.stakeholderId) {
-        effectiveReviewerRole = 'stakeholder';
-      } else {
-        effectiveReviewerRole = 'coordinator';
-      }
-    } else if (normalizedCreatorRole.includes('stakeholder')) {
-      effectiveReviewerRole = 'coordinator';
-    }
-  }
-
   if (s.includes('pending')) {
-    if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review';
-    if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review';
-    if (effectiveReviewerRole === 'system-admin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
+    if (reviewerName) {
+      return `Waiting for ${reviewerName}'s review`;
+    }
     return 'Waiting for review';
   }
 
@@ -182,22 +160,24 @@ function getHumanStatusLabel(status, request = {}) {
     // review-accepted / review-rescheduled etc.
     if (s.includes('accepted')) return 'Waiting for confirmation';
     if (s.includes('resched') || s.includes('reschedule') || s.includes('rescheduled')) {
-      if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review (reschedule)';
-      if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review (reschedule)';
-      return 'Waiting for Admin review (reschedule)';
+      if (reviewerName) {
+        return `Waiting for ${reviewerName}'s review (reschedule)`;
+      }
+      return 'Waiting for review (reschedule)';
     }
-    // For other review states, use effective reviewer role
-    if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review';
-    if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review';
-    if (effectiveReviewerRole === 'system-admin' || effectiveReviewerRole === 'admin') return 'Waiting for Admin review';
+    // For other review states
+    if (reviewerName) {
+      return `Waiting for ${reviewerName}'s review`;
+    }
     return 'Waiting for review';
   }
 
   // Handle legacy or non-review rescheduled statuses like 'Rescheduled_By_Admin'
   if (s.includes('resched') || s.includes('reschedule') || s.includes('rescheduled')) {
-    if (effectiveReviewerRole === 'coordinator') return 'Waiting for Coordinator review (reschedule)';
-    if (effectiveReviewerRole === 'stakeholder') return 'Waiting for Stakeholder review (reschedule)';
-    return 'Waiting for Admin review (reschedule)';
+    if (reviewerName) {
+      return `Waiting for ${reviewerName}'s review (reschedule)`;
+    }
+    return 'Waiting for review (reschedule)';
   }
 
   if (s.includes('completed')) return 'Completed';

@@ -155,28 +155,74 @@ class ReviewerAssignmentService {
       throw new Error('No candidate reviewers available');
     }
 
-    // If priority order is specified, sort by priority
-    if (rule.priority && rule.priority.length > 0) {
-      const priorityMap = {};
-      rule.priority.forEach((roleCode, index) => {
-        priorityMap[roleCode] = index;
-      });
+    // If permission-based priority order is specified, sort by priority
+    if (rule.priority && Array.isArray(rule.priority) && rule.priority.length > 0) {
+      // Check if priority is permission-based (new format) or role-based (legacy)
+      const isPermissionBased = rule.priority[0] && typeof rule.priority[0] === 'object' && rule.priority[0].permissions;
+      
+      if (isPermissionBased) {
+        // Permission-based priority: sort by permission weight
+        const candidatesWithPriority = await Promise.all(
+          candidateReviewers.map(async (user) => {
+            const userPermissions = await permissionService.getUserPermissions(user._id, context.locationId);
+            const permissionSet = new Set();
+            userPermissions.forEach(perm => {
+              if (perm.resource === '*') {
+                permissionSet.add('*');
+              } else {
+                perm.actions.forEach(action => {
+                  if (action === '*') {
+                    permissionSet.add(`${perm.resource}.*`);
+                  } else {
+                    permissionSet.add(`${perm.resource}.${action}`);
+                  }
+                });
+              }
+            });
+            
+            // Find the highest priority (lowest weight) that matches user's permissions
+            let bestPriority = Infinity;
+            for (const priorityRule of rule.priority) {
+              const requiredPerms = priorityRule.permissions || [];
+              const hasAllPerms = requiredPerms.every(perm => {
+                if (perm === '*') return permissionSet.has('*');
+                return permissionSet.has(perm) || permissionSet.has('*');
+              });
+              
+              if (hasAllPerms && priorityRule.weight < bestPriority) {
+                bestPriority = priorityRule.weight;
+              }
+            }
+            
+            return { user, priority: bestPriority };
+          })
+        );
 
-      // Get roles for each candidate and sort by priority
-      const candidatesWithRoles = await Promise.all(
-        candidateReviewers.map(async (user) => {
-          const roles = await permissionService.getUserRoles(user._id);
-          const roleCodes = roles.map(r => r.code);
-          const minPriority = Math.min(
-            ...roleCodes.map(code => priorityMap[code] ?? Infinity)
-          );
-          return { user, priority: minPriority };
-        })
-      );
+        candidatesWithPriority.sort((a, b) => a.priority - b.priority);
+        const selectedUser = candidatesWithPriority[0].user;
+        return await this._formatReviewer(selectedUser);
+      } else {
+        // Legacy role-based priority (for backward compatibility)
+        const priorityMap = {};
+        rule.priority.forEach((roleCode, index) => {
+          priorityMap[roleCode] = index;
+        });
 
-      candidatesWithRoles.sort((a, b) => a.priority - b.priority);
-      const selectedUser = candidatesWithRoles[0].user;
-      return await this._formatReviewer(selectedUser);
+        const candidatesWithRoles = await Promise.all(
+          candidateReviewers.map(async (user) => {
+            const roles = await permissionService.getUserRoles(user._id);
+            const roleCodes = roles.map(r => r.code);
+            const minPriority = Math.min(
+              ...roleCodes.map(code => priorityMap[code] ?? Infinity)
+            );
+            return { user, priority: minPriority };
+          })
+        );
+
+        candidatesWithRoles.sort((a, b) => a.priority - b.priority);
+        const selectedUser = candidatesWithRoles[0].user;
+        return await this._formatReviewer(selectedUser);
+      }
     }
 
     // Default: return first candidate
@@ -201,17 +247,26 @@ class ReviewerAssignmentService {
   }
 
   /**
-   * Assign fallback reviewer (system admin)
+   * Assign fallback reviewer (users with full access permissions)
    * @private
    */
   async _assignFallbackReviewer(fallbackRole = 'system-admin') {
+    // Try to find users with full access permissions first
+    const usersWithFullAccess = await permissionService.getUsersWithPermission('*', null);
+    if (usersWithFullAccess.length > 0) {
+      const user = await User.findById(usersWithFullAccess[0]);
+      if (user) {
+        return await this._formatReviewer(user);
+      }
+    }
+
+    // Fallback: use role-based lookup for backward compatibility
     const { Role } = require('../../models');
     const role = await Role.findOne({ code: fallbackRole });
     if (!role) {
       return null;
     }
 
-    // Find users with this role
     const { UserRole } = require('../../models');
     const userRoles = await UserRole.find({ 
       roleId: role._id, 
@@ -219,7 +274,6 @@ class ReviewerAssignmentService {
     }).limit(1);
 
     if (userRoles.length === 0) {
-      // No users with this role found
       return null;
     }
 
@@ -295,7 +349,7 @@ class ReviewerAssignmentService {
     };
   }
 
-  // Legacy methods for backward compatibility
+  // Legacy methods for backward compatibility (deprecated - use assignReviewer instead)
   async assignCoordinatorReviewer(coordinatorId = null) {
     // Try to find user by legacy coordinator ID
     if (coordinatorId) {
@@ -305,7 +359,16 @@ class ReviewerAssignmentService {
       }
     }
 
-    // Find any user with coordinator role
+    // Find any user with request.review permission (permission-based approach)
+    const usersWithReviewPerm = await permissionService.getUsersWithPermission('request.review', null);
+    if (usersWithReviewPerm.length > 0) {
+      const user = await User.findById(usersWithReviewPerm[0]);
+      if (user) {
+        return await this._formatReviewer(user);
+      }
+    }
+
+    // Fallback: use role-based lookup for backward compatibility
     const { Role } = require('../../models');
     const coordinatorRole = await Role.findOne({ code: 'coordinator' });
     if (coordinatorRole) {
@@ -319,7 +382,7 @@ class ReviewerAssignmentService {
       }
     }
 
-    throw new Error('No coordinator available to assign as reviewer');
+    throw new Error('No reviewer available to assign');
   }
 
   async assignSystemAdminReviewer() {

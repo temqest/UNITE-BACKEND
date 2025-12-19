@@ -5,11 +5,7 @@ const {
   BloodDrive,
   Advocacy,
   Training,
-  EventStaff,
-  Coordinator,
-  Stakeholder,
-  BloodbankStaff,
-  SystemAdmin
+  EventStaff
 } = require('../../models/index');
 
 class EventDetailsService {
@@ -79,20 +75,23 @@ class EventDetailsService {
       // Get stakeholder information
       const stakeholder = await this.getStakeholderInfo(event.stakeholder_id);
       
-      // Get admin information (if approved)
+      // Get admin information (if approved) - using User model
       let admin = null;
       if (event.ApprovedByAdminID) {
-        const adminRecord = await SystemAdmin.findOne({ Admin_ID: event.ApprovedByAdminID });
-        if (adminRecord) {
-          const adminStaff = await BloodbankStaff.findOne({ ID: event.ApprovedByAdminID });
-          if (adminStaff) {
-            admin = {
-              id: event.ApprovedByAdminID,
-              name: `${adminStaff.First_Name} ${adminStaff.Last_Name}`,
-              email: adminStaff.Email,
-              access_level: adminRecord.AccessLevel
-            };
-          }
+        const { User } = require('../../models');
+        let adminUser = null;
+        if (require('mongoose').Types.ObjectId.isValid(event.ApprovedByAdminID)) {
+          adminUser = await User.findById(event.ApprovedByAdminID);
+        } else {
+          adminUser = await User.findByLegacyId(event.ApprovedByAdminID);
+        }
+        if (adminUser && adminUser.isSystemAdmin) {
+          admin = {
+            id: adminUser._id.toString(),
+            name: adminUser.fullName || `${adminUser.firstName} ${adminUser.lastName}`,
+            email: adminUser.email,
+            access_level: adminUser.metadata?.accessLevel || 'super'
+          };
         }
       }
 
@@ -225,36 +224,37 @@ class EventDetailsService {
   }
 
   /**
-   * Get coordinator information
+   * Get coordinator information using User model
    * @param {string} coordinatorId 
    * @returns {Object} Coordinator info
    */
   async getCoordinatorInfo(coordinatorId) {
     try {
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId })
-        .populate('district', 'name') // Populate district name
-        .populate('province', 'name'); // Also populate province if needed
+      const { User } = require('../../models');
+      let user = null;
       
-      if (!coordinator) {
+      if (require('mongoose').Types.ObjectId.isValid(coordinatorId)) {
+        user = await User.findById(coordinatorId);
+      } else {
+        user = await User.findByLegacyId(coordinatorId);
+      }
+      
+      if (!user) {
         return null;
       }
 
-      const staff = await BloodbankStaff.findOne({ ID: coordinatorId });
-      if (!staff) {
-        return {
-          id: coordinatorId,
-          district: coordinator.district,
-          province: coordinator.province
-        };
-      }
+      // Get user locations
+      const locationService = require('../utility_services/location.service');
+      const locations = await locationService.getUserLocations(user._id);
 
       return {
-        id: coordinatorId,
-        district: coordinator.district,
-        province: coordinator.province,
-        name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
-        email: staff.Email,
-        phone: staff.Phone_Number
+        id: user._id.toString(),
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: user.fullName || `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        phone: user.phoneNumber,
+        locations: locations
       };
 
     } catch (error) {
@@ -264,7 +264,7 @@ class EventDetailsService {
   }
 
   /**
-   * Get stakeholder information
+   * Get stakeholder information using User model
    * @param {string} stakeholderId 
    * @returns {Object} Stakeholder info
    */
@@ -274,30 +274,31 @@ class EventDetailsService {
         return null;
       }
 
-      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId })
-        .populate('district', 'name')
-        .populate('province', 'name');
+      const { User } = require('../../models');
+      let user = null;
       
-      if (!stakeholder) {
+      if (require('mongoose').Types.ObjectId.isValid(stakeholderId)) {
+        user = await User.findById(stakeholderId);
+      } else {
+        user = await User.findByLegacyId(stakeholderId);
+      }
+      
+      if (!user) {
         return null;
       }
 
-      const staff = await BloodbankStaff.findOne({ ID: stakeholderId });
-      if (!staff) {
-        return {
-          id: stakeholderId,
-          district: stakeholder.district,
-          province: stakeholder.province
-        };
-      }
+      // Get user locations
+      const locationService = require('../utility_services/location.service');
+      const locations = await locationService.getUserLocations(user._id);
 
       return {
-        id: stakeholderId,
-        district: stakeholder.district,
-        province: stakeholder.province,
-        name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
-        email: staff.Email,
-        phone: staff.Phone_Number
+        id: user._id.toString(),
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: user.fullName || `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        phone: user.phoneNumber,
+        locations: locations
       };
 
     } catch (error) {
@@ -422,24 +423,48 @@ class EventDetailsService {
         .lean();
 
       // Collect unique coordinator and stakeholder ids to resolve names in batch
-      const coordinatorIds = Array.from(new Set(events.map(e => e.coordinator_id || (e.made_by_role !== 'Stakeholder' ? e.made_by_id : null)).filter(Boolean)));
-      const stakeholderIds = Array.from(new Set(events.map(e => e.stakeholder_id || e.stakeholder?.toString() || (e.made_by_role === 'Stakeholder' ? e.made_by_id : null)).filter(Boolean)));
+      // Get coordinator and stakeholder IDs from events (role-agnostic)
+      const coordinatorIds = Array.from(new Set(events.map(e => e.coordinator_id || e.coordinator?.toString()).filter(Boolean)));
+      const stakeholderIds = Array.from(new Set(events.map(e => e.stakeholder_id || e.stakeholder?.toString()).filter(Boolean)));
 
-      const [staffDocs, coordDocs, stakeholderDocs] = await Promise.all([
-        // staff records may use ID
-        coordinatorIds.length ? BloodbankStaff.find({ ID: { $in: coordinatorIds } }).select('ID First_Name Middle_Name Last_Name Email Phone_Number').lean() : Promise.resolve([]),
-        coordinatorIds.length ? Coordinator.find({ Coordinator_ID: { $in: coordinatorIds } }).populate('district', 'name code').lean() : Promise.resolve([]),
-        stakeholderIds.length ? Stakeholder.find({ Stakeholder_ID: { $in: stakeholderIds } }).select('Stakeholder_ID firstName lastName').populate('district', 'name code').lean() : Promise.resolve([])
-      ]);
-
-      const staffById = new Map();
-      for (const s of staffDocs) staffById.set(String(s.ID), s);
+      // Use User model instead of legacy models
+      const { User } = require('../../models');
+      const coordUsers = [];
+      const stakeholderUsers = [];
+      
+      // Fetch coordinator users
+      for (const coordId of coordinatorIds) {
+        let user = null;
+        if (require('mongoose').Types.ObjectId.isValid(coordId)) {
+          user = await User.findById(coordId).lean();
+        } else {
+          user = await User.findByLegacyId(coordId).lean();
+        }
+        if (user) coordUsers.push(user);
+      }
+      
+      // Fetch stakeholder users
+      for (const stakeId of stakeholderIds) {
+        let user = null;
+        if (require('mongoose').Types.ObjectId.isValid(stakeId)) {
+          user = await User.findById(stakeId).lean();
+        } else {
+          user = await User.findByLegacyId(stakeId).lean();
+        }
+        if (user) stakeholderUsers.push(user);
+      }
 
       const coordById = new Map();
-      for (const c of coordDocs) coordById.set(String(c.Coordinator_ID), c);
+      for (const u of coordUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        coordById.set(String(id), u);
+      }
 
       const stakeholderById = new Map();
-      for (const st of stakeholderDocs) stakeholderById.set(String(st.Stakeholder_ID), st);
+      for (const u of stakeholderUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        stakeholderById.set(String(id), u);
+      }
 
       // Fetch categories in parallel to include category/type and categoryData
       const categories = await Promise.all(events.map(ev => this.getEventCategory(ev.Event_ID)));
@@ -448,7 +473,8 @@ class EventDetailsService {
         let coordId = e.coordinator_id;
         let stakeholderId = e.stakeholder_id || e.stakeholder?.toString();
         if (!coordId && !stakeholderId) {
-          if (e.made_by_role === 'Stakeholder') {
+          // Check if event has stakeholder (role-agnostic check)
+          if (e.stakeholder_id || e.stakeholder) {
             stakeholderId = e.made_by_id;
           } else {
             coordId = e.made_by_id;
@@ -480,9 +506,9 @@ class EventDetailsService {
             district_name: coord ? (coord.District_Name || null) : null
           },
           stakeholder: stakeholder ? ({
-            id: stakeholder.Stakeholder_ID || stakeholder._id,
-            name: `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim(),
-            district_number: stakeholder.district?.code || this.extractDistrictNumber(stakeholder.district?.name) || null
+            id: stakeholder._id ? stakeholder._id.toString() : (stakeholder.userId || stakeholder.id),
+            name: stakeholder.fullName || `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim(),
+            district_number: null // District info would need to come from UserLocation if needed
           }) : null,
           category: category.type,
           categoryData: category.data || null,

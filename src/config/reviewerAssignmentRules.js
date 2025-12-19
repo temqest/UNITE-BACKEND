@@ -23,9 +23,13 @@ module.exports = {
     requiredPermissions: ['request.review', 'event.approve'],
     locationScope: 'same-or-parent',
     excludeRequester: true,
-    // Optional priority order for role selection (if multiple users have permissions)
-    priority: ['system-admin', 'coordinator'],
-    fallbackReviewer: 'system-admin'
+    // Permission-based priority: users with more permissions get higher priority
+    priority: [
+      { permissions: ['request.review', 'event.approve', '*'], weight: 1 }, // Highest priority: full access or both permissions
+      { permissions: ['request.review', 'event.approve'], weight: 2 }, // High priority: both required permissions
+      { permissions: ['request.review'], weight: 3 } // Lower priority: only review permission
+    ],
+    fallbackReviewer: 'system-admin' // Fallback role code (used for lookup, not logic)
   },
 
   // Blood bag request specific rules

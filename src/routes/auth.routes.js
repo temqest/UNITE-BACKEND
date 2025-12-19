@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { bloodbankStaffController, stakeholderController } = require('../controller/users_controller');
+const { userController } = require('../controller/users_controller');
 const authenticate = require('../middleware/authenticate');
 const rateLimiter = require('../middleware/rateLimiter');
 
@@ -21,7 +21,7 @@ router.post('/login', rateLimiter.auth, async (req, res, next) => {
         message: 'Email and password are required'
       });
     }
-    await bloodbankStaffController.authenticateUser(req, res);
+    await userController.authenticateUser(req, res);
   } catch (error) {
     next(error);
   }
@@ -34,7 +34,7 @@ router.post('/login', rateLimiter.auth, async (req, res, next) => {
  */
 router.get('/me', authenticate, async (req, res, next) => {
   try {
-    await bloodbankStaffController.getCurrentUser(req, res);
+    await userController.getCurrentUser(req, res);
   } catch (error) {
     next(error);
   }
@@ -69,18 +69,4 @@ router.post('/logout', async (req, res, next) => {
 });
 
 module.exports = router;
-
-/**
- * Stakeholder auth endpoints
- */
-router.post('/stakeholders/login', rateLimiter.auth, async (req, res, next) => {
-  try {
-    if (!req.body.email || !req.body.password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required' });
-    }
-    await stakeholderController.login(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
 

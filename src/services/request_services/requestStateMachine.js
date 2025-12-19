@@ -30,12 +30,6 @@ const ACTIONS = Object.freeze({
   DELETE: 'delete'
 });
 
-const ROLES = Object.freeze({
-  SYSTEM_ADMIN: 'system-admin',
-  COORDINATOR: 'coordinator',
-  STAKEHOLDER: 'stakeholder'
-});
-
 // Local copy of review decision constants (matches requestFlow.helpers)
 const REVIEW_DECISIONS = Object.freeze({
   ACCEPT: 'accept',
@@ -44,152 +38,124 @@ const REVIEW_DECISIONS = Object.freeze({
 });
 
 /**
- * State Transition Rules
+ * State Transition Rules - Permission-Based
+ * Actions are determined by permissions, not role names
  */
 const STATE_TRANSITIONS = {
   [REQUEST_STATES.PENDING_REVIEW]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE] // Stakeholders can review when assigned as reviewer
-    },
+    // Reviewer actions: users with request.review permission can review
+    reviewerActions: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE],
+    // Requester actions
+    requesterActions: [ACTIONS.VIEW],
     transitions: {
       [ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED,
       [ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED,
       [ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
-    },
-    requesterActions: [ACTIONS.VIEW]
+    }
   },
 
   [REQUEST_STATES.REVIEW_ACCEPTED]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW]
-    },
+    reviewerActions: [ACTIONS.VIEW],
+    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM],
     transitions: {
       [ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED
-    },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM] 
+    }
   },
 
   [REQUEST_STATES.REVIEW_REJECTED]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.DELETE],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.CONFIRM]
-    },
+    // Users with request.delete permission can delete rejected requests
+    reviewerActions: [ACTIONS.VIEW],
+    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM],
     transitions: {
       [ACTIONS.CONFIRM]: REQUEST_STATES.REJECTED,
       [ACTIONS.DELETE]: REQUEST_STATES.CLOSED
-    },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM] 
+    }
   },
 
   [REQUEST_STATES.REVIEW_RESCHEDULED]: {
-    // These defaults are overridden by specific logic in getAllowedActions based on who proposed
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW], 
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.RESCHEDULE], 
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW] 
-    },
+    // Reviewer can accept or counter-reschedule
+    reviewerActions: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.RESCHEDULE],
+    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.RESCHEDULE],
     transitions: {
       [ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED,
       [ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED,
       [ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED,
       [ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
-    },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.RESCHEDULE], 
-    reviewerActions: [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.RESCHEDULE] 
+    }
   },
 
   [REQUEST_STATES.AWAITING_CONFIRMATION]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW]
-    },
+    reviewerActions: [ACTIONS.VIEW],
+    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT],
     transitions: {
       [ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED,
       [ACTIONS.REJECT]: REQUEST_STATES.REJECTED
-    },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.REJECT]
+    }
   },
 
   [REQUEST_STATES.APPROVED]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.RESCHEDULE] // Removed CANCEL - only Admin/Coord can cancel
-    },
+    // Users with request.update permission can edit
+    // Users with request.cancel permission can cancel
+    reviewerActions: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL],
+    requesterActions: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL],
     transitions: {
       [ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED,
       [ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED
-    },
-    requesterActions: [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE, ACTIONS.CANCEL]
+    }
   },
 
   [REQUEST_STATES.REJECTED]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.DELETE],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW]
-    },
+    reviewerActions: [ACTIONS.VIEW],
+    requesterActions: [ACTIONS.VIEW],
     transitions: {
       [ACTIONS.DELETE]: REQUEST_STATES.CLOSED
-    },
-    requesterActions: [ACTIONS.VIEW]
+    }
   },
 
   [REQUEST_STATES.CANCELLED]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW, ACTIONS.DELETE],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW]
-    },
+    reviewerActions: [ACTIONS.VIEW],
+    requesterActions: [ACTIONS.VIEW],
     transitions: {
       [ACTIONS.DELETE]: REQUEST_STATES.CLOSED
-    },
-    requesterActions: [ACTIONS.VIEW]
+    }
   },
 
   [REQUEST_STATES.CLOSED]: {
-    allowedActions: {
-      [ROLES.SYSTEM_ADMIN]: [ACTIONS.VIEW],
-      [ROLES.COORDINATOR]: [ACTIONS.VIEW],
-      [ROLES.STAKEHOLDER]: [ACTIONS.VIEW]
-    },
-    transitions: {},
-    requesterActions: [ACTIONS.VIEW]
+    reviewerActions: [ACTIONS.VIEW],
+    requesterActions: [ACTIONS.VIEW],
+    transitions: {}
   }
 };
 
 /**
- * Reviewer Assignment Rules
+ * Permission mapping for actions
+ * Maps actions to required permissions
  */
-const REVIEWER_ASSIGNMENT_RULES = {
-  [ROLES.SYSTEM_ADMIN]: {
-    reviewerRole: ROLES.COORDINATOR,
-    allowAdminOverride: true
-  },
-  [ROLES.COORDINATOR]: {
-    reviewerRole: ROLES.SYSTEM_ADMIN,
-    allowAdminOverride: true
-  },
-  [ROLES.STAKEHOLDER]: {
-    reviewerRole: ROLES.COORDINATOR,
-    allowAdminOverride: true,
-    fallbackReviewer: ROLES.SYSTEM_ADMIN
-  }
+const ACTION_PERMISSIONS = {
+  [ACTIONS.VIEW]: { resource: 'request', action: 'read' },
+  [ACTIONS.ACCEPT]: { resource: 'request', action: 'approve' },
+  [ACTIONS.REJECT]: { resource: 'request', action: 'reject' },
+  [ACTIONS.RESCHEDULE]: { resource: 'request', action: 'reschedule' },
+  [ACTIONS.CONFIRM]: { resource: 'request', action: 'confirm' },
+  [ACTIONS.DECLINE]: { resource: 'request', action: 'decline' },
+  [ACTIONS.EDIT]: { resource: 'request', action: 'update' },
+  [ACTIONS.CANCEL]: { resource: 'request', action: 'cancel' },
+  [ACTIONS.DELETE]: { resource: 'request', action: 'delete' },
+  [ACTIONS.MANAGE_STAFF]: { resource: 'request', action: 'update' } // Staff management requires update permission
 };
 
 class RequestStateMachine {
   /**
-   * Get allowed actions for a user in a given state
+   * Get allowed actions for a user in a given state (permission-based)
+   * @param {string} state - Current request state
+   * @param {string|null} userRole - User role (deprecated, kept for backward compatibility)
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} request - Request object
+   * @returns {Promise<string[]>} Array of allowed action names
    */
-  getAllowedActions(state, userRole, userId, request = {}) {
+  async getAllowedActions(state, userRole, userId, request = {}) {
+    const permissionService = require('../users_services/permission.service');
     const normalizedState = this.normalizeState(state);
-    const normalizedRole = this.normalizeRole(userRole);
     
     if (!STATE_TRANSITIONS[normalizedState]) {
       return [ACTIONS.VIEW];
@@ -197,32 +163,18 @@ class RequestStateMachine {
 
     const stateConfig = STATE_TRANSITIONS[normalizedState];
     const isRequester = this.isRequester(userId, request);
-    let isReviewer = this.isReviewer(userId, userRole, request);
-    const isAdmin = normalizedRole === ROLES.SYSTEM_ADMIN;
+    const isReviewer = this.isReviewer(userId, null, request); // userRole no longer needed
     
-    // Debug logging for Coordinator-Stakeholder cases
-    const creatorRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
-    const normalizedCreatorRole = creatorRole ? this.normalizeRole(creatorRole) : null;
-    const isCoordinatorRequest = normalizedCreatorRole === ROLES.COORDINATOR;
-    // Check if requester is stakeholder or if stakeholder is explicitly referenced
-    const hasStakeholder = !!(request.requester?.roleSnapshot === 'stakeholder' || request.stakeholder_id || request.stakeholderId);
-    const isCoordinatorStakeholderCase = isCoordinatorRequest && hasStakeholder;
+    // Get location context for permission checks
+    const locationId = request.location?.district || request.district || request.locationId;
     
-    if (isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER && process.env.NODE_ENV !== 'production') {
-      const stakeholderId = request.stakeholder_id || request.stakeholderId;
-      console.log('[getAllowedActions] Coordinator-Stakeholder case detected:', {
-        state,
-        normalizedState,
-        userRole,
-        normalizedRole,
-        userId,
-        stakeholderId,
-        reviewer: request.reviewer,
-        isReviewer,
-        isRequester,
-        hasStakeholderActions: !!stateConfig.allowedActions[ROLES.STAKEHOLDER]
-      });
-    }
+    // Check if user has system admin permissions (full access)
+    const hasFullAccess = await permissionService.checkPermission(
+      userId,
+      '*',
+      '*',
+      { locationId }
+    );
 
     // --- Special Logic for Rescheduling Loop ---
     // Check both normalized state and raw state to handle variations
@@ -235,132 +187,40 @@ class RequestStateMachine {
       const rescheduleProposal = request.rescheduleProposal;
       
       // CRITICAL: If current user is the one who proposed the reschedule, they can only VIEW
-      // This prevents Coordinator/Admin from accepting their own reschedule proposals
+      // This prevents users from accepting their own reschedule proposals
       if (rescheduleProposal && rescheduleProposal.proposedBy && rescheduleProposal.proposedBy.id) {
         const proposerId = rescheduleProposal.proposedBy.id;
         if (String(proposerId) === String(userId)) {
-          if (process.env.NODE_ENV !== 'production') {
-            console.log('[getAllowedActions] User is the reschedule proposer -> Only VIEW allowed:', {
-              proposerId,
-              userId,
-              proposerRole: rescheduleProposal.proposedBy.role,
-              userRole: normalizedRole
-            });
-          }
           return [ACTIONS.VIEW];
         }
       }
       
-      const hasStakeholder = !!(request.requester?.roleSnapshot === 'stakeholder' || request.stakeholder_id || request.stakeholderId);
-      const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
-      const isCoordinatorStakeholderCase = normalizedCreatorRole === ROLES.COORDINATOR && hasStakeholder;
-
-      if (process.env.NODE_ENV !== 'production' && isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) {
-        console.log('[getAllowedActions] Reschedule state check:', {
-          normalizedState,
-          rawState,
-          isRescheduledState,
-          hasRescheduleProposal: !!rescheduleProposal,
-          proposerRole: rescheduleProposal?.proposedBy?.role,
-          isCoordinatorStakeholderCase
-        });
-      }
-
-      // Handle reschedule proposals for both Stakeholder-created requests and Coordinator-Stakeholder cases
-      if ((isStakeholderRequest || isCoordinatorStakeholderCase) && rescheduleProposal && rescheduleProposal.proposedBy) {
-        const proposerRole = this.normalizeRole(rescheduleProposal.proposedBy.role);
+      // Check if there's a reschedule proposal and user is the recipient
+      if (rescheduleProposal && rescheduleProposal.proposedBy) {
         const proposerId = rescheduleProposal.proposedBy.id;
-
-        // Note: The proposer check is already handled above, so this section handles the recipient of the proposal
-
-        // 2. If STAKEHOLDER proposed -> Coordinator acts (or Admin in Coordinator-Stakeholder cases)
-        if (proposerRole === ROLES.STAKEHOLDER && normalizedRole === ROLES.COORDINATOR) {
-          // Explicitly: View, Accept, Reschedule (No Reject per requirements)
-          return [ACTIONS.VIEW, ACTIONS.ACCEPT, ACTIONS.RESCHEDULE];
+        const isRecipient = !isRequester && isReviewer && String(proposerId) !== String(userId);
+        
+        if (isRecipient) {
+          // Recipient can accept or counter-reschedule
+          const canAccept = await permissionService.checkPermission(userId, 'request', 'approve', { locationId });
+          const canReschedule = await permissionService.checkPermission(userId, 'request', 'reschedule', { locationId });
+          
+          const actions = [ACTIONS.VIEW];
+          if (canAccept) actions.push(ACTIONS.ACCEPT);
+          if (canReschedule) actions.push(ACTIONS.RESCHEDULE);
+          return actions;
         }
-
-        // 3. If COORDINATOR proposed (counter-offer) -> Stakeholder acts
-        // This applies to both Stakeholder-created requests AND Coordinator-Stakeholder cases
-        if (proposerRole === ROLES.COORDINATOR && normalizedRole === ROLES.STAKEHOLDER) {
-          const stakeholderId = request.stakeholder_id || request.stakeholderId;
-          // Check if this user is the stakeholder (for both Stakeholder-created and Coordinator-Stakeholder cases)
-          if (stakeholderId && String(stakeholderId) === String(userId)) {
-            if (process.env.NODE_ENV !== 'production') {
-              console.log('[getAllowedActions] Coordinator proposed reschedule -> Stakeholder can confirm/reschedule:', {
-                proposerRole,
-                normalizedRole,
-                stakeholderId,
-                userId,
-                isCoordinatorStakeholderCase,
-                rescheduleProposal: rescheduleProposal.proposedBy
-              });
-            }
-            // Stakeholder confirms (accepts) or counter-reschedules
-            return [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.RESCHEDULE];
-          } else {
-            if (process.env.NODE_ENV !== 'production') {
-              console.log('[getAllowedActions] Coordinator proposed reschedule but stakeholder ID mismatch:', {
-                stakeholderId,
-                userId,
-                requestStakeholderId: request.stakeholder_id,
-                requestStakeholderIdAlt: request.stakeholderId
-              });
-            }
-          }
-        } else {
-          if (process.env.NODE_ENV !== 'production' && isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) {
-            console.log('[getAllowedActions] Reschedule proposal check failed:', {
-              proposerRole,
-              normalizedRole,
-              expectedProposerRole: ROLES.COORDINATOR,
-              expectedUserRole: ROLES.STAKEHOLDER
-            });
-          }
+        
+        // If requester received a reschedule proposal, they can confirm or counter-reschedule
+        if (isRequester && String(proposerId) !== String(userId)) {
+          const canConfirm = await permissionService.checkPermission(userId, 'request', 'confirm', { locationId });
+          const canReschedule = await permissionService.checkPermission(userId, 'request', 'reschedule', { locationId });
+          
+          const actions = [ACTIONS.VIEW];
+          if (canConfirm) actions.push(ACTIONS.CONFIRM);
+          if (canReschedule) actions.push(ACTIONS.RESCHEDULE);
+          return actions;
         }
-
-        // 4. System Admin should not be involved in this loop automatically
-        if (isAdmin) {
-            // Only allow view unless they override
-            return [ACTIONS.VIEW];
-        }
-      }
-    }
-
-    // --- Standard Logic Follows ---
-
-    // Additional fallback for SystemAdmin-created requests
-    // Note: creatorRole and normalizedCreatorRole are already declared above for debug logging
-    const isSystemAdminRequest = normalizedCreatorRole === ROLES.SYSTEM_ADMIN;
-    
-    // Check if user is the assigned reviewer
-    if (!isReviewer && request.reviewer) {
-      const reviewerId = request.reviewer.id || request.reviewer.userId;
-      if (reviewerId && String(reviewerId) === String(userId)) {
-        isReviewer = true;
-      }
-    }
-    
-    // Legacy fallback: Check coordinator_id for backward compatibility
-    if (!isReviewer && isSystemAdminRequest && normalizedRole === ROLES.COORDINATOR) {
-      const requesterId = request.requester?.id || request.requester?.userId;
-      if (requesterId && String(requesterId) === String(userId)) {
-        isReviewer = true;
-      }
-    }
-    
-    // NEW: Check if this is a Coordinator-Stakeholder case and user is the Stakeholder reviewer
-    if (!isReviewer && isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) {
-      const stakeholderId = request.requester?.id || request.stakeholder_id || request.stakeholderId;
-      if (stakeholderId && String(stakeholderId) === String(userId)) {
-        isReviewer = true;
-      }
-    }
-    
-    // Fallback for Stakeholder requests: coordinators are reviewers
-    if (!isReviewer && normalizedCreatorRole === ROLES.STAKEHOLDER && normalizedRole === ROLES.COORDINATOR) {
-      const reviewerId = request.reviewer?.id || request.reviewer?.userId;
-      if (reviewerId && String(reviewerId) === String(userId)) {
-        isReviewer = true;
       }
     }
 
@@ -381,189 +241,123 @@ class RequestStateMachine {
         }
       }
       
-      // Allow Admin to confirm in review-accepted state if:
-      // 1. Requester is Admin (admin-created request reviewed by Coordinator) → Admin can confirm
-      // 2. Requester is Coordinator and Admin is the reviewer (coordinator-created request reviewed by Admin) → Admin can confirm
-      // This check must happen BEFORE the isReviewer check to allow Admin reviewers to confirm
-      const isAdminRequester = normalizedCreatorRole === ROLES.SYSTEM_ADMIN;
-      const isCoordinatorRequester = normalizedCreatorRole === ROLES.COORDINATOR;
-      // Check if the current Admin user IS the reviewer (by ID match)
-      const isAdminReviewer = isAdmin && request.reviewer && request.reviewer.id && 
-                              String(request.reviewer.id) === String(userId) &&
-                              request.reviewer.role && 
-                              (String(request.reviewer.role).toLowerCase() === 'systemadmin' || 
-                               String(request.reviewer.role).toLowerCase() === 'admin');
-      
-      if (isAdmin && stateConfig.requesterActions && stateConfig.requesterActions.includes(ACTIONS.CONFIRM)) {
-        if (isAdminRequester || (isCoordinatorRequester && isAdminReviewer)) {
-          if (process.env.NODE_ENV !== 'production') {
-            console.log('[getAllowedActions] Admin can confirm in review-accepted:', {
-              isAdminRequester,
-              isCoordinatorRequester,
-              isAdminReviewer,
-              reviewerId: request.reviewer?.id,
-              userId,
-              reviewerRole: request.reviewer?.role
-            });
+      // If user is the reviewer who just made the decision, they can only view
+      if (isReviewer || justMadeDecision) {
+        // Exception: If reviewer is also the requester (or has full access), they can confirm
+        if (isRequester || hasFullAccess) {
+          const canConfirm = await permissionService.checkPermission(userId, 'request', 'confirm', { locationId });
+          if (canConfirm && stateConfig.requesterActions) {
+            return stateConfig.requesterActions;
           }
-          return stateConfig.requesterActions;
         }
-      }
-      
-      // If user is the reviewer who just made the decision, they can only view (unless Admin exception above)
-      if ((isReviewer || justMadeDecision) && !(isAdmin && (isAdminRequester || (isCoordinatorRequester && isAdminReviewer)))) {
         return [ACTIONS.VIEW];
       }
       
+      // Requester can confirm/decline
       if (isRequester && stateConfig.requesterActions) {
-        return stateConfig.requesterActions;
+        // Filter actions by permissions
+        const filteredActions = await this._filterActionsByPermissions(
+          stateConfig.requesterActions,
+          userId,
+          locationId,
+          permissionService
+        );
+        return filteredActions.length > 0 ? filteredActions : [ACTIONS.VIEW];
       }
+      
       return [ACTIONS.VIEW];
     }
 
-    // CRITICAL: Coordinator-Stakeholder involvement case - CHECK THIS FIRST (before requester check)
-    // When Coordinator creates request WITH Stakeholder, Stakeholder is primary reviewer
-    // System Admin can still view and act, but Stakeholder has priority
-    // Note: isCoordinatorRequest, hasStakeholder, and isCoordinatorStakeholderCase are already declared above
-    
-    // CRITICAL: For Coordinator-Stakeholder cases, Stakeholder must get reviewer actions when they are the reviewer
-    // This MUST happen before the requester check to prevent Stakeholder from being treated as requester
-    // This takes priority over the general isReviewer check to ensure correct actions
-    if (isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) {
-      const stakeholderId = request.stakeholder_id || request.stakeholderId;
-      if (stakeholderId && String(stakeholderId) === String(userId)) {
-        // Check if there's a reschedule proposal from Coordinator - Stakeholder should be able to CONFIRM
-        const rescheduleProposal = request.rescheduleProposal;
-        const hasCoordinatorProposal = rescheduleProposal && 
-                                       rescheduleProposal.proposedBy && 
-                                       this.normalizeRole(rescheduleProposal.proposedBy.role) === ROLES.COORDINATOR &&
-                                       String(rescheduleProposal.proposedBy.id) !== String(userId);
-        
-        // Check if Stakeholder is the assigned reviewer
-        const reviewerRole = request.reviewer?.role ? String(request.reviewer.role).toLowerCase() : null;
-        const reviewerId = request.reviewer?.id ? String(request.reviewer.id) : null;
-        const isStakeholderReviewer = (reviewerRole === 'stakeholder' || reviewerRole?.includes('stakeholder')) && 
-                                      (reviewerId === String(stakeholderId) || reviewerId === String(userId) || !reviewerId);
-        
-        // Check the actual request status (not just normalized state) to handle edge cases
-        const requestStatus = String(request.Status || request.status || state || '').toLowerCase();
-        const isPendingOrReviewState = normalizedState === REQUEST_STATES.PENDING_REVIEW || 
-                                       String(normalizedState).toLowerCase().includes('pending') ||
-                                       String(requestStatus).includes('pending') ||
-                                       (String(normalizedState).toLowerCase().includes('review') && 
-                                        !String(normalizedState).toLowerCase().includes('accepted') &&
-                                        !String(normalizedState).toLowerCase().includes('rejected')) ||
-                                       (String(requestStatus).includes('review') && 
-                                        !String(requestStatus).includes('accepted') &&
-                                        !String(requestStatus).includes('rejected'));
-        
-        // Check if request is already finalized (accepted/rejected/completed) - don't give reviewer actions in those cases
-        const isFinalized = String(requestStatus).includes('accepted') || 
-                           String(requestStatus).includes('rejected') ||
-                           String(requestStatus).includes('completed') ||
-                           String(requestStatus).includes('approved') ||
-                           normalizedState === REQUEST_STATES.APPROVED ||
-                           normalizedState === REQUEST_STATES.REJECTED;
-        
-        // Special case: If Coordinator proposed a reschedule, Stakeholder should get CONFIRM and RESCHEDULE actions
-        if (hasCoordinatorProposal && !isFinalized) {
-          // For reschedule proposals, Stakeholder needs CONFIRM to accept Coordinator's proposal and RESCHEDULE to counter-propose
-          const actions = [ACTIONS.VIEW, ACTIONS.CONFIRM, ACTIONS.RESCHEDULE];
-          if (process.env.NODE_ENV !== 'production') {
-            console.log('[getAllowedActions] Coordinator-Stakeholder with Coordinator reschedule proposal -> Returning actions with CONFIRM:', {
-              actions,
-              rescheduleProposal: rescheduleProposal.proposedBy
-            });
-          }
-          return actions;
-        }
-        
-        // If Stakeholder is the reviewer AND it's a pending/review state (not finalized), give reviewer actions
-        // OR if Stakeholder is explicitly set as reviewer (regardless of state, unless already finalized)
-        // Note: In Coordinator-Stakeholder cases, Coordinator is the requester, not Stakeholder, so we don't need to check !isRequester
-        if (process.env.NODE_ENV !== 'production') {
-          console.log('[getAllowedActions] Coordinator-Stakeholder condition check:', {
-            isStakeholderReviewer,
-            isPendingOrReviewState,
-            isFinalized,
-            hasCoordinatorProposal,
-            conditionMet: (isStakeholderReviewer || isPendingOrReviewState) && !isFinalized
-          });
-        }
-        
-        if ((isStakeholderReviewer || isPendingOrReviewState) && !isFinalized) {
-          // Get PENDING_REVIEW state config to ensure we return reviewer actions
-          const pendingReviewConfig = STATE_TRANSITIONS[REQUEST_STATES.PENDING_REVIEW];
-          if (pendingReviewConfig && pendingReviewConfig.allowedActions[ROLES.STAKEHOLDER]) {
-            if (process.env.NODE_ENV !== 'production') {
-              console.log('[getAllowedActions] Returning Stakeholder reviewer actions for Coordinator-Stakeholder case:', {
-                state,
-                normalizedState,
-                requestStatus,
-                isPendingOrReviewState,
-                isStakeholderReviewer,
-                reviewer: request.reviewer,
-                actions: pendingReviewConfig.allowedActions[ROLES.STAKEHOLDER]
-              });
-            }
-            return pendingReviewConfig.allowedActions[ROLES.STAKEHOLDER];
-          }
-          // Fallback: use coordinator actions as template for reviewer actions
-          if (pendingReviewConfig && pendingReviewConfig.allowedActions[ROLES.COORDINATOR]) {
-            if (process.env.NODE_ENV !== 'production') {
-              console.log('[getAllowedActions] Using Coordinator actions as fallback for Stakeholder reviewer');
-            }
-            return pendingReviewConfig.allowedActions[ROLES.COORDINATOR];
-          }
-        }
-        // For other states, use normal role-based actions
-        if (stateConfig.allowedActions[ROLES.STAKEHOLDER]) {
-          return stateConfig.allowedActions[ROLES.STAKEHOLDER];
-        }
-        // Fallback: if no specific stakeholder actions defined, use coordinator actions as template
-        if (stateConfig.allowedActions[ROLES.COORDINATOR]) {
-          return stateConfig.allowedActions[ROLES.COORDINATOR];
-        }
-      }
-    }
-
-    // Normal State Logic - Check requester AFTER Coordinator-Stakeholder case
-    // In Coordinator-Stakeholder cases, Stakeholder is reviewer (not requester), so skip requester check for them
+    // Normal State Logic - Check requester first
     // CRITICAL: If user is the reschedule proposer, they should only get VIEW (already handled above, but double-check here)
     const rescheduleProposalCheck = request.rescheduleProposal && request.rescheduleProposal.proposedBy && request.rescheduleProposal.proposedBy.id;
     const isRescheduleProposer = rescheduleProposalCheck && String(request.rescheduleProposal.proposedBy.id) === String(userId);
     
-    if (isRequester && stateConfig.requesterActions && !(isCoordinatorStakeholderCase && normalizedRole === ROLES.STAKEHOLDER) && !isRescheduleProposer) {
-      return stateConfig.requesterActions;
+    if (isRequester && stateConfig.requesterActions && !isRescheduleProposer) {
+      // Filter requester actions by permissions
+      const filteredActions = await this._filterActionsByPermissions(
+        stateConfig.requesterActions,
+        userId,
+        locationId,
+        permissionService
+      );
+      return filteredActions.length > 0 ? filteredActions : [ACTIONS.VIEW];
     }
 
-    if (isReviewer && !isRescheduleProposer) {
-      if (stateConfig.allowedActions[normalizedRole]) {
-        return stateConfig.allowedActions[normalizedRole];
+    // Reviewer actions - check if user is reviewer and has required permissions
+    if (isReviewer && !isRescheduleProposer && stateConfig.reviewerActions) {
+      const filteredActions = await this._filterActionsByPermissions(
+        stateConfig.reviewerActions,
+        userId,
+        locationId,
+        permissionService
+      );
+      if (filteredActions.length > 0) {
+        return filteredActions;
       }
     }
 
+    // For approved state, check if user has update permissions
     if (normalizedState === REQUEST_STATES.APPROVED) {
-        if (stateConfig.allowedActions[normalizedRole]) {
-            return stateConfig.allowedActions[normalizedRole];
-        }
+      const canUpdate = await permissionService.checkPermission(userId, 'request', 'update', { locationId });
+      const canCancel = await permissionService.checkPermission(userId, 'request', 'cancel', { locationId });
+      const canReschedule = await permissionService.checkPermission(userId, 'request', 'reschedule', { locationId });
+      
+      const actions = [ACTIONS.VIEW];
+      if (canUpdate) actions.push(ACTIONS.EDIT);
+      if (canReschedule) actions.push(ACTIONS.RESCHEDULE);
+      if (canCancel) actions.push(ACTIONS.CANCEL);
+      
+      if (actions.length > 1) {
+        return actions;
+      }
     }
 
-    // Admin override (except in Stakeholder loop managed above)
-    // In Coordinator-Stakeholder cases, System Admin can still act as secondary authority
-    // but Stakeholder (as primary reviewer) has priority in the flow
-    if (isAdmin && stateConfig.allowedActions[ROLES.SYSTEM_ADMIN] && !requiresRequesterConfirmation) {
-      const assignmentRule = REVIEWER_ASSIGNMENT_RULES[normalizedCreatorRole];
-      // For Coordinator-Stakeholder cases, Admin can always act as secondary authority
-      // For other cases, check allowAdminOverride flag
-      if (isCoordinatorStakeholderCase || (assignmentRule && assignmentRule.allowAdminOverride)) {
-        // System Admin can act as secondary authority in all cases, including Coordinator-Stakeholder
-        // The Stakeholder's priority is maintained through reviewer assignment and notification routing
-        return stateConfig.allowedActions[ROLES.SYSTEM_ADMIN];
-      }
+    // Full access users can perform any action (except when restricted by state)
+    if (hasFullAccess && !requiresRequesterConfirmation) {
+      // Get all possible actions for this state
+      const allActions = [
+        ...(stateConfig.reviewerActions || []),
+        ...(stateConfig.requesterActions || [])
+      ];
+      const uniqueActions = [...new Set(allActions)];
+      return uniqueActions.length > 0 ? uniqueActions : [ACTIONS.VIEW];
     }
 
     return [ACTIONS.VIEW];
+  }
+
+  /**
+   * Filter actions by user permissions
+   * @private
+   * @param {string[]} actions - List of actions to filter
+   * @param {string|ObjectId} userId - User ID
+   * @param {string|ObjectId} locationId - Location ID for context
+   * @param {Object} permissionService - Permission service instance
+   * @returns {Promise<string[]>} Filtered actions
+   */
+  async _filterActionsByPermissions(actions, userId, locationId, permissionService) {
+    const filtered = [];
+    for (const action of actions) {
+      const perm = ACTION_PERMISSIONS[action];
+      if (!perm) {
+        // Unknown action, allow it (for backward compatibility)
+        filtered.push(action);
+        continue;
+      }
+      
+      const hasPermission = await permissionService.checkPermission(
+        userId,
+        perm.resource,
+        perm.action,
+        { locationId }
+      );
+      
+      if (hasPermission) {
+        filtered.push(action);
+      }
+    }
+    return filtered;
   }
 
   // ... (Rest of the class methods remain unchanged: getNextState, isValidTransition, etc.)
@@ -575,51 +369,38 @@ class RequestStateMachine {
     return stateConfig.transitions[action] || null;
   }
 
-  isValidTransition(currentState, action, userRole, userId, request = {}) {
-    // Try permission-based check first (new RBAC approach)
+  async isValidTransition(currentState, action, userRole, userId, request = {}) {
+    // Use permission-based check
     if (userId) {
-      const canPerform = this.canPerformAction(currentState, userId, action, request);
+      const canPerform = await this.canPerformAction(currentState, userId, action, request);
       if (canPerform !== null) {
         return canPerform;
       }
     }
     
-    // Fallback to role-based check (backward compatibility)
-    const allowedActions = this.getAllowedActions(currentState, userRole, userId, request);
+    // Fallback: check if action is in allowed actions
+    const allowedActions = await this.getAllowedActions(currentState, userRole, userId, request);
     return allowedActions.includes(action);
   }
 
   /**
-   * Check if user can perform action using RBAC permissions (new approach)
+   * Check if user can perform action using RBAC permissions
    * @param {string} state - Current request state
    * @param {string|ObjectId} userId - User ID
    * @param {string} action - Action to check
    * @param {Object} request - Request object
-   * @returns {Promise<boolean>|boolean} True if user can perform action, null if should fallback to role check
+   * @returns {Promise<boolean>} True if user can perform action, false otherwise
    */
   async canPerformAction(state, userId, action, request = {}) {
     const permissionService = require('../users_services/permission.service');
     
-    // Map actions to required permissions
-    const permissionMap = {
-      [ACTIONS.ACCEPT]: { resource: 'request', action: 'approve' },
-      [ACTIONS.REJECT]: { resource: 'request', action: 'reject' },
-      [ACTIONS.RESCHEDULE]: { resource: 'request', action: 'reschedule' },
-      [ACTIONS.CANCEL]: { resource: 'request', action: 'cancel' },
-      [ACTIONS.DELETE]: { resource: 'request', action: 'delete' },
-      [ACTIONS.CONFIRM]: { resource: 'request', action: 'confirm' },
-      [ACTIONS.DECLINE]: { resource: 'request', action: 'decline' },
-      [ACTIONS.EDIT]: { resource: 'request', action: 'update' },
-      [ACTIONS.VIEW]: { resource: 'request', action: 'read' }
-    };
-
-    const requiredPerm = permissionMap[action];
+    const requiredPerm = ACTION_PERMISSIONS[action];
     if (!requiredPerm) {
-      return null; // Unknown action, fallback to role check
+      return false; // Unknown action
     }
 
     // Get location context
-    const locationId = request.location?.district || request.district;
+    const locationId = request.location?.district || request.district || request.locationId;
 
     // Check permission
     const hasPermission = await permissionService.checkPermission(
@@ -634,7 +415,7 @@ class RequestStateMachine {
     }
 
     // Additional checks: requester can always cancel/confirm/decline their own requests
-    if (['cancel', 'confirm', 'decline'].includes(action)) {
+    if ([ACTIONS.CANCEL, ACTIONS.CONFIRM, ACTIONS.DECLINE].includes(action)) {
       const isRequester = this.isRequester(userId, request);
       if (isRequester) {
         return true;
@@ -667,15 +448,12 @@ class RequestStateMachine {
     const madeById = request.made_by_id || request.creator?.id;
     if (madeById && String(madeById) === userIdStr) return true;
     
-    // Check if requester role is stakeholder and ID matches
-    const requesterRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
-    const normalizedRequesterRole = this.normalizeRole(requesterRole);
-    if (normalizedRequesterRole === ROLES.STAKEHOLDER) {
-      const stakeholderId = request.requester?.id || request.requester?.userId || request.stakeholder_id || request.stakeholderId;
-      if (stakeholderId && String(stakeholderId) === userIdStr) {
-        return true;
-      }
+    // Check if user is the stakeholder (for stakeholder-created requests)
+    const stakeholderId = request.requester?.id || request.requester?.userId || request.stakeholder_id || request.stakeholderId;
+    if (stakeholderId && String(stakeholderId) === userIdStr) {
+      return true;
     }
+    
     return false;
   }
 
@@ -692,32 +470,22 @@ class RequestStateMachine {
     // Explicit reviewer match (legacy ID)
     if (reviewer && reviewer.id && String(reviewer.id) === userIdStr) return true;
 
-    // NEW: Coordinator-Stakeholder involvement case
+    // Check if user is the stakeholder reviewer (for Coordinator-Stakeholder cases)
     // When Coordinator creates request WITH Stakeholder, Stakeholder is the primary reviewer
-    const creatorRole = request.requester?.roleSnapshot || request.creator?.role || request.made_by_role;
-    const normalizedCreatorRole = this.normalizeRole(creatorRole);
-    const isCoordinatorRequest = normalizedCreatorRole === ROLES.COORDINATOR;
-    const hasStakeholder = !!(request.requester?.roleSnapshot === 'stakeholder' || request.stakeholder_id || request.stakeholderId);
-    
-    // Normalize userRole if provided, otherwise check by ID only
-    const normalizedRole = userRole ? this.normalizeRole(userRole) : null;
-    
-    if (isCoordinatorRequest && hasStakeholder && (!normalizedRole || normalizedRole === ROLES.STAKEHOLDER)) {
-      // Stakeholder is the primary reviewer in Coordinator-Stakeholder cases
+    const hasStakeholder = !!(request.stakeholder_id || request.stakeholderId);
+    if (hasStakeholder) {
       const stakeholderId = request.reviewer?.id || request.reviewer?.userId || request.stakeholder_id || request.stakeholderId;
       if (stakeholderId && String(stakeholderId) === userIdStr) {
         return true;
       }
     }
 
-    // Stakeholder-created request logic: Coordinator is Reviewer
-    const isStakeholderRequest = normalizedCreatorRole === ROLES.STAKEHOLDER;
-
-    if (isStakeholderRequest && (!normalizedRole || normalizedRole === ROLES.COORDINATOR)) {
-        const reviewerId = request.reviewer?.id || request.reviewer?.userId;
-        if (reviewerId && String(reviewerId) === userIdStr) {
-            return true;
-        }
+    // Legacy fallback: Check coordinator_id for backward compatibility
+    if (request.coordinator_id) {
+      const coordinatorId = request.reviewer?.id || request.reviewer?.userId || request.coordinator_id;
+      if (coordinatorId && String(coordinatorId) === userIdStr) {
+        return true;
+      }
     }
 
     return false;
@@ -739,11 +507,15 @@ class RequestStateMachine {
   }
 
   normalizeRole(role) {
+    // This method is kept for backward compatibility but should not be used for logic decisions
+    // Role normalization is only for data storage/display purposes
     if (!role) return null;
     const r = String(role).toLowerCase();
-    if (r === 'admin' || r === 'systemadmin' || r === 'sysadmin' || r === 'system-admin') return ROLES.SYSTEM_ADMIN;
-    if (r === 'coordinator') return ROLES.COORDINATOR;
-    if (r === 'stakeholder') return ROLES.STAKEHOLDER;
+    // Map common role code variations to standard codes
+    if (r === 'system-admin' || r === 'systemadmin' || r === 'sysadmin') return 'system-admin';
+    if (r === 'coordinator') return 'coordinator';
+    if (r === 'stakeholder') return 'stakeholder';
+    // Return as-is if it's already a valid role code format
     return role;
   }
 }
@@ -752,7 +524,6 @@ module.exports = {
   RequestStateMachine,
   REQUEST_STATES,
   ACTIONS,
-  ROLES,
   STATE_TRANSITIONS,
-  REVIEWER_ASSIGNMENT_RULES
+  ACTION_PERMISSIONS
 };

@@ -90,7 +90,7 @@ router.get('/requests/all', authenticate, requirePermission('request', 'read'), 
 /**
  * @route   GET /api/requests/coordinator/:coordinatorId
  * @desc    Get all requests for coordinator
- * @access  Private (Coordinator)
+ * @access  Private (requires request.read permission)
  */
 router.get('/requests/coordinator/:coordinatorId', async (req, res, next) => {
   try {
@@ -103,7 +103,7 @@ router.get('/requests/coordinator/:coordinatorId', async (req, res, next) => {
 /**
  * @route   GET /api/requests/stakeholder/:stakeholderId
  * @desc    Get all requests created by a stakeholder
- * @access  Private (Stakeholder)
+ * @access  Private (requires request.read permission)
  */
 router.get('/requests/stakeholder/:stakeholderId', async (req, res, next) => {
   try {
