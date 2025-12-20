@@ -1,5 +1,5 @@
 /**
- * Seeder for provinces, districts and municipalities.
+ * Seeder for provinces, districts and municipalities using the flexible Location model.
  * It reads `src/utils/locations.json` (if present) and inserts the hierarchy.
  * Usage: from project root run:
  *   node src/utils/seedLocations.js [--dry-run]
@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const { Province, District, Municipality } = require('../models');
+const { Location } = require('../models');
 require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' : '.env' });
 
 // Accept multiple env var names for compatibility with existing .env
@@ -31,6 +31,10 @@ if (mongoDbName) {
 }
 const dataPath = path.join(__dirname, 'locations.json');
 const dryRun = process.argv.includes('--dry-run');
+
+function makeSlug(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
 
 function loadData() {
   if (fs.existsSync(dataPath)) {
@@ -78,60 +82,117 @@ async function seed() {
   await mongoose.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true });
   try {
     for (const p of data) {
-      // create a deterministic code for the province (slug)
-      const makeSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      // Create province location
       const provinceCode = makeSlug(p.name || '') || `prov-${Date.now()}`;
-      const provinceQuery = { name: p.name };
-      const existingProvince = await Province.findOne(provinceQuery).exec();
+      let existingProvince = await Location.findOne({ 
+        name: p.name, 
+        type: 'province', 
+        isActive: true 
+      });
+      
       if (existingProvince) {
         console.log(`Province exists: ${p.name} (id=${existingProvince._id})`);
       } else {
         console.log(`Will create province: ${p.name}`);
+        if (!dryRun) {
+          existingProvince = await Location.create({
+            name: p.name,
+            type: 'province',
+            code: provinceCode,
+            level: 0,
+            isActive: true
+          });
+          // Set province reference to self
+          existingProvince.province = existingProvince._id;
+          await existingProvince.save();
+        } else {
+          existingProvince = { _id: new mongoose.Types.ObjectId(), name: p.name };
+        }
       }
 
-      let province;
-      if (!dryRun) province = existingProvince || await Province.create({ name: p.name, code: provinceCode });
-
       for (const d of p.districts || []) {
-        // district code includes province to keep it unique across provinces
-        const districtCode = province ? `${provinceCode}-${makeSlug(d.name || '')}` : makeSlug(d.name || '') || `dist-${Date.now()}`;
-        const districtQuery = { name: d.name, province: province ? province._id : undefined };
-        let existingDistrict = null;
-        if (province) existingDistrict = await District.findOne(districtQuery).exec();
-
+        // Determine if this is a city or district
+        const isCity = d.name.toLowerCase().includes('city');
+        const districtType = isCity ? 'city' : 'district';
+        const districtCode = `${provinceCode}-${makeSlug(d.name || '')}`;
+        
+        // Check for combined districts (like "All LGUs (District I & II)")
+        const isCombined = d.name.toLowerCase().includes('all lgu') || d.name.toLowerCase().includes('district i & ii');
+        
+        let existingDistrict = await Location.findOne({ 
+          name: d.name, 
+          type: districtType,
+          parent: existingProvince._id,
+          isActive: true 
+        });
+        
         if (existingDistrict) {
           console.log(`  District exists: ${d.name} (province=${p.name})`);
         } else {
-          console.log(`  Will create district: ${d.name} (province=${p.name})`);
+          console.log(`  Will create ${districtType}: ${d.name} (province=${p.name})`);
+          if (!dryRun) {
+            existingDistrict = await Location.create({
+              name: d.name,
+              type: districtType,
+              parent: existingProvince._id,
+              code: districtCode,
+              level: 1,
+              province: existingProvince._id,
+              metadata: {
+                isCity: isCity,
+                isCombined: isCombined,
+                operationalGroup: isCombined ? d.name : null
+              },
+              isActive: true
+            });
+          } else {
+            existingDistrict = { _id: new mongoose.Types.ObjectId(), name: d.name };
+          }
         }
 
-        let district;
-        if (!dryRun) district = existingDistrict || await District.create({ name: d.name, province: province._id, code: districtCode });
-
         for (const m of d.municipalities || []) {
-          // municipality code includes province and district
-          const muniCode = (province && district) ? `${provinceCode}-${makeSlug(d.name || '')}-${makeSlug(m || '')}` : makeSlug(m || '') || `muni-${Date.now()}`;
-          const muniQuery = { name: m, district: district ? district._id : undefined };
-          let existingMuni = null;
-          if (district) existingMuni = await Municipality.findOne(muniQuery).exec();
-
+          // Municipality code includes province and district
+          const muniCode = `${provinceCode}-${makeSlug(d.name || '')}-${makeSlug(m || '')}`;
+          let existingMuni = await Location.findOne({ 
+            name: m, 
+            type: 'municipality',
+            parent: existingDistrict._id,
+            isActive: true 
+          });
+          
           if (existingMuni) {
             // skip
           } else {
             console.log(`    Will create municipality: ${m} (district=${d.name})`);
-          }
-
-          if (!dryRun && district && !existingMuni) {
-            // ensure code uniqueness; if collision occurs, append a timestamp suffix
-            let codeToUse = muniCode;
-            try {
-              await Municipality.create({ name: m, district: district._id, province: province._id, code: codeToUse });
-            } catch (err) {
-              if (err && err.code === 11000) {
-                codeToUse = `${muniCode}-${Date.now()}`;
-                await Municipality.create({ name: m, district: district._id, province: province._id, code: codeToUse });
-              } else {
-                throw err;
+            if (!dryRun) {
+              // Ensure code uniqueness; if collision occurs, append a timestamp suffix
+              let codeToUse = muniCode;
+              try {
+                existingMuni = await Location.create({
+                  name: m,
+                  type: 'municipality',
+                  parent: existingDistrict._id,
+                  code: codeToUse,
+                  level: 2,
+                  province: existingProvince._id,
+                  isActive: true
+                });
+              } catch (err) {
+                if (err && err.code === 11000) {
+                  // Duplicate key error - code collision
+                  codeToUse = `${muniCode}-${Date.now()}`;
+                  existingMuni = await Location.create({
+                    name: m,
+                    type: 'municipality',
+                    parent: existingDistrict._id,
+                    code: codeToUse,
+                    level: 2,
+                    province: existingProvince._id,
+                    isActive: true
+                  });
+                } else {
+                  throw err;
+                }
               }
             }
           }
@@ -148,3 +209,5 @@ async function seed() {
 }
 
 if (require.main === module) seed();
+
+module.exports = { seed, loadData };

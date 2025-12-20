@@ -65,11 +65,26 @@ class PermissionService {
   /**
    * Get all permissions for a user with optional location scope
    * @param {string|ObjectId} userId - User ID
-   * @param {ObjectId} locationScope - Optional location ID to filter by
+   * @param {ObjectId|Object} locationScopeOrContext - Optional location ID to filter by, or context object
+   * @param {Object} context - Optional context object (if locationScopeOrContext is not an object)
    * @returns {Promise<Array>} Array of permission objects
    */
-  async getUserPermissions(userId, locationScope = null) {
+  async getUserPermissions(userId, locationScopeOrContext = null, context = {}) {
     try {
+      // Handle backward compatibility: if second param is an object with context properties, treat it as context
+      let locationScope = null;
+      let actualContext = context;
+      
+      if (locationScopeOrContext && typeof locationScopeOrContext === 'object' && 
+          (locationScopeOrContext.locationId !== undefined || locationScopeOrContext.coverageAreaId !== undefined || locationScopeOrContext.geographicUnitId !== undefined)) {
+        // It's a context object (has context properties)
+        actualContext = locationScopeOrContext;
+        locationScope = actualContext.locationId || null;
+      } else {
+        // It's a locationScope (backward compatibility - could be ObjectId, string, or null)
+        locationScope = locationScopeOrContext;
+      }
+
       let userRoles = await UserRole.find({ 
         userId, 
         isActive: true,
@@ -85,8 +100,8 @@ class PermissionService {
       }
 
       // Support coverage area scope (new)
-      if (context?.coverageAreaId) {
-        userRoles = await this.filterByCoverageAreaScope(userRoles, context.coverageAreaId);
+      if (actualContext?.coverageAreaId) {
+        userRoles = await this.filterByCoverageAreaScope(userRoles, actualContext.coverageAreaId);
       }
 
       return await this.aggregatePermissions(userRoles);
@@ -171,11 +186,26 @@ class PermissionService {
   /**
    * Find users who have a specific permission
    * @param {string} permission - Permission code (e.g., 'request.review') or object with resource and action
-   * @param {ObjectId} locationScope - Optional location ID to filter by
+   * @param {ObjectId|Object} locationScopeOrContext - Optional location ID to filter by, or context object
+   * @param {Object} context - Optional context object (if locationScopeOrContext is not an object)
    * @returns {Promise<Array>} Array of user IDs
    */
-  async getUsersWithPermission(permission, locationScope = null) {
+  async getUsersWithPermission(permission, locationScopeOrContext = null, context = {}) {
     try {
+      // Handle backward compatibility: if second param is an object with context properties, treat it as context
+      let locationScope = null;
+      let actualContext = context;
+      
+      if (locationScopeOrContext && typeof locationScopeOrContext === 'object' && 
+          (locationScopeOrContext.locationId !== undefined || locationScopeOrContext.coverageAreaId !== undefined || locationScopeOrContext.geographicUnitId !== undefined)) {
+        // It's a context object (has context properties)
+        actualContext = locationScopeOrContext;
+        locationScope = actualContext.locationId || null;
+      } else {
+        // It's a locationScope (backward compatibility - could be ObjectId, string, or null)
+        locationScope = locationScopeOrContext;
+      }
+
       let resource, action;
       
       // Handle permission string format (e.g., 'request.review')
@@ -219,8 +249,8 @@ class PermissionService {
       }
       
       // Support coverage area scope (new)
-      if (context?.coverageAreaId) {
-        userRoles = await this.filterByCoverageAreaScope(userRoles, context.coverageAreaId);
+      if (actualContext?.coverageAreaId) {
+        userRoles = await this.filterByCoverageAreaScope(userRoles, actualContext.coverageAreaId);
       }
 
       // Extract unique user IDs
@@ -599,7 +629,7 @@ class PermissionService {
    */
   async getAccessiblePages(userId, context = {}) {
     try {
-      const permissions = await this.getUserPermissions(userId, context.locationId);
+      const permissions = await this.getUserPermissions(userId, context);
       const pages = [];
       let hasWildcard = false;
       
@@ -643,7 +673,7 @@ class PermissionService {
    */
   async getAvailableFeatures(userId, context = {}) {
     try {
-      const permissions = await this.getUserPermissions(userId, context.locationId);
+      const permissions = await this.getUserPermissions(userId, context);
       const features = [];
       
       for (const perm of permissions) {
