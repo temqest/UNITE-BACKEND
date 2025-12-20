@@ -1,4 +1,5 @@
-const { Role, Permission, UserRole } = require('../../models/index');
+const { Role, Permission, UserRole, UserCoverageAssignment, CoverageArea } = require('../../models/index');
+const userCoverageAssignmentService = require('./userCoverageAssignment.service');
 
 class PermissionService {
   /**
@@ -26,15 +27,25 @@ class PermissionService {
         return false;
       }
 
-      // 2. Check location scope if provided
+      // 2. Check location scope if provided (backward compatible)
       if (context.locationId) {
         userRoles = await this.filterByLocationScope(userRoles, context.locationId);
       }
+      
+      // 3. Check coverage area scope if provided
+      if (context.coverageAreaId) {
+        userRoles = await this.filterByCoverageAreaScope(userRoles, context.coverageAreaId);
+      }
+      
+      // 4. Check geographic unit via coverage areas if provided
+      if (context.geographicUnitId) {
+        userRoles = await this.filterByGeographicUnitViaCoverage(userRoles, context.geographicUnitId);
+      }
 
-      // 3. Aggregate permissions from all roles
+      // 5. Aggregate permissions from all roles
       const permissions = await this.aggregatePermissions(userRoles);
 
-      // 4. Check if permission exists
+      // 6. Check if permission exists
       return permissions.some(p => {
         // Handle wildcard permissions
         if (p.resource === '*' && (p.actions.includes('*') || p.actions.includes(action))) {
@@ -73,6 +84,11 @@ class PermissionService {
         userRoles = await this.filterByLocationScope(userRoles, locationScope);
       }
 
+      // Support coverage area scope (new)
+      if (context?.coverageAreaId) {
+        userRoles = await this.filterByCoverageAreaScope(userRoles, context.coverageAreaId);
+      }
+
       return await this.aggregatePermissions(userRoles);
     } catch (error) {
       console.error('Error getting user permissions:', error);
@@ -89,7 +105,7 @@ class PermissionService {
    * @param {Date} expiresAt - Optional expiration date
    * @returns {Promise<Object>} Created UserRole document
    */
-  async assignRole(userId, roleId, locationScope = [], assignedBy = null, expiresAt = null) {
+  async assignRole(userId, roleId, locationScope = [], assignedBy = null, expiresAt = null, coverageAreaScope = []) {
     try {
       // Verify role exists
       const role = await Role.findById(roleId);
@@ -106,7 +122,9 @@ class PermissionService {
 
       if (existingRole) {
         // Update existing role assignment
-        existingRole.locationScope = locationScope;
+        existingRole.context = existingRole.context || {};
+        existingRole.context.locationScope = locationScope || existingRole.context.locationScope || [];
+        existingRole.context.coverageAreaScope = coverageAreaScope || existingRole.context.coverageAreaScope || [];
         existingRole.assignedBy = assignedBy;
         existingRole.expiresAt = expiresAt;
         existingRole.assignedAt = new Date();
@@ -120,7 +138,8 @@ class PermissionService {
         assignedBy,
         expiresAt,
         context: {
-          locationScope: locationScope || []
+          locationScope: locationScope || [],
+          coverageAreaScope: coverageAreaScope || []
         }
       });
 
@@ -194,9 +213,14 @@ class PermissionService {
         ]
       }).populate('roleId');
 
-      // Filter by location scope if provided
+      // Filter by location scope if provided (backward compatible)
       if (locationScope) {
         userRoles = await this.filterByLocationScope(userRoles, locationScope);
+      }
+      
+      // Support coverage area scope (new)
+      if (context?.coverageAreaId) {
+        userRoles = await this.filterByCoverageAreaScope(userRoles, context.coverageAreaId);
       }
 
       // Extract unique user IDs
@@ -354,6 +378,73 @@ class PermissionService {
             validUserRoles.push(userRole);
           }
         }
+      }
+    }
+    
+    return validUserRoles;
+  }
+
+  /**
+   * Filter user roles by coverage area scope
+   * @private
+   * @param {Array} userRoles - Array of UserRole documents
+   * @param {ObjectId} coverageAreaId - Coverage area ID to check
+   * @returns {Promise<Array>} Filtered array of UserRole documents
+   */
+  async filterByCoverageAreaScope(userRoles, coverageAreaId) {
+    const validUserRoles = [];
+    
+    for (const userRole of userRoles) {
+      const userId = userRole.userId.toString();
+      const coverageAreaScope = userRole.context?.coverageAreaScope || [];
+      
+      // If no coverage area scope is set in the role, check UserCoverageAssignment
+      if (coverageAreaScope.length === 0) {
+        // Check if user has coverage area assignment that grants access
+        const assignments = await UserCoverageAssignment.findUserCoverageAreas(userId, false);
+        const hasAccess = assignments.some(assignment => {
+          if (assignment.isExpired() || !assignment.isActive) return false;
+          const caId = assignment.coverageAreaId?._id || assignment.coverageAreaId;
+          return caId.toString() === coverageAreaId.toString();
+        });
+        
+        if (hasAccess) {
+          validUserRoles.push(userRole);
+        }
+      } else {
+        // Check if coverageAreaId is in the role's coverageAreaScope
+        const inScope = coverageAreaScope.some(caId => caId.toString() === coverageAreaId.toString());
+        
+        if (inScope) {
+          validUserRoles.push(userRole);
+        }
+      }
+    }
+    
+    return validUserRoles;
+  }
+
+  /**
+   * Filter user roles by geographic unit via coverage areas
+   * @private
+   * @param {Array} userRoles - Array of UserRole documents
+   * @param {ObjectId} geographicUnitId - Geographic unit (Location) ID to check
+   * @returns {Promise<Array>} Filtered array of UserRole documents
+   */
+  async filterByGeographicUnitViaCoverage(userRoles, geographicUnitId) {
+    const validUserRoles = [];
+    
+    for (const userRole of userRoles) {
+      const userId = userRole.userId.toString();
+      
+      // Check if user has access to this geographic unit via coverage areas
+      const hasAccess = await userCoverageAssignmentService.userHasAccessToGeographicUnit(
+        userId, 
+        geographicUnitId
+      );
+      
+      if (hasAccess) {
+        validUserRoles.push(userRole);
       }
     }
     

@@ -12,6 +12,7 @@ const Role = require('./users_models/role.model');
 const Permission = require('./users_models/permission.model');
 const UserRole = require('./users_models/userRole.model');
 const UserLocation = require('./users_models/userLocation.model');
+const UserCoverageAssignment = require('./users_models/userCoverageAssignment.model');
 
 // ============================================
 // EVENT MODELS
@@ -33,6 +34,8 @@ const BloodBagRequest = require('./request_models/bloodBagRequest.model');
 // UTILITY MODELS
 // ============================================
 const Location = require('./utility_models/location.model'); // Flexible location model
+const Organization = require('./utility_models/organization.model'); // Organization model
+const CoverageArea = require('./utility_models/coverageArea.model'); // Coverage area model
 const Notification = require('./utility_models/notifications.model');
 const RegistrationCode = require('./utility_models/registrationCode.model');
 const SystemSettings = require('./utility_models/systemSettings.model');
@@ -57,7 +60,7 @@ const Presence = require('./chat_models/presence.model');
  * - User (Unified Model)
  *   - User.userId → Legacy ID mapping (for backward compatibility during migration)
  *   - User._id → Referenced by UserRole.userId (RBAC)
- *   - User.organizationId → Organization._id (future reference)
+ *   - User.organizationId → Organization._id
  * 
  * RBAC RELATIONSHIPS:
  * - UserRole.userId → User._id (FK)
@@ -88,9 +91,16 @@ const Presence = require('./chat_models/presence.model');
  * LOCATION HIERARCHY:
  * - Location.parent → Location._id (FK, self-referencing)
  * - Location.province → Location._id (FK, denormalized province reference)
- * - UserLocation.userId → User._id (FK)
+ * - UserLocation.userId → User._id (FK) [Legacy, for backward compatibility]
  * - UserLocation.locationId → Location._id (FK)
  * - UserLocation.assignedBy → User._id (FK)
+ * 
+ * COVERAGE SYSTEM:
+ * - CoverageArea.geographicUnits → Location._id (FK, array)
+ * - CoverageArea.organizationId → Organization._id (FK, optional)
+ * - UserCoverageAssignment.userId → User._id (FK)
+ * - UserCoverageAssignment.coverageAreaId → CoverageArea._id (FK)
+ * - UserCoverageAssignment.assignedBy → User._id (FK)
  */
 
 // ============================================
@@ -158,6 +168,7 @@ module.exports = {
   Permission,
   UserRole,
   UserLocation,
+  UserCoverageAssignment,
   
   // Event Models
   Event,
@@ -172,7 +183,9 @@ module.exports = {
   BloodBagRequest,
   
   // Utility Models
-  Location, // Flexible location model
+  Location, // Flexible location model (Geographic Units)
+  Organization, // Organization model
+  CoverageArea, // Coverage area model
   Notification,
   RegistrationCode,
   SystemSettings,

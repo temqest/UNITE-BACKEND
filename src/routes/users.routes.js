@@ -10,6 +10,8 @@ const { requirePermission, requireAnyPermission } = require('../middleware/requi
 const { requireStaffManagement } = require('../middleware/requireStaffManagement');
 
 const { validateCreateUser, validateUpdateUser } = require('../validators/users_validators/user.validators');
+const { validateAssignUserCoverageArea } = require('../validators/users_validators/userCoverageAssignment.validators');
+const userCoverageAssignmentController = require('../controller/users_controller/userCoverageAssignment.controller');
 
 // ==================== AUTHENTICATION & PROFILE ====================
 
@@ -155,6 +157,75 @@ router.get('/registration-codes/validate', async (req, res, next) => {
     return res.status(400).json({ success: false, message: error.message || 'Invalid or expired code' });
   }
 });
+
+// ==================== USER COVERAGE AREA ASSIGNMENT ROUTES ====================
+
+/**
+ * @route   POST /api/users/:userId/coverage-areas
+ * @desc    Assign user to coverage area
+ * @access  Private (requires user.manage-roles permission)
+ */
+router.post('/users/:userId/coverage-areas', 
+  authenticate, 
+  requirePermission('user', 'manage-roles'), 
+  validateAssignUserCoverageArea, 
+  userCoverageAssignmentController.assignUserToCoverageArea.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/users/:userId/coverage-areas
+ * @desc    Get all coverage areas assigned to a user
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/coverage-areas', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getUserCoverageAreas.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/users/:userId/coverage-areas/primary
+ * @desc    Get primary coverage area for a user
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/coverage-areas/primary', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getPrimaryCoverageArea.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/users/:userId/coverage-areas/geographic-units
+ * @desc    Get all geographic units a user can access via coverage areas
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/coverage-areas/geographic-units', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getUserAccessibleGeographicUnits.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   DELETE /api/users/:userId/coverage-areas/:coverageAreaId
+ * @desc    Revoke user's coverage area assignment
+ * @access  Private (requires user.manage-roles permission)
+ */
+router.delete('/users/:userId/coverage-areas/:coverageAreaId', 
+  authenticate, 
+  requirePermission('user', 'manage-roles'), 
+  userCoverageAssignmentController.revokeUserCoverageAssignment.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/coverage-areas/:coverageAreaId/users
+ * @desc    Get all users assigned to a coverage area
+ * @access  Private (requires user.read permission)
+ */
+router.get('/coverage-areas/:coverageAreaId/users', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getUsersInCoverageArea.bind(userCoverageAssignmentController)
+);
 
 module.exports = router;
 

@@ -11,6 +11,8 @@ const inventoryRoutes = require('./inventory.routes');
 const chatRoutes = require('./chat.routes');
 const filesRoutes = require('./files.routes');
 const locationsRoutes = require('./locations.routes'); // New flexible location system routes
+const organizationsRoutes = require('./organizations.routes'); // Organization management routes
+const coverageAreasRoutes = require('./coverageAreas.routes'); // Coverage area management routes
 const rbacRoutes = require('./rbac.routes'); // RBAC management routes
 const pagesRoutes = require('./pages.routes'); // Page and feature access routes
 
@@ -25,6 +27,8 @@ router.use('/api', requestsRoutes);
 router.use('/api', utilityRoutes);
 router.use('/api', inventoryRoutes);
 router.use('/api', locationsRoutes); // New flexible location routes
+router.use('/api', organizationsRoutes); // Organization management routes
+router.use('/api', coverageAreasRoutes); // Coverage area management routes
 router.use('/api', rbacRoutes); // RBAC management routes
 router.use('/api', pagesRoutes); // Page and feature access routes
 router.use('/api/chat', chatRoutes);

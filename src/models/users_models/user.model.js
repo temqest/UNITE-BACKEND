@@ -68,8 +68,9 @@ const userSchema = new mongoose.Schema({
   
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization', // Future model reference
-    required: false
+    ref: 'Organization',
+    required: false,
+    index: true
   },
   
   // Additional organization details (from Stakeholder model)
