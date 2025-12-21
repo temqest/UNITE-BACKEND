@@ -7,7 +7,7 @@ const { Location } = require('../models/index');
 
 const authenticate = require('../middleware/authenticate');
 const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
-const { requireStaffManagement } = require('../middleware/requireStaffManagement');
+const { requireStaffManagement, validatePageContext } = require('../middleware/requireStaffManagement');
 
 const { validateCreateUser, validateUpdateUser } = require('../validators/users_validators/user.validators');
 const { validateAssignUserCoverageArea } = require('../validators/users_validators/userCoverageAssignment.validators');
@@ -50,6 +50,19 @@ router.get('/users', authenticate, requirePermission('user', 'read'), async (req
 });
 
 /**
+ * @route   GET /api/users/by-capability
+ * @desc    List users filtered by permission capabilities
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/by-capability', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await userController.listUsersByCapability(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/users/:userId
  * @desc    Get user by ID (unified model)
  * @access  Private (requires user.read permission)
@@ -63,30 +76,49 @@ router.get('/users/:userId', authenticate, requirePermission('user', 'read'), as
 });
 
 /**
- * @route   POST /api/users
- * @desc    Create a new user (unified model with RBAC)
- * @access  Private (requires staff.create permission with appropriate staff type)
+ * @route   GET /api/users/:userId/capabilities
+ * @desc    Get user capabilities (diagnostic endpoint)
+ * @access  Private (requires user.read permission)
  */
-router.post('/users', authenticate, requireStaffManagement('create', 'staffType'), validateCreateUser, async (req, res, next) => {
+router.get('/users/:userId/capabilities', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
-    // Check if requested staff type is allowed
-    const requestedStaffType = req.body.roles?.[0] || req.body.staffType;
-    const allowedTypes = req.allowedStaffTypes || [];
-    
-    if (requestedStaffType && allowedTypes.length > 0 && !allowedTypes.includes('*')) {
-      if (!allowedTypes.includes(requestedStaffType)) {
-        return res.status(403).json({
-          success: false,
-          message: `Cannot create staff of type '${requestedStaffType}'. Allowed types: ${allowedTypes.join(', ')}`
-        });
-      }
-    }
-    
-    await userController.createUser(req, res);
+    await userController.getUserCapabilities(req, res);
   } catch (error) {
     next(error);
   }
 });
+
+/**
+ * @route   POST /api/users
+ * @desc    Create a new user (unified model with RBAC)
+ * @access  Private (requires staff.create permission with appropriate staff type)
+ */
+router.post('/users', 
+  authenticate, 
+  requireStaffManagement('create', 'staffType'), 
+  validatePageContext(), 
+  validateCreateUser, 
+  async (req, res, next) => {
+    try {
+      // Check if requested staff type is allowed
+      const requestedStaffType = req.body.roles?.[0] || req.body.staffType;
+      const allowedTypes = req.allowedStaffTypes || [];
+      
+      if (requestedStaffType && allowedTypes.length > 0 && !allowedTypes.includes('*')) {
+        if (!allowedTypes.includes(requestedStaffType)) {
+          return res.status(403).json({
+            success: false,
+            message: `Cannot create staff of type '${requestedStaffType}'. Allowed types: ${allowedTypes.join(', ')}`
+          });
+        }
+      }
+      
+      await userController.createUser(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 /**
  * @route   PUT /api/users/:userId

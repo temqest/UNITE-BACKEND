@@ -66,6 +66,101 @@ function requireStaffManagement(action, staffTypeParam = 'staffType') {
   };
 }
 
+/**
+ * Middleware to validate page context requirements for staff creation
+ * Validates that assigned roles have required permissions based on page context
+ * @param {string} pageContext - Page context ('coordinator-management' or 'stakeholder-management')
+ * @returns {Function} Express middleware function
+ */
+function validatePageContext(pageContext) {
+  return async (req, res, next) => {
+    try {
+      // Only validate on create/update actions
+      if (req.method !== 'POST' && req.method !== 'PUT') {
+        return next();
+      }
+
+      // Get page context from header, query, or body
+      const context = pageContext || 
+                     req.headers['x-page-context'] || 
+                     req.query.pageContext || 
+                     req.body.pageContext;
+
+      if (!context) {
+        // No context specified, skip validation
+        return next();
+      }
+
+      // Get roles from request
+      const roles = req.body.roles || [];
+      if (roles.length === 0) {
+        // No roles specified, skip validation
+        return next();
+      }
+
+      // Define required capabilities for each page context
+      // Note: These must match the actual permissions in the database
+      const contextRequirements = {
+        'stakeholder-management': {
+          required: ['request.review'],
+          description: 'Stakeholder (Review & Approval)'
+        },
+        'coordinator-management': {
+          required: ['request.create', 'event.create', 'event.update', 'staff.create', 'staff.update'],
+          description: 'Staff (Operations)'
+        }
+      };
+
+      const requirements = contextRequirements[context];
+      if (!requirements) {
+        // Unknown context, skip validation
+        return next();
+      }
+
+      // Check if any assigned role has at least one required capability
+      let hasRequiredCapability = false;
+      const roleCapabilities = [];
+
+      for (const roleCode of roles) {
+        const role = await permissionService.getRoleByCode(roleCode);
+        if (!role) continue;
+
+        const capabilities = await permissionService.getRoleCapabilities(role._id);
+        roleCapabilities.push(...capabilities);
+
+        // Check if role has any required capability
+        for (const requiredCap of requirements.required) {
+          const hasCap = await permissionService.roleHasCapability(role._id, requiredCap);
+          if (hasCap) {
+            hasRequiredCapability = true;
+            break;
+          }
+        }
+
+        if (hasRequiredCapability) break;
+      }
+
+      if (!hasRequiredCapability) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot create ${requirements.description} staff: Assigned roles must include at least one of the following capabilities: ${requirements.required.join(', ')}`,
+          required: requirements.required,
+          context: context
+        });
+      }
+
+      next();
+    } catch (error) {
+      console.error('Page context validation error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error validating page context requirements'
+      });
+    }
+  };
+}
+
 module.exports = {
-  requireStaffManagement
+  requireStaffManagement,
+  validatePageContext
 };

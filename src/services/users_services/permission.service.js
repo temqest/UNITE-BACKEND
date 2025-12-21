@@ -244,7 +244,11 @@ class PermissionService {
       }).populate('roleId');
 
       // Filter by location scope if provided (backward compatible)
-      if (locationScope) {
+      // Only filter if locationScope is a valid value (not null, undefined, or empty object)
+      if (locationScope && 
+          locationScope !== null && 
+          locationScope !== undefined &&
+          !(typeof locationScope === 'object' && Object.keys(locationScope).length === 0)) {
         userRoles = await this.filterByLocationScope(userRoles, locationScope);
       }
       
@@ -357,6 +361,16 @@ class PermissionService {
   async filterByLocationScope(userRoles, locationId) {
     const { Location, UserLocation } = require('../../models');
     const locationService = require('../utility_services/location.service');
+    
+    // If locationId is not provided or is an empty object, return all userRoles (no filtering)
+    // Check for null, undefined, empty string, or empty object
+    if (!locationId || 
+        locationId === null || 
+        locationId === undefined ||
+        locationId === '' ||
+        (typeof locationId === 'object' && Object.keys(locationId).length === 0 && !locationId.toString)) {
+      return userRoles;
+    }
     
     // Get all user IDs from userRoles
     const userIds = [...new Set(userRoles.map(ur => ur.userId.toString()))];
@@ -731,6 +745,129 @@ class PermissionService {
       return Array.from(allowedTypes);
     } catch (error) {
       console.error('Error getting allowed staff types:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get all roles that have a specific permission capability
+   * @param {string} capability - Permission capability (e.g., 'request.review', 'request.create', 'event.manage')
+   * @returns {Promise<Array>} Array of role documents
+   */
+  async getRolesByCapability(capability) {
+    try {
+      let resource, action;
+      
+      // Handle permission string format (e.g., 'request.review')
+      if (typeof capability === 'string' && capability.includes('.')) {
+        const parts = capability.split('.');
+        resource = parts[0];
+        action = parts[1];
+      } else {
+        throw new Error('Capability must be in format "resource.action"');
+      }
+
+      // Find roles that have this permission
+      const roles = await Role.find({
+        $or: [
+          { 'permissions.resource': '*', 'permissions.actions': { $in: ['*', action] } },
+          { 'permissions.resource': resource, 'permissions.actions': { $in: ['*', action] } }
+        ]
+      }).sort({ name: 1 });
+
+      return roles;
+    } catch (error) {
+      console.error('Error getting roles by capability:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Check if a role has a specific capability
+   * @param {string|ObjectId} roleId - Role ID
+   * @param {string} capability - Permission capability (e.g., 'request.review', 'request.create')
+   * @returns {Promise<boolean>} True if role has the capability
+   */
+  async roleHasCapability(roleId, capability) {
+    try {
+      let resource, action;
+      
+      // Handle permission string format (e.g., 'request.review')
+      if (typeof capability === 'string' && capability.includes('.')) {
+        const parts = capability.split('.');
+        resource = parts[0];
+        action = parts[1];
+      } else {
+        throw new Error('Capability must be in format "resource.action"');
+      }
+
+      const role = await Role.findById(roleId);
+      if (!role || !role.permissions) {
+        return false;
+      }
+
+      // Check if role has this permission
+      return role.permissions.some(perm => {
+        // Check wildcard permissions
+        if (perm.resource === '*' && (perm.actions.includes('*') || perm.actions.includes(action))) {
+          return true;
+        }
+        // Check specific resource permission
+        if (perm.resource === resource && (perm.actions.includes('*') || perm.actions.includes(action))) {
+          return true;
+        }
+        return false;
+      });
+    } catch (error) {
+      console.error('Error checking role capability:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get all capabilities for a role
+   * @param {string|ObjectId} roleId - Role ID
+   * @returns {Promise<Array>} Array of capability strings (e.g., ['request.review', 'request.create'])
+   */
+  async getRoleCapabilities(roleId) {
+    try {
+      const role = await Role.findById(roleId);
+      if (!role || !role.permissions) {
+        return [];
+      }
+
+      const capabilities = [];
+      
+      for (const perm of role.permissions) {
+        // Handle wildcard permissions
+        if (perm.resource === '*') {
+          // Wildcard resource with wildcard actions means all capabilities
+          if (perm.actions.includes('*')) {
+            // Return a special marker or fetch all possible capabilities
+            // For now, we'll return a wildcard indicator
+            return ['*']; // Indicates all capabilities
+          }
+          // Wildcard resource with specific actions - not typical, but handle it
+          for (const action of perm.actions) {
+            capabilities.push(`*.${action}`);
+          }
+        } else {
+          // Specific resource permissions
+          for (const action of perm.actions) {
+            if (action === '*') {
+              // All actions for this resource - we'd need to know all possible actions
+              // For now, just add the resource.* pattern
+              capabilities.push(`${perm.resource}.*`);
+            } else {
+              capabilities.push(`${perm.resource}.${action}`);
+            }
+          }
+        }
+      }
+
+      return [...new Set(capabilities)]; // Remove duplicates
+    } catch (error) {
+      console.error('Error getting role capabilities:', error);
       return [];
     }
   }

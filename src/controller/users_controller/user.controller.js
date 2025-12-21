@@ -460,6 +460,7 @@ class UserController {
     try {
       const { 
         role, 
+        capability,
         organizationType, 
         isActive, 
         locationId,
@@ -477,7 +478,33 @@ class UserController {
         query.organizationType = organizationType;
       }
 
-      // Filter by role
+      // Filter by capability (permission-based)
+      if (capability) {
+        const capabilities = Array.isArray(capability) ? capability : [capability];
+        const userIdsSet = new Set();
+        
+        // Get users with any of the specified capabilities
+        for (const cap of capabilities) {
+          const userIds = await permissionService.getUsersWithPermission(cap, { locationId });
+          userIds.forEach(id => userIdsSet.add(id.toString()));
+        }
+        
+        if (userIdsSet.size > 0) {
+          // If we already have a role filter, intersect with capability filter
+          if (query._id && query._id.$in) {
+            const roleUserIds = new Set(query._id.$in.map(id => id.toString()));
+            const intersection = Array.from(userIdsSet).filter(id => roleUserIds.has(id));
+            query._id = intersection.length > 0 ? { $in: intersection } : { $in: [] };
+          } else {
+            query._id = { $in: Array.from(userIdsSet) };
+          }
+        } else {
+          // No users found with these capabilities
+          query._id = { $in: [] };
+        }
+      }
+
+      // Filter by role (backward compatibility)
       if (role) {
         const roleDoc = await permissionService.getRoleByCode(role);
         if (roleDoc) {
@@ -486,7 +513,16 @@ class UserController {
             isActive: true 
           });
           const userIds = userRoles.map(ur => ur.userId);
-          query._id = { $in: userIds };
+          
+          // Intersect with existing query if capability filter was applied
+          if (query._id && query._id.$in) {
+            const existingIds = new Set(query._id.$in.map(id => id.toString()));
+            const roleIds = new Set(userIds.map(id => id.toString()));
+            const intersection = Array.from(existingIds).filter(id => roleIds.has(id));
+            query._id = intersection.length > 0 ? { $in: intersection } : { $in: [] };
+          } else {
+            query._id = { $in: userIds };
+          }
         }
       }
 
@@ -528,6 +564,213 @@ class UserController {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to list users'
+      });
+    }
+  }
+
+  /**
+   * Get user capabilities (diagnostic endpoint)
+   * GET /api/users/:userId/capabilities
+   */
+  async getUserCapabilities(req, res) {
+    try {
+      const { userId } = req.params;
+      
+      // Find user
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId);
+      }
+      if (!user) {
+        user = await User.findByLegacyId(userId);
+      }
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Get user roles and permissions
+      const roles = await permissionService.getUserRoles(user._id);
+      const permissions = await permissionService.getUserPermissions(user._id);
+      
+      // Compute capabilities
+      const capabilities = [];
+      for (const perm of permissions) {
+        if (perm.resource === '*') {
+          if (perm.actions.includes('*')) {
+            capabilities.push('*'); // All capabilities
+            break;
+          }
+          for (const action of perm.actions) {
+            capabilities.push(`*.${action}`);
+          }
+        } else {
+          for (const action of perm.actions) {
+            if (action === '*') {
+              capabilities.push(`${perm.resource}.*`);
+            } else {
+              capabilities.push(`${perm.resource}.${action}`);
+            }
+          }
+        }
+      }
+
+      // Check operational capabilities
+      const operationalCapabilities = [
+        'request.create',
+        'event.create',
+        'event.update',
+        'staff.create',
+        'staff.update'
+      ];
+      const hasOperational = operationalCapabilities.some(cap => capabilities.includes(cap) || capabilities.includes('*'));
+      
+      // Check review capabilities
+      const hasReview = capabilities.includes('request.review') || capabilities.includes('*');
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          userId: user._id,
+          email: user.email,
+          name: `${user.firstName} ${user.lastName}`,
+          roles: roles.map(r => ({
+            id: r._id,
+            code: r.code,
+            name: r.name,
+            permissions: r.permissions || []
+          })),
+          permissions,
+          capabilities: [...new Set(capabilities)],
+          classification: {
+            isStakeholder: hasReview,
+            isCoordinator: hasOperational,
+            isHybrid: hasReview && hasOperational,
+            type: hasReview && hasOperational ? 'hybrid' : hasReview ? 'stakeholder' : hasOperational ? 'coordinator' : 'none'
+          }
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get user capabilities'
+      });
+    }
+  }
+
+  /**
+   * List users by permission capability
+   * GET /api/users/by-capability
+   */
+  async listUsersByCapability(req, res) {
+    try {
+      const { 
+        capability,
+        organizationType, 
+        isActive, 
+        locationId,
+        page = 1,
+        limit = 50
+      } = req.query;
+
+      if (!capability) {
+        return res.status(400).json({
+          success: false,
+          message: 'At least one capability parameter is required'
+        });
+      }
+
+      // Get capabilities as array (support multiple capability params)
+      const capabilities = Array.isArray(capability) ? capability : [capability];
+      
+      // Debug logging
+      console.log('[listUsersByCapability] Request:', {
+        capabilities,
+        organizationType,
+        isActive,
+        locationId,
+        page,
+        limit
+      });
+      
+      // Get users with ANY of the specified capabilities
+      const userIdsSet = new Set();
+      const capabilityResults = {};
+      
+      // Only pass locationId if it's defined
+      const context = locationId ? { locationId } : {};
+      
+      for (const cap of capabilities) {
+        const userIds = await permissionService.getUsersWithPermission(cap, context);
+        capabilityResults[cap] = userIds.length;
+        userIds.forEach(id => userIdsSet.add(id.toString()));
+      }
+      
+      console.log('[listUsersByCapability] Capability resolution:', {
+        requestedCapabilities: capabilities,
+        usersPerCapability: capabilityResults,
+        totalUniqueUsers: userIdsSet.size
+      });
+
+      // Build query
+      const query = {};
+      
+      if (userIdsSet.size > 0) {
+        query._id = { $in: Array.from(userIdsSet) };
+      } else {
+        // No users found with these capabilities
+        query._id = { $in: [] };
+      }
+
+      if (isActive !== undefined) {
+        query.isActive = isActive === 'true';
+      }
+
+      if (organizationType) {
+        query.organizationType = organizationType;
+      }
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const users = await User.find(query)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .sort({ createdAt: -1 });
+
+      const total = await User.countDocuments(query);
+      
+      console.log('[listUsersByCapability] Query results:', {
+        queryUserIdCount: userIdsSet.size,
+        queryConditions: Object.keys(query).length,
+        totalUsers: total,
+        returnedUsers: users.length,
+        page,
+        limit
+      });
+
+      // Remove passwords from response
+      const usersResponse = users.map(u => {
+        const userObj = u.toObject();
+        delete userObj.password;
+        return userObj;
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: usersResponse,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to list users by capability'
       });
     }
   }

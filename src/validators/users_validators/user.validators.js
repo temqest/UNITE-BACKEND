@@ -123,6 +123,14 @@ const createUserSchema = Joi.object({
     .default([])
     .messages({
       'array.base': 'Locations must be an array'
+    }),
+
+  // Page context for staff creation (used by middleware for validation)
+  pageContext: Joi.string()
+    .valid('coordinator-management', 'stakeholder-management')
+    .allow(null, '')
+    .messages({
+      'any.only': 'Page context must be either "coordinator-management" or "stakeholder-management"'
     })
 });
 

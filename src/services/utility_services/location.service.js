@@ -700,6 +700,11 @@ class LocationService {
    */
   async checkLocationAccess(userId, locationId, options = {}) {
     try {
+      // Return false if locationId is not provided or invalid
+      if (!locationId) {
+        return false;
+      }
+
       const { includeDescendants = true, includeAncestors = true } = options;
 
       // Validate location exists
