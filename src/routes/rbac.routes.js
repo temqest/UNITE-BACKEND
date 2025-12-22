@@ -267,4 +267,43 @@ router.get('/permissions/user/:userId/staff-types/:action', authenticate, requir
   }
 });
 
+/**
+ * @route   GET /api/rbac/authority/user/:userId
+ * @desc    Get user's authority level
+ * @access  Private (requires user.read permission)
+ */
+router.get('/authority/user/:userId', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getUserAuthority(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/rbac/authority/role/:roleId
+ * @desc    Get role's authority level
+ * @access  Private (requires role.read permission)
+ */
+router.get('/authority/role/:roleId', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await permissionController.getRoleAuthority(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/rbac/authority/assignable-roles
+ * @desc    Get assignable roles for current user
+ * @access  Private
+ */
+router.get('/authority/assignable-roles', authenticate, async (req, res, next) => {
+  try {
+    await permissionController.getAssignableRoles(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;

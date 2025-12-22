@@ -384,10 +384,20 @@ class PermissionService {
       
       // If no location scope is set in the role, check UserLocation assignments
       if (locationScope.length === 0) {
-        // Check if user has location assignment that grants access
-        const hasAccess = await locationService.checkLocationAccess(userId, locationId);
-        if (hasAccess) {
-          validUserRoles.push(userRole);
+        // Only check location access if locationId is valid (not empty object or invalid)
+        const mongoose = require('mongoose');
+        const isValidLocationId = locationId && 
+                                  locationId !== null && 
+                                  locationId !== undefined &&
+                                  !(typeof locationId === 'object' && Object.keys(locationId).length === 0) &&
+                                  mongoose.Types.ObjectId.isValid(locationId);
+        
+        if (isValidLocationId) {
+          // Check if user has location assignment that grants access
+          const hasAccess = await locationService.checkLocationAccess(userId, locationId);
+          if (hasAccess) {
+            validUserRoles.push(userRole);
+          }
         }
       } else {
         // Check if locationId is in the role's locationScope
@@ -547,6 +557,19 @@ class PermissionService {
     try {
       // Normalize page route (remove leading/trailing slashes, convert to lowercase)
       const normalizedRoute = pageRoute.replace(/^\/+|\/+$/g, '').toLowerCase();
+      
+      // NEW: Authority-based access rules for specific pages
+      if (normalizedRoute === 'coordinator-management') {
+        // Coordinator management page requires SYSTEM_ADMIN or OPERATIONAL_ADMIN authority
+        const authorityService = require('./authority.service');
+        const userAuthority = await authorityService.calculateUserAuthority(userId, context);
+        // OPERATIONAL_ADMIN = 80, so user must have at least 80
+        const requiredAuthority = 80;
+        
+        if (userAuthority < requiredAuthority) {
+          return false;
+        }
+      }
       
       // Check for page permission
       return await this.checkPermission(userId, 'page', normalizedRoute, context);

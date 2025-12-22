@@ -283,6 +283,145 @@ class PermissionController {
       });
     }
   }
+
+  /**
+   * Get user's authority level
+   * GET /api/rbac/authority/user/:userId
+   */
+  async getUserAuthority(req, res) {
+    try {
+      const { userId } = req.params;
+      const locationId = req.query.locationId || null;
+      const context = locationId ? { locationId } : {};
+
+      const authorityService = require('../../services/users_services/authority.service');
+      const authority = await authorityService.calculateUserAuthority(userId, context);
+      
+      // Helper to get tier name
+      const getTierName = (auth) => {
+        if (auth >= 100) return 'SYSTEM_ADMIN';
+        if (auth >= 80) return 'OPERATIONAL_ADMIN';
+        if (auth >= 60) return 'COORDINATOR';
+        if (auth >= 40) return 'STAKEHOLDER';
+        return 'BASIC_USER';
+      };
+      const tierName = getTierName(authority);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          userId,
+          authority,
+          tierName
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get user authority'
+      });
+    }
+  }
+
+  /**
+   * Get role's authority level
+   * GET /api/rbac/authority/role/:roleId
+   */
+  async getRoleAuthority(req, res) {
+    try {
+      const { roleId } = req.params;
+
+      const authorityService = require('../../services/users_services/authority.service');
+      const authority = await authorityService.calculateRoleAuthority(roleId);
+      
+      // Helper to get tier name
+      const getTierName = (auth) => {
+        if (auth >= 100) return 'SYSTEM_ADMIN';
+        if (auth >= 80) return 'OPERATIONAL_ADMIN';
+        if (auth >= 60) return 'COORDINATOR';
+        if (auth >= 40) return 'STAKEHOLDER';
+        return 'BASIC_USER';
+      };
+      const tierName = getTierName(authority);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          roleId,
+          authority,
+          tierName
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get role authority'
+      });
+    }
+  }
+
+  /**
+   * Get assignable roles for current user
+   * GET /api/rbac/authority/assignable-roles
+   */
+  async getAssignableRoles(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const locationId = req.query.locationId || null;
+      const context = locationId ? { locationId } : {};
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication required'
+        });
+      }
+
+      const authorityService = require('../../services/users_services/authority.service');
+      const { Role } = require('../../models/index');
+      
+      // Helper to get tier name
+      const getTierName = (auth) => {
+        if (auth >= 100) return 'SYSTEM_ADMIN';
+        if (auth >= 80) return 'OPERATIONAL_ADMIN';
+        if (auth >= 60) return 'COORDINATOR';
+        if (auth >= 40) return 'STAKEHOLDER';
+        return 'BASIC_USER';
+      };
+      
+      // Get all roles
+      const allRoles = await Role.find().sort({ name: 1 });
+      
+      // Get user's authority
+      const userAuthority = await authorityService.calculateUserAuthority(userId, context);
+      
+      // Filter roles that user can assign (user authority > role authority)
+      const assignableRoles = [];
+      for (const role of allRoles) {
+        const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
+        if (userAuthority > roleAuthority) {
+          assignableRoles.push({
+            _id: role._id,
+            code: role.code,
+            name: role.name,
+            description: role.description,
+            authority: roleAuthority,
+            tierName: getTierName(roleAuthority)
+          });
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: assignableRoles
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get assignable roles'
+      });
+    }
+  }
 }
 
 module.exports = new PermissionController();

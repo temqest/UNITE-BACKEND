@@ -56,6 +56,19 @@ class UserRoleController {
         });
       }
 
+      // NEW: Authority check - verify assigner can assign this role
+      if (assignedBy) {
+        const authorityService = require('../../services/users_services/authority.service');
+        const canAssign = await authorityService.canAssignRole(assignedBy, roleId);
+        
+        if (!canAssign) {
+          return res.status(403).json({
+            success: false,
+            message: 'Cannot assign role: Your authority level is insufficient to assign this role'
+          });
+        }
+      }
+
       const userRole = await permissionService.assignRole(
         user._id,
         roleId,

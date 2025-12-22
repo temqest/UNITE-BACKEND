@@ -50,12 +50,34 @@ class UserController {
 
       await user.save();
 
+      // NEW: Validate role authority before assignment
+      const requesterId = req.user?.id || req.user?._id;
+      if (requesterId && roles.length > 0) {
+        const authorityService = require('../../services/users_services/authority.service');
+        const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
+        
+        for (const roleCode of roles) {
+          const role = await permissionService.getRoleByCode(roleCode);
+          if (role) {
+            const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
+            if (requesterAuthority <= roleAuthority) {
+              // Rollback user creation
+              await User.findByIdAndDelete(user._id);
+              return res.status(403).json({
+                success: false,
+                message: `Cannot create staff with role '${roleCode}': Your authority level is insufficient`
+              });
+            }
+          }
+        }
+      }
+
       // Assign roles if provided
       if (roles.length > 0) {
         for (const roleCode of roles) {
           const role = await permissionService.getRoleByCode(roleCode);
           if (role) {
-            await permissionService.assignRole(user._id, role._id, [], null, null);
+            await permissionService.assignRole(user._id, role._id, [], requesterId || null, null);
           }
         }
       }
@@ -715,13 +737,31 @@ class UserController {
         totalUniqueUsers: userIdsSet.size
       });
 
+      // NEW: Authority filtering - filter out users with equal/higher authority than requester
+      const requesterId = req.user?.id || req.user?._id;
+      let filteredUserIds = Array.from(userIdsSet);
+      
+      if (requesterId && filteredUserIds.length > 0) {
+        const authorityService = require('../../services/users_services/authority.service');
+        filteredUserIds = await authorityService.filterUsersByAuthority(
+          requesterId,
+          filteredUserIds,
+          context
+        );
+        
+        console.log('[listUsersByCapability] Authority filtering:', {
+          beforeFiltering: userIdsSet.size,
+          afterFiltering: filteredUserIds.length
+        });
+      }
+
       // Build query
       const query = {};
       
-      if (userIdsSet.size > 0) {
-        query._id = { $in: Array.from(userIdsSet) };
+      if (filteredUserIds.length > 0) {
+        query._id = { $in: filteredUserIds };
       } else {
-        // No users found with these capabilities
+        // No users found with these capabilities or all filtered out by authority
         query._id = { $in: [] };
       }
 

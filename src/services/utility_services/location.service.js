@@ -701,7 +701,18 @@ class LocationService {
   async checkLocationAccess(userId, locationId, options = {}) {
     try {
       // Return false if locationId is not provided or invalid
-      if (!locationId) {
+      // Check for null, undefined, empty string, empty object, or invalid ObjectId
+      if (!locationId || 
+          locationId === null || 
+          locationId === undefined ||
+          (typeof locationId === 'object' && Object.keys(locationId).length === 0) ||
+          (typeof locationId === 'string' && locationId.trim() === '')) {
+        return false;
+      }
+
+      // Validate it's a valid ObjectId format (24 hex characters)
+      const mongoose = require('mongoose');
+      if (!mongoose.Types.ObjectId.isValid(locationId)) {
         return false;
       }
 
