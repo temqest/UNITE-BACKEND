@@ -131,6 +131,52 @@ const createUserSchema = Joi.object({
     .allow(null, '')
     .messages({
       'any.only': 'Page context must be either "coordinator-management" or "stakeholder-management"'
+    }),
+
+  // Coverage area assignments (for coordinators)
+  coverageAreaId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Coverage area ID cannot be empty'
+    }),
+
+  coverageAreaIds: Joi.array()
+    .items(Joi.string().trim())
+    .default([])
+    .messages({
+      'array.base': 'Coverage area IDs must be an array'
+    }),
+
+  // Organization assignment
+  organizationId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Organization ID cannot be empty'
+    }),
+
+  // Location assignments (for stakeholders)
+  municipalityId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Municipality ID cannot be empty'
+    }),
+
+  barangayId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Barangay ID cannot be empty'
+    }),
+
+  // Location IDs (for creating coverage areas from locations)
+  locationIds: Joi.array()
+    .items(Joi.string().trim())
+    .default([])
+    .messages({
+      'array.base': 'Location IDs must be an array'
     })
 });
 

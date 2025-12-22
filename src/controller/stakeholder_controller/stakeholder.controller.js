@@ -27,22 +27,22 @@ class StakeholderController {
       const creatorAuthority = await authorityService.calculateUserAuthority(userId);
       const isSystemAdmin = creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN;
 
-      // Get coverage areas and organizations based on creator authority
-      const coverageAreas = await jurisdictionService.getCreatorJurisdictionForStakeholderCreation(userId);
+      // Get municipalities and organizations based on creator authority
+      const municipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(userId);
       const organizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(userId);
 
       // Determine permissions
-      const canChooseCoverage = isSystemAdmin;
-      const canChooseOrganization = isSystemAdmin;
+      const canChooseMunicipality = isSystemAdmin;
+      const canChooseOrganization = isSystemAdmin || organizations.length > 0; // Allow choice if organizations exist
 
       // Diagnostic logging
       console.log('[DIAG] getCreationContext:', {
         userId: userId.toString(),
         creatorAuthority,
         isSystemAdmin,
-        coverageAreasCount: coverageAreas.length,
+        municipalitiesCount: municipalities.length,
         organizationsCount: organizations.length,
-        canChooseCoverage,
+        canChooseMunicipality,
         canChooseOrganization
       });
 
@@ -50,17 +50,19 @@ class StakeholderController {
         success: true,
         data: {
           allowedRole: 'stakeholder', // Always stakeholder for this page
-          canChooseCoverage,
+          canChooseMunicipality,
           canChooseOrganization,
-          coverageOptions: coverageAreas.map(ca => ({
-            _id: ca._id,
-            id: ca._id,
-            name: ca.name,
-            code: ca.code,
-            description: ca.description,
-            organizationId: ca.organizationId?._id || ca.organizationId,
-            geographicUnits: ca.geographicUnits || []
+          municipalityOptions: municipalities.map(muni => ({
+            _id: muni._id,
+            id: muni._id,
+            name: muni.name,
+            code: muni.code,
+            type: muni.type,
+            parent: muni.parent?._id || muni.parent,
+            province: muni.province?._id || muni.province,
+            level: muni.level
           })),
+          barangayOptions: [], // Initially empty, loaded dynamically after municipality selection
           organizationOptions: organizations.map(org => ({
             _id: org._id,
             id: org._id,
@@ -76,6 +78,45 @@ class StakeholderController {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to get creation context'
+      });
+    }
+  }
+
+  /**
+   * Get barangays for a municipality
+   * GET /api/stakeholders/barangays/:municipalityId
+   */
+  async getBarangays(req, res) {
+    try {
+      const { municipalityId } = req.params;
+      
+      if (!municipalityId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Municipality ID is required'
+        });
+      }
+
+      const barangays = await jurisdictionService.getBarangaysForMunicipality(municipalityId);
+
+      return res.status(200).json({
+        success: true,
+        data: barangays.map(barangay => ({
+          _id: barangay._id,
+          id: barangay._id,
+          name: barangay.name,
+          code: barangay.code,
+          type: barangay.type,
+          parent: barangay.parent?._id || barangay.parent,
+          province: barangay.province?._id || barangay.province,
+          level: barangay.level
+        }))
+      });
+    } catch (error) {
+      console.error('[DIAG] Error in getBarangays:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get barangays'
       });
     }
   }

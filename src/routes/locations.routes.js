@@ -160,6 +160,67 @@ router.get('/locations/type/:type', authenticate, requirePermission('location', 
 });
 
 /**
+ * @route   GET /api/districts
+ * @desc    Get all districts (including cities acting as districts)
+ * @access  Private (requires location.read permission)
+ */
+router.get('/districts', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
+  try {
+    const { limit, includeInactive } = req.query;
+    const query = {
+      $or: [
+        { type: 'district' },
+        { type: 'city', 'metadata.isCity': true }
+      ]
+    };
+    
+    if (includeInactive !== 'true') {
+      query.isActive = true;
+    }
+    
+    const { Location } = require('../models');
+    let districtsQuery = Location.find(query).sort({ name: 1 });
+    
+    if (limit) {
+      districtsQuery = districtsQuery.limit(parseInt(limit));
+    }
+    
+    const districts = await districtsQuery;
+    return res.status(200).json({ success: true, data: districts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/locations/municipalities
+ * @desc    Get all municipalities
+ * @access  Private (requires location.read permission)
+ */
+router.get('/locations/municipalities', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
+  try {
+    const { limit, includeInactive } = req.query;
+    const query = { type: 'municipality' };
+    
+    if (includeInactive !== 'true') {
+      query.isActive = true;
+    }
+    
+    const { Location } = require('../models');
+    let municipalitiesQuery = Location.find(query).sort({ name: 1 });
+    
+    if (limit) {
+      municipalitiesQuery = municipalitiesQuery.limit(parseInt(limit));
+    }
+    
+    const municipalities = await municipalitiesQuery;
+    return res.status(200).json({ success: true, data: municipalities });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   PUT /api/locations/:locationId
  * @desc    Update location
  * @access  Private (requires location.update permission)

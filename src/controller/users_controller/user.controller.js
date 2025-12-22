@@ -10,6 +10,7 @@ const locationService = require('../../services/utility_services/location.servic
 const userCoverageAssignmentService = require('../../services/users_services/userCoverageAssignment.service');
 const bcrypt = require('bcrypt');
 const { signToken } = require('../../utils/jwt');
+const mongoose = require('mongoose');
 
 class UserController {
   /**
@@ -19,9 +20,19 @@ class UserController {
   async createUser(req, res) {
     try {
       const userData = req.validatedData || req.body;
-      let { roles = [], locations = [], coverageAreaId, organizationId } = userData;
+      let { roles = [], locations = [], coverageAreaId, coverageAreaIds = [], organizationId, organizationIds = [], municipalityId, barangayId } = userData;
       const pageContext = req.headers['x-page-context'] || req.body.pageContext;
       const requesterId = req.user?.id || req.user?._id;
+
+      // Normalize coverageAreaIds: if coverageAreaId is provided but coverageAreaIds is not, use coverageAreaId
+      if (coverageAreaId && (!coverageAreaIds || coverageAreaIds.length === 0)) {
+        coverageAreaIds = [coverageAreaId];
+      }
+
+      // Normalize organizationIds: if organizationId is provided but organizationIds is not, use organizationId
+      if (organizationId && (!organizationIds || organizationIds.length === 0)) {
+        organizationIds = [organizationId];
+      }
 
       // For stakeholder-management page, force role to stakeholder
       if (pageContext === 'stakeholder-management') {
@@ -36,6 +47,10 @@ class UserController {
         rolesCount: roles.length,
         pageContext: pageContext || 'none',
         coverageAreaId: coverageAreaId || 'none',
+        coverageAreaIds: coverageAreaIds || [],
+        coverageAreaIdsCount: coverageAreaIds.length,
+        municipalityId: municipalityId || 'none',
+        barangayId: barangayId || 'none',
         organizationId: organizationId || 'none',
         email: userData.email || 'none'
       });
@@ -46,6 +61,26 @@ class UserController {
         return res.status(400).json({
           success: false,
           message: 'Email already exists'
+        });
+      }
+
+      // Validation: For coordinator creation (non-stakeholder), require at least one role
+      if (pageContext !== 'stakeholder-management' && roles.length === 0) {
+        console.log('[DIAG] createUser - VALIDATION FAILED: Coordinator creation requires at least one role');
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator must have at least one role assigned',
+          code: 'MISSING_ROLE'
+        });
+      }
+
+      // Validation: For coordinator creation, require at least one coverage area
+      if (pageContext !== 'stakeholder-management' && coverageAreaIds.length === 0) {
+        console.log('[DIAG] createUser - VALIDATION FAILED: Coordinator creation requires at least one coverage area');
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator must have at least one coverage area assigned',
+          code: 'MISSING_COVERAGE_AREA'
         });
       }
 
@@ -103,56 +138,262 @@ class UserController {
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
 
-      // Create user (now safe to create)
-      const user = new User({
-        email: userData.email,
-        firstName: userData.firstName,
-        middleName: userData.middleName || null,
-        lastName: userData.lastName,
-        phoneNumber: userData.phoneNumber || null,
-        password: hashedPassword,
-        organizationType: userData.organizationType || null,
-        organizationInstitution: userData.organizationInstitution || null,
-        organizationId: organizationId || null,
-        field: userData.field || null,
-        isSystemAdmin: userData.isSystemAdmin || false,
-        isActive: true
-      });
+      // Start MongoDB transaction session
+      const session = await mongoose.startSession();
+      session.startTransaction();
 
-      await user.save();
+      let user = null;
+      try {
+        // Create user (now safe to create) - within transaction
+        user = new User({
+          email: userData.email,
+          firstName: userData.firstName,
+          middleName: userData.middleName || null,
+          lastName: userData.lastName,
+          phoneNumber: userData.phoneNumber || null,
+          password: hashedPassword,
+          organizationType: userData.organizationType || null,
+          organizationInstitution: userData.organizationInstitution || null,
+          organizationId: organizationId || null,
+          field: userData.field || null,
+          isSystemAdmin: userData.isSystemAdmin || false,
+          isActive: true
+        });
 
-      // Assign roles if provided
-      if (roles.length > 0) {
-        for (const roleCode of roles) {
-          const role = await permissionService.getRoleByCode(roleCode);
-          if (role) {
-            await permissionService.assignRole(user._id, role._id, [], requesterId || null, null);
+        await user.save({ session });
+        console.log('[RBAC] createUser - User created in transaction:', user._id.toString());
+
+        // Assign roles if provided (atomic - must succeed or user creation fails)
+        if (roles.length > 0) {
+          console.log('[RBAC] createUser - Starting role assignment in transaction:', {
+            userId: user._id.toString(),
+            rolesCount: roles.length,
+            roles: roles
+          });
+          
+          const { Role } = require('../../models/index');
+          const assignedRoles = [];
+          
+          for (const roleIdentifier of roles) {
+            console.log(`[RBAC] createUser - Assigning role: ${roleIdentifier} (type: ${typeof roleIdentifier})`);
+            let role = null;
+            
+            // Try to find role by ID first (if it's an ObjectId)
+            if (mongoose.Types.ObjectId.isValid(roleIdentifier)) {
+              role = await Role.findById(roleIdentifier).session(session);
+              if (role) {
+                console.log(`[RBAC] createUser - Found role by ID: ${role.code} (${role.name})`);
+              }
+            }
+            
+            // If not found by ID, try by code (string)
+            if (!role) {
+              role = await permissionService.getRoleByCode(roleIdentifier);
+              // Note: getRoleByCode might not support session, but it's a lookup only
+            }
+            
+            if (!role) {
+              console.log(`[RBAC] createUser - ✗ Role not found: ${roleIdentifier}`);
+              throw new Error(`Role not found: ${roleIdentifier}`);
+            }
+            
+            const userRole = await permissionService.assignRole(
+              user._id, 
+              role._id, 
+              [], 
+              requesterId || null, 
+              null, 
+              [], 
+              session
+            );
+            assignedRoles.push({ roleIdentifier, roleCode: role.code, roleId: role._id, userRoleId: userRole._id });
+            console.log(`[RBAC] createUser - ✓ Role assigned successfully: ${role.code} (${role.name})`);
+          }
+          
+          console.log('[RBAC] createUser - Role assignment completed:', {
+            userId: user._id.toString(),
+            assignedRolesCount: assignedRoles.length,
+            assignedRoles: assignedRoles.map(r => r.roleCode)
+          });
+        } else {
+          // For coordinators, roles are required
+          if (pageContext !== 'stakeholder-management') {
+            throw new Error('Coordinator must have at least one role assigned');
           }
         }
-      }
 
-      // Assign coverage area if provided
-      if (coverageAreaId) {
-        await userCoverageAssignmentService.assignUserToCoverageArea(
-          user._id,
-          coverageAreaId,
-          {
-            isPrimary: true,
-            assignedBy: requesterId || null
+        // For stakeholder creation, use municipality/barangay instead of coverage area
+        if (pageContext === 'stakeholder-management') {
+          // Stakeholders use Location model (municipality/barangay), not CoverageArea
+          if (municipalityId) {
+            // Assign municipality location (required for stakeholders)
+            await locationService.assignUserToLocation(
+              user._id,
+              municipalityId,
+              'exact',
+              { 
+                isPrimary: true,
+                assignedBy: requesterId || null,
+                session
+              }
+            );
+            console.log(`[RBAC] createUser - Assigned municipality ${municipalityId} to stakeholder`);
           }
-        );
-      }
 
-      // Assign locations if provided
-      if (locations.length > 0) {
-        for (const loc of locations) {
-          await locationService.assignUserToLocation(
+          if (barangayId) {
+            // Assign barangay location (optional for stakeholders)
+            await locationService.assignUserToLocation(
+              user._id,
+              barangayId,
+              'exact',
+              { 
+                isPrimary: false,
+                assignedBy: requesterId || null,
+                session
+              }
+            );
+            console.log(`[RBAC] createUser - Assigned barangay ${barangayId} to stakeholder`);
+          }
+        } else {
+          // For staff creation, use coverage areas (support multiple)
+          if (coverageAreaIds && coverageAreaIds.length > 0) {
+            console.log('[RBAC] createUser - Starting coverage area assignment in transaction:', {
+              userId: user._id.toString(),
+              coverageAreaIdsCount: coverageAreaIds.length,
+              coverageAreaIds: coverageAreaIds
+            });
+            
+            // For coordinators, set autoCoverDescendants to true (auto-cover all barangays)
+            const isCoordinator = roles.some(r => {
+              const roleCode = typeof r === 'string' ? r : (r.code || '');
+              return roleCode.toLowerCase() === 'coordinator';
+            });
+            const autoCoverDescendants = isCoordinator;
+            
+            for (let i = 0; i < coverageAreaIds.length; i++) {
+              const coverageAreaId = coverageAreaIds[i];
+              console.log(`[RBAC] createUser - Assigning coverage area ${i + 1}/${coverageAreaIds.length}: ${coverageAreaId} (autoCoverDescendants: ${autoCoverDescendants})`);
+              await userCoverageAssignmentService.assignUserToCoverageArea(
+                user._id,
+                coverageAreaId,
+                {
+                  isPrimary: i === 0, // First one is primary
+                  autoCoverDescendants: autoCoverDescendants,
+                  assignedBy: requesterId || null,
+                  session
+                }
+              );
+              console.log(`[RBAC] createUser - ✓ Coverage area assigned successfully: ${coverageAreaId}`);
+            }
+          } else if (coverageAreaId) {
+            // Fallback for backward compatibility (single coverageAreaId)
+            console.log('[RBAC] createUser - Using single coverageAreaId (backward compatibility):', coverageAreaId);
+            const isCoordinator = roles.some(r => {
+              const roleCode = typeof r === 'string' ? r : (r.code || '');
+              return roleCode.toLowerCase() === 'coordinator';
+            });
+            await userCoverageAssignmentService.assignUserToCoverageArea(
+              user._id,
+              coverageAreaId,
+              {
+                isPrimary: true,
+                autoCoverDescendants: isCoordinator,
+                assignedBy: requesterId || null,
+                session
+              }
+            );
+            console.log(`[RBAC] createUser - ✓ Single coverage area assigned: ${coverageAreaId}`);
+          }
+        }
+
+        // Assign organizations (support multiple via UserOrganization)
+        if (organizationIds && organizationIds.length > 0) {
+          console.log('[RBAC] createUser - Starting organization assignment in transaction:', {
+            userId: user._id.toString(),
+            organizationIdsCount: organizationIds.length,
+            organizationIds: organizationIds
+          });
+          
+          const { UserOrganization } = require('../../models');
+          
+          for (let i = 0; i < organizationIds.length; i++) {
+            const orgId = organizationIds[i];
+            console.log(`[RBAC] createUser - Assigning organization ${i + 1}/${organizationIds.length}: ${orgId}`);
+            
+            // Determine roleInOrg based on user's role
+            let roleInOrg = 'member';
+            if (roles.length > 0) {
+              const firstRoleCode = typeof roles[0] === 'string' ? roles[0] : (roles[0].code || '');
+              if (firstRoleCode.toLowerCase() === 'coordinator') {
+                roleInOrg = 'coordinator';
+              }
+            }
+            
+            await UserOrganization.assignOrganization(
+              user._id,
+              orgId,
+              {
+                roleInOrg: roleInOrg,
+                isPrimary: i === 0, // First one is primary
+                assignedBy: requesterId || null,
+                session
+              }
+            );
+            console.log(`[RBAC] createUser - ✓ Organization assigned successfully: ${orgId}`);
+          }
+        } else if (organizationId) {
+          // Fallback for backward compatibility (single organizationId)
+          console.log('[RBAC] createUser - Using single organizationId (backward compatibility):', organizationId);
+          const { UserOrganization } = require('../../models');
+          
+          let roleInOrg = 'member';
+          if (roles.length > 0) {
+            const firstRoleCode = typeof roles[0] === 'string' ? roles[0] : (roles[0].code || '');
+            if (firstRoleCode.toLowerCase() === 'coordinator') {
+              roleInOrg = 'coordinator';
+            }
+          }
+          
+          await UserOrganization.assignOrganization(
             user._id,
-            loc.locationId,
-            loc.scope || 'exact',
-            { isPrimary: loc.isPrimary || false }
+            organizationId,
+            {
+              roleInOrg: roleInOrg,
+              isPrimary: true,
+              assignedBy: requesterId || null,
+              session
+            }
           );
+          console.log(`[RBAC] createUser - ✓ Single organization assigned: ${organizationId}`);
         }
+
+        // Assign additional locations if provided (for backward compatibility)
+        if (locations.length > 0) {
+          for (const loc of locations) {
+            await locationService.assignUserToLocation(
+              user._id,
+              loc.locationId,
+              loc.scope || 'exact',
+              { 
+                isPrimary: loc.isPrimary || false,
+                session
+              }
+            );
+          }
+        }
+
+        // Commit transaction - all operations succeeded
+        await session.commitTransaction();
+        console.log('[RBAC] createUser - Transaction committed successfully');
+        
+      } catch (transactionError) {
+        // Abort transaction on any error
+        await session.abortTransaction();
+        console.error('[RBAC] createUser - Transaction aborted due to error:', transactionError.message);
+        throw transactionError;
+      } finally {
+        // End session
+        session.endSession();
       }
 
       // Remove password from response
@@ -165,9 +406,12 @@ class UserController {
         data: userResponse
       });
     } catch (error) {
+      console.error('[RBAC] createUser - Error:', error);
+      // Error response - transaction already aborted in catch block
       return res.status(400).json({
         success: false,
-        message: error.message || 'Failed to create user'
+        message: error.message || 'Failed to create user',
+        code: error.code || 'USER_CREATION_FAILED'
       });
     }
   }
@@ -804,15 +1048,26 @@ class UserController {
       
       if (requesterId && filteredUserIds.length > 0) {
         const authorityService = require('../../services/users_services/authority.service');
+        
+        // Allow equal authority for staff management (operational capabilities indicate staff listing)
+        // This allows coordinators to see other coordinators in the Coordinator Management page
+        const isStaffManagementContext = capabilities.some(cap => 
+          cap.startsWith('staff.') || 
+          cap.startsWith('request.') || 
+          cap.startsWith('event.')
+        );
+        
         filteredUserIds = await authorityService.filterUsersByAuthority(
           requesterId,
           filteredUserIds,
-          context
+          context,
+          isStaffManagementContext // Allow coordinators to see other coordinators
         );
         
         console.log('[listUsersByCapability] Authority filtering:', {
           beforeFiltering: userIdsSet.size,
-          afterFiltering: filteredUserIds.length
+          afterFiltering: filteredUserIds.length,
+          allowEqualAuthority: isStaffManagementContext
         });
       }
 
@@ -872,6 +1127,143 @@ class UserController {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to list users by capability'
+      });
+    }
+  }
+
+  /**
+   * Get create context for user creation forms
+   * GET /api/users/create-context?pageContext=stakeholder-management
+   * Returns allowedRoles, lockedFields, defaultValues, requiredFields, optionalFields
+   */
+  async getCreateContext(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      const pageContext = req.query.pageContext || req.headers['x-page-context'];
+      
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication required'
+        });
+      }
+
+      if (!pageContext) {
+        return res.status(400).json({
+          success: false,
+          message: 'pageContext query parameter is required'
+        });
+      }
+
+      const permissionController = require('../rbac_controller/permission.controller');
+      const jurisdictionService = require('../../services/users_services/jurisdiction.service');
+      const authorityService = require('../../services/users_services/authority.service');
+      
+      // Get assignable roles for this context
+      const assignableRolesReq = {
+        user: { id: userId, _id: userId },
+        query: { context: pageContext }
+      };
+      
+      let assignableRolesResponse;
+      try {
+        assignableRolesResponse = await permissionController.getAssignableRoles(assignableRolesReq, {
+          status: (code) => ({ json: (data) => data }),
+          json: (data) => data
+        });
+      } catch (error) {
+        console.error('[RBAC] getCreateContext - Error getting assignable roles:', error);
+        assignableRolesResponse = { success: true, data: [] };
+      }
+      
+      const allowedRoles = assignableRolesResponse.success ? assignableRolesResponse.data : [];
+      
+      // Get user authority
+      const userAuthority = await authorityService.calculateUserAuthority(userId);
+      const isSystemAdmin = userAuthority >= 100;
+      
+      // Determine field states based on context and authority
+      let lockedFields = [];
+      let defaultValues = {};
+      let requiredFields = [];
+      let optionalFields = [];
+      
+      if (pageContext === 'stakeholder-management') {
+        // Stakeholder creation context
+        defaultValues.role = 'stakeholder';
+        lockedFields.push('role'); // Role is forced to stakeholder
+        
+        requiredFields = ['municipality', 'organization'];
+        optionalFields = ['barangay'];
+        
+        // Organization is locked for coordinators (they can only assign their own organizations)
+        if (!isSystemAdmin) {
+          lockedFields.push('organization');
+        }
+      } else if (pageContext === 'coordinator-management') {
+        // Coordinator creation context
+        requiredFields = ['role', 'coverageArea', 'organization'];
+        optionalFields = [];
+        
+        // Role is locked if only one role available
+        if (allowedRoles.length === 1) {
+          lockedFields.push('role');
+          defaultValues.role = allowedRoles[0].code;
+        }
+        
+        // Organization is locked for coordinators (they can only assign their own organizations)
+        if (!isSystemAdmin) {
+          lockedFields.push('organization');
+        }
+      }
+      
+      // Get allowed organizations for the creator
+      let allowedOrganizations = [];
+      try {
+        allowedOrganizations = await jurisdictionService.getAllowedOrganizations(userId);
+      } catch (error) {
+        console.error('[RBAC] getCreateContext - Error getting allowed organizations:', error);
+      }
+      
+      // Get allowed coverage areas for the creator
+      let allowedCoverageAreas = [];
+      try {
+        allowedCoverageAreas = await jurisdictionService.getCreatorJurisdictionForStakeholderCreation(userId);
+      } catch (error) {
+        console.error('[RBAC] getCreateContext - Error getting allowed coverage areas:', error);
+      }
+      
+      return res.status(200).json({
+        success: true,
+        data: {
+          pageContext,
+          allowedRoles: allowedRoles.map(r => ({
+            _id: r._id,
+            code: r.code,
+            name: r.name,
+            description: r.description
+          })),
+          lockedFields,
+          defaultValues,
+          requiredFields,
+          optionalFields,
+          allowedOrganizations: allowedOrganizations.map(org => ({
+            _id: org._id,
+            name: org.name,
+            type: org.type
+          })),
+          allowedCoverageAreas: allowedCoverageAreas.map(ca => ({
+            _id: ca._id,
+            name: ca.name
+          })),
+          isSystemAdmin
+        }
+      });
+    } catch (error) {
+      console.error('[RBAC] getCreateContext - Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get create context'
       });
     }
   }

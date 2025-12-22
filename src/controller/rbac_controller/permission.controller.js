@@ -368,7 +368,7 @@ class PermissionController {
     try {
       const userId = req.user?.id || req.user?._id;
       const locationId = req.query.locationId || null;
-      const { capability } = req.query;
+      const { capability, context: pageContext } = req.query;
       const context = locationId ? { locationId } : {};
 
       if (!userId) {
@@ -442,71 +442,105 @@ class PermissionController {
         filteredOutRoles: filteredOutByAuthority
       });
 
-      // Filter by capability if provided
-      if (capability) {
-        const beforeCapabilityFilter = assignableRoles.length;
-        const filteredOutByCapability = [];
+      // For stakeholder-management context, only return stakeholder role (explicit role code matching)
+      if (pageContext === 'stakeholder-management') {
+        console.log(`[RBAC] getAssignableRoles - Stakeholder-management context: filtering to stakeholder role only`);
+        const beforeContextFilter = assignableRoles.length;
+        assignableRoles = assignableRoles.filter(role => role.code === 'stakeholder');
         
-        assignableRoles = assignableRoles.filter(role => {
-          const hasCapability = role.capabilities.includes(capability) || role.capabilities.includes('*');
-          
-          if (!hasCapability) {
-            filteredOutByCapability.push({
-              code: role.code,
-              name: role.name,
-              capabilities: role.capabilities,
-              requiredCapability: capability,
-              reason: 'missing required capability'
-            });
-            return false;
-          }
-          return true;
-        });
-        
-        console.log(`[DIAG] getAssignableRoles - Capability filter:`, {
-          requiredCapability: capability,
-          beforeFilter: beforeCapabilityFilter,
+        console.log(`[RBAC] getAssignableRoles - Context filter (stakeholder-management):`, {
+          beforeFilter: beforeContextFilter,
           afterFilter: assignableRoles.length,
-          filteredOut: filteredOutByCapability.length,
-          filteredOutRoles: filteredOutByCapability
+          roles: assignableRoles.map(r => r.code)
         });
+      } else if (pageContext === 'coordinator-management') {
+        // For coordinator creation, ONLY show coordinator role (explicit role code matching)
+        // Remove capability-based filtering - use explicit role code
+        console.log(`[RBAC] getAssignableRoles - Coordinator-management context: filtering to coordinator role only`);
+        const beforeContextFilter = assignableRoles.length;
+        assignableRoles = assignableRoles.filter(role => role.code === 'coordinator');
+        
+        console.log(`[RBAC] getAssignableRoles - Context filter (coordinator-management):`, {
+          beforeFilter: beforeContextFilter,
+          afterFilter: assignableRoles.length,
+          roles: assignableRoles.map(r => r.code)
+        });
+      } else {
+        // Filter by capability if provided (only for non-stakeholder-management contexts)
+        if (capability) {
+          const beforeCapabilityFilter = assignableRoles.length;
+          const filteredOutByCapability = [];
+          
+          assignableRoles = assignableRoles.filter(role => {
+            const hasCapability = role.capabilities.includes(capability) || role.capabilities.includes('*');
+            
+            if (!hasCapability) {
+              filteredOutByCapability.push({
+                code: role.code,
+                name: role.name,
+                capabilities: role.capabilities,
+                requiredCapability: capability,
+                reason: 'missing required capability'
+              });
+              return false;
+            }
+            return true;
+          });
+          
+          console.log(`[DIAG] getAssignableRoles - Capability filter:`, {
+            requiredCapability: capability,
+            beforeFilter: beforeCapabilityFilter,
+            afterFilter: assignableRoles.length,
+            filteredOut: filteredOutByCapability.length,
+            filteredOutRoles: filteredOutByCapability
+          });
+        }
       }
 
       // Exclude operational roles for stakeholder-management page (when capability is request.review)
-      // BUT: System admin should be able to assign ANY role, including coordinator
-      const beforeOperationalFilter = assignableRoles.length;
-      const filteredOutByOperational = [];
-      
-      if (capability === 'request.review' && userAuthority < AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN) {
-        // Only apply operational filter for non-system-admins
-        // System admins can assign any role, including coordinator
-        const operationalCapabilities = ['request.create', 'event.create', 'staff.create', 'staff.update'];
-        assignableRoles = assignableRoles.filter(role => {
-          // Exclude roles that have operational capabilities
-          const hasOperational = role.capabilities.some(cap => 
-            operationalCapabilities.includes(cap) || cap === '*'
-          );
-          
-          if (hasOperational) {
-            filteredOutByOperational.push({
-              code: role.code,
-              name: role.name,
-              capabilities: role.capabilities,
-              reason: 'has operational capabilities (non-admin filter)'
-            });
-            return false;
-          }
-          return true;
-        });
+      // BUT: Skip this filter if we're in stakeholder-management or coordinator-management context
+      // AND: System admin should be able to assign ANY role, including coordinator
+      if (pageContext !== 'stakeholder-management' && pageContext !== 'coordinator-management') {
+        const beforeOperationalFilter = assignableRoles.length;
+        const filteredOutByOperational = [];
         
-        console.log(`[DIAG] getAssignableRoles - Operational filter (non-admin):`, {
-          beforeFilter: beforeOperationalFilter,
-          afterFilter: assignableRoles.length,
-          filteredOut: filteredOutByOperational.length,
-          filteredOutRoles: filteredOutByOperational
-        });
-      } else if (capability === 'request.review' && userAuthority >= AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN) {
-        console.log(`[DIAG] getAssignableRoles - Skipping operational filter for system admin`);
+        if (capability === 'request.review' && userAuthority < AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN) {
+          // Only apply operational filter for non-system-admins
+          // System admins can assign any role, including coordinator
+          const operationalCapabilities = ['request.create', 'event.create', 'staff.create', 'staff.update'];
+          assignableRoles = assignableRoles.filter(role => {
+            // Exclude roles that have operational capabilities
+            const hasOperational = role.capabilities.some(cap => 
+              operationalCapabilities.includes(cap) || cap === '*'
+            );
+            
+            if (hasOperational) {
+              filteredOutByOperational.push({
+                code: role.code,
+                name: role.name,
+                capabilities: role.capabilities,
+                reason: 'has operational capabilities (non-admin filter)'
+              });
+              return false;
+            }
+            return true;
+          });
+          
+          console.log(`[DIAG] getAssignableRoles - Operational filter (non-admin):`, {
+            beforeFilter: beforeOperationalFilter,
+            afterFilter: assignableRoles.length,
+            filteredOut: filteredOutByOperational.length,
+            filteredOutRoles: filteredOutByOperational
+          });
+        } else if (capability === 'request.review' && userAuthority >= AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN) {
+          console.log(`[DIAG] getAssignableRoles - Skipping operational filter for system admin`);
+        }
+      } else {
+        if (pageContext === 'stakeholder-management') {
+          console.log(`[DIAG] getAssignableRoles - Skipping operational filter for stakeholder-management context`);
+        } else if (pageContext === 'coordinator-management') {
+          console.log(`[DIAG] getAssignableRoles - Skipping operational filter for coordinator-management context`);
+        }
       }
 
       // Diagnostic logging
@@ -515,10 +549,8 @@ class PermissionController {
         userAuthority,
         userTierName: getTierName(userAuthority),
         capability: capability || 'none',
+        pageContext: pageContext || 'none',
         allRolesCount: allRoles.length,
-        afterAuthorityFilter: assignableRoles.length + (beforeOperationalFilter - assignableRoles.length),
-        afterCapabilityFilter: capability ? assignableRoles.length : 'N/A',
-        afterOperationalFilter: capability === 'request.review' ? assignableRoles.length : 'N/A',
         finalRolesCount: assignableRoles.length,
         finalRoles: assignableRoles.map(r => ({ 
           code: r.code, 

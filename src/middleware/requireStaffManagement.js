@@ -180,9 +180,26 @@ function validatePageContext(pageContext) {
       let hasRequiredCapability = false;
       const roleCapabilities = [];
 
-      for (const roleCode of roles) {
-        const role = await permissionService.getRoleByCode(roleCode);
-        if (!role) continue;
+      const { Role } = require('../models/index');
+      const mongoose = require('mongoose');
+
+      for (const roleIdentifier of roles) {
+        let role = null;
+        
+        // Try to find role by ID first (if it's an ObjectId)
+        if (mongoose.Types.ObjectId.isValid(roleIdentifier)) {
+          role = await Role.findById(roleIdentifier);
+        }
+        
+        // If not found by ID, try by code (string)
+        if (!role) {
+          role = await permissionService.getRoleByCode(roleIdentifier);
+        }
+        
+        if (!role) {
+          console.log(`[DIAG] validatePageContext - Role not found: ${roleIdentifier}`);
+          continue;
+        }
 
         const capabilities = await permissionService.getRoleCapabilities(role._id);
         roleCapabilities.push(...capabilities);

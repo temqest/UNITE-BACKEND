@@ -573,16 +573,16 @@ class LocationService {
    */
   async assignUserToLocation(userId, locationId, scope = 'exact', options = {}) {
     try {
-      const { isPrimary = false, assignedBy = null, expiresAt = null } = options;
+      const { isPrimary = false, assignedBy = null, expiresAt = null, session = null } = options;
 
       // Validate user exists
-      const user = await User.findById(userId);
+      const user = await User.findById(userId).session(session);
       if (!user) {
         throw new Error('User not found');
       }
 
       // Validate location exists
-      const location = await Location.findById(locationId);
+      const location = await Location.findById(locationId).session(session);
       if (!location) {
         throw new Error('Location not found');
       }
@@ -601,7 +601,8 @@ class LocationService {
         scope,
         isPrimary,
         assignedBy,
-        expiresAt
+        expiresAt,
+        session
       });
     } catch (error) {
       throw new Error(`Failed to assign user to location: ${error.message}`);

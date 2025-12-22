@@ -12,7 +12,8 @@ const authorityService = require('../services/users_services/authority.service')
 async function validateJurisdiction(req, res, next) {
   try {
     const creatorId = req.user?.id || req.user?._id;
-    const { coverageAreaId, organizationId } = req.body;
+    const { coverageAreaId, organizationId, municipalityId, barangayId } = req.body;
+    const pageContext = req.headers['x-page-context'] || req.body.pageContext;
     
     if (!creatorId) {
       // Let auth middleware handle authentication
@@ -20,7 +21,6 @@ async function validateJurisdiction(req, res, next) {
     }
     
     const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
-    const pageContext = req.headers['x-page-context'] || req.body.pageContext;
     
     // System admins bypass all jurisdiction checks
     const isSystemAdmin = creatorAuthority === authorityService.AUTHORITY_TIERS.SYSTEM_ADMIN || 
@@ -34,6 +34,7 @@ async function validateJurisdiction(req, res, next) {
         authorityTier: authorityService.AuthorityService?.getAuthorityTierName?.(creatorAuthority) || 'UNKNOWN',
         isSystemAdmin: true,
         coverageAreaId: coverageAreaId || 'none',
+        municipalityId: municipalityId || 'none',
         organizationId: organizationId || 'none',
         pageContext: pageContext || 'none',
         result: 'bypassed (system admin)'
@@ -41,51 +42,85 @@ async function validateJurisdiction(req, res, next) {
       return next();
     }
     
-    // For non-system-admins, coverage area is required for stakeholder creation
-    // But only validate if provided (don't fail on missing)
-    let canCreateCoverage = null;
-    if (coverageAreaId) {
-      canCreateCoverage = await jurisdictionService.canCreateUserInCoverageArea(
-        creatorId, 
-        coverageAreaId
-      );
-      if (!canCreateCoverage) {
-        // Diagnostic logging
+    // For stakeholder creation, validate municipality instead of coverage area
+    if (pageContext === 'stakeholder-management') {
+      // Municipality is required for stakeholder creation
+      if (!municipalityId) {
         console.log('[DIAG] validateJurisdiction:', {
           creatorId: creatorId.toString(),
           creatorAuthority,
           isSystemAdmin: false,
-          coverageAreaId,
-          organizationId: organizationId || 'none',
-          pageContext: pageContext || 'none',
-          canCreateCoverage: false,
-          result: 'REJECTED: coverage area outside jurisdiction'
-        });
-        return res.status(403).json({
-          success: false,
-          message: 'Cannot create user in coverage area outside your jurisdiction',
-          code: 'COVERAGE_AREA_OUTSIDE_JURISDICTION'
-        });
-      }
-    } else {
-      // For coordinators, coverage area should be required
-      // But check page context - stakeholder-management requires coverage area
-      if (pageContext === 'stakeholder-management') {
-        // Diagnostic logging
-        console.log('[DIAG] validateJurisdiction:', {
-          creatorId: creatorId.toString(),
-          creatorAuthority,
-          isSystemAdmin: false,
-          coverageAreaId: 'none',
+          municipalityId: 'none',
           organizationId: organizationId || 'none',
           pageContext,
-          result: 'REJECTED: coverage area required for stakeholder-management'
+          result: 'REJECTED: municipality required for stakeholder-management'
         });
         return res.status(400).json({
           success: false,
-          message: 'Coverage area is required for stakeholder creation',
-          code: 'COVERAGE_AREA_REQUIRED'
+          message: 'Municipality is required for stakeholder creation',
+          code: 'MUNICIPALITY_REQUIRED'
         });
+      }
+      
+      // Validate municipality is within creator's jurisdiction
+      const municipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(creatorId);
+      const municipalityIds = municipalities.map(m => m._id.toString());
+      
+      if (!municipalityIds.includes(municipalityId.toString())) {
+        console.log('[DIAG] validateJurisdiction:', {
+          creatorId: creatorId.toString(),
+          creatorAuthority,
+          isSystemAdmin: false,
+          municipalityId,
+          organizationId: organizationId || 'none',
+          pageContext,
+          result: 'REJECTED: municipality outside jurisdiction'
+        });
+        return res.status(403).json({
+          success: false,
+          message: 'Cannot create stakeholder in municipality outside your jurisdiction',
+          code: 'MUNICIPALITY_OUTSIDE_JURISDICTION'
+        });
+      }
+      
+      // If barangay is provided, validate it belongs to the municipality
+      if (barangayId) {
+        const { Location } = require('../models');
+        const barangay = await Location.findById(barangayId);
+        if (!barangay || barangay.type !== 'barangay' || barangay.parent?.toString() !== municipalityId.toString()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Barangay does not belong to the selected municipality',
+            code: 'INVALID_BARANGAY'
+          });
+        }
+      }
+    } else {
+      // For staff creation, validate coverage area
+      let canCreateCoverage = null;
+      if (coverageAreaId) {
+        canCreateCoverage = await jurisdictionService.canCreateUserInCoverageArea(
+          creatorId, 
+          coverageAreaId
+        );
+        if (!canCreateCoverage) {
+          // Diagnostic logging
+          console.log('[DIAG] validateJurisdiction:', {
+            creatorId: creatorId.toString(),
+            creatorAuthority,
+            isSystemAdmin: false,
+            coverageAreaId,
+            organizationId: organizationId || 'none',
+            pageContext: pageContext || 'none',
+            canCreateCoverage: false,
+            result: 'REJECTED: coverage area outside jurisdiction'
+          });
+          return res.status(403).json({
+            success: false,
+            message: 'Cannot create user in coverage area outside your jurisdiction',
+            code: 'COVERAGE_AREA_OUTSIDE_JURISDICTION'
+          });
+        }
       }
     }
     
@@ -122,9 +157,10 @@ async function validateJurisdiction(req, res, next) {
       creatorAuthority,
       isSystemAdmin: false,
       coverageAreaId: coverageAreaId || 'none',
+      municipalityId: municipalityId || 'none',
+      barangayId: barangayId || 'none',
       organizationId: organizationId || 'none',
       pageContext: pageContext || 'none',
-      canCreateCoverage: canCreateCoverage !== null ? canCreateCoverage : 'N/A',
       canAssignOrg: canAssignOrg !== null ? canAssignOrg : 'N/A',
       result: 'PASSED'
     });

@@ -12,6 +12,13 @@ const mongoose = require('mongoose');
 const { Location } = require('../models');
 require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' : '.env' });
 
+// Barangay data file paths
+const barangayFiles = {
+  'Camarines Norte': path.join(__dirname, 'camnorte-dis-barangay.txt'),
+  'Camarines Sur': path.join(__dirname, 'camsur-dis-barangay.txt'),
+  'Masbate': path.join(__dirname, 'masbate-dis-barangay.txt')
+};
+
 // Accept multiple env var names for compatibility with existing .env
 const rawMongoUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
 const mongoDbName = process.env.MONGO_DB_NAME || null; // optional DB name to ensure connection to a specific DB
@@ -34,6 +41,42 @@ const dryRun = process.argv.includes('--dry-run');
 
 function makeSlug(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+/**
+ * Load barangay data from text files
+ * Format: "BarangayName, Municipality"
+ * @param {string} provinceName - Province name to load barangays for
+ * @returns {Object} Map of municipality name -> array of barangay names
+ */
+function loadBarangayData(provinceName) {
+  const filePath = barangayFiles[provinceName];
+  if (!filePath || !fs.existsSync(filePath)) {
+    console.log(`[INFO] No barangay file found for ${provinceName}`);
+    return {};
+  }
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    
+    const barangayMap = {};
+    for (const line of lines) {
+      const [barangayName, municipalityName] = line.split(',').map(s => s.trim());
+      if (barangayName && municipalityName) {
+        if (!barangayMap[municipalityName]) {
+          barangayMap[municipalityName] = [];
+        }
+        barangayMap[municipalityName].push(barangayName);
+      }
+    }
+    
+    console.log(`[INFO] Loaded barangay data for ${provinceName}: ${Object.keys(barangayMap).length} municipalities`);
+    return barangayMap;
+  } catch (error) {
+    console.error(`[ERROR] Failed to load barangay data for ${provinceName}:`, error.message);
+    return {};
+  }
 }
 
 function loadData() {
@@ -63,8 +106,17 @@ function loadData() {
     {
       name: 'Camarines Norte',
       districts: [
+        // Unified structure: All municipalities accessible regardless of district
+        // Districts are kept for organizational purposes but municipalities are accessible from both
         { name: 'District I', municipalities: ['Capalonga','Jose Panganiban','Labo','Paracale','Sta. Elena'] },
         { name: 'District II', municipalities: ['Basud','Daet','Mercedes','San Lorenzo Ruiz','San Vicente','Talisay','Vinzons'] }
+      ]
+    },
+    {
+      name: 'Masbate',
+      districts: [
+        // Masbate structure - districts will be created from municipalities
+        { name: 'All LGUs', municipalities: ['Aroroy','Baleno','Balud','Batuan','Cataingan','Cawayan','Claveria','Dimasalang','Esperanza','Mandaon','Masbate City','Milagros','Mobo','Monreal','Palanas','Pio V. Corpuz','Placer','San Fernando','San Jacinto','San Pascual','Uson'] }
       ]
     }
   ];
@@ -161,7 +213,7 @@ async function seed() {
           });
           
           if (existingMuni) {
-            // skip
+            console.log(`    Municipality exists: ${m} (district=${d.name})`);
           } else {
             console.log(`    Will create municipality: ${m} (district=${d.name})`);
             if (!dryRun) {
@@ -192,6 +244,60 @@ async function seed() {
                   });
                 } else {
                   throw err;
+                }
+              }
+            } else {
+              existingMuni = { _id: new mongoose.Types.ObjectId(), name: m };
+            }
+          }
+
+          // Seed barangays for this municipality
+          if (existingMuni && !dryRun) {
+            const barangayMap = loadBarangayData(p.name);
+            const barangays = barangayMap[m] || [];
+            
+            if (barangays.length > 0) {
+              console.log(`      Seeding ${barangays.length} barangays for ${m}`);
+              
+              for (const barangayName of barangays) {
+                const barangayCode = `${muniCode}-${makeSlug(barangayName)}`;
+                
+                // Check if barangay already exists
+                const existingBarangay = await Location.findOne({
+                  name: barangayName,
+                  type: 'barangay',
+                  parent: existingMuni._id,
+                  isActive: true
+                });
+                
+                if (!existingBarangay) {
+                  try {
+                    await Location.create({
+                      name: barangayName,
+                      type: 'barangay',
+                      parent: existingMuni._id,
+                      code: barangayCode,
+                      level: 3,
+                      province: existingProvince._id,
+                      isActive: true
+                    });
+                  } catch (err) {
+                    if (err && err.code === 11000) {
+                      // Duplicate code, try with timestamp
+                      const uniqueCode = `${barangayCode}-${Date.now()}`;
+                      await Location.create({
+                        name: barangayName,
+                        type: 'barangay',
+                        parent: existingMuni._id,
+                        code: uniqueCode,
+                        level: 3,
+                        province: existingProvince._id,
+                        isActive: true
+                      });
+                    } else {
+                      console.error(`[ERROR] Failed to create barangay ${barangayName}:`, err.message);
+                    }
+                  }
                 }
               }
             }

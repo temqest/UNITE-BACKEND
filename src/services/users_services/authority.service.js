@@ -74,7 +74,16 @@ class AuthorityService {
       }
 
       // Get user's effective permissions
-      const permissions = await permissionService.getUserPermissions(userId, context);
+      // Only pass context if it has actual filter values, otherwise pass null to avoid filtering out all roles
+      const hasContextFilters = context && (
+        context.locationId || 
+        context.coverageAreaId || 
+        context.geographicUnitId
+      );
+      const permissions = await permissionService.getUserPermissions(
+        userId, 
+        hasContextFilters ? context : null
+      );
 
       // Enhanced logging for authority calculation
       console.log(`[DIAG] calculateUserAuthority - Permission resolution:`, {
@@ -88,30 +97,70 @@ class AuthorityService {
       });
 
       if (permissions.length === 0) {
-        console.log(`[DIAG] calculateUserAuthority - WARNING: User ${userId} has no permissions`);
-        console.log(`[DIAG] calculateUserAuthority - Checking if user has roles assigned...`);
+        console.log(`[RBAC] calculateUserAuthority - WARNING: User ${userId} has no permissions`);
+        console.log(`[RBAC] calculateUserAuthority - Checking if user has roles assigned for fallback authority inference...`);
         
-        // Diagnostic: Check if user has any role assignments
-        const { UserRole } = require('../../models/index');
+        // Fallback: Check if user has any role assignments and infer authority from role code
+        const { UserRole, Role } = require('../../models/index');
         const userRoles = await UserRole.find({ 
           userId: user._id, 
           isActive: true 
         }).populate('roleId');
         
-        console.log(`[DIAG] calculateUserAuthority - User has ${userRoles.length} active role assignments`);
-        for (const ur of userRoles) {
-          const role = ur.roleId;
-          console.log(`[DIAG] calculateUserAuthority - Role assignment:`, {
-            roleId: role?._id || ur.roleId,
-            roleCode: role?.code,
-            roleName: role?.name,
-            roleIsPopulated: !!(role && role._id),
-            roleHasPermissions: !!(role && role.permissions),
-            permissionsCount: role?.permissions?.length || 0
-          });
+        console.log(`[RBAC] calculateUserAuthority - User has ${userRoles.length} active role assignments`);
+        
+        if (userRoles.length > 0) {
+          // Try to infer authority from role codes
+          let inferredAuthority = null;
+          let inferredFromRole = null;
+          
+          for (const ur of userRoles) {
+            let role = ur.roleId;
+            
+            // If role is not populated, try to fetch it
+            if (!role || (typeof role === 'object' && !role._id)) {
+              const roleId = ur.roleId;
+              if (roleId) {
+                role = await Role.findById(roleId);
+              }
+            }
+            
+            if (role && role.code) {
+              const roleCode = role.code.toLowerCase();
+              console.log(`[RBAC] calculateUserAuthority - Checking role code: ${roleCode}`);
+              
+              // Infer authority from role code
+              if (roleCode === 'system-admin' || roleCode === 'system_admin') {
+                inferredAuthority = AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN;
+                inferredFromRole = roleCode;
+                break; // Highest authority, stop checking
+              } else if (roleCode === 'coordinator' && (!inferredAuthority || inferredAuthority < AuthorityService.AUTHORITY_TIERS.COORDINATOR)) {
+                inferredAuthority = AuthorityService.AUTHORITY_TIERS.COORDINATOR;
+                inferredFromRole = roleCode;
+              } else if (roleCode === 'stakeholder' && (!inferredAuthority || inferredAuthority < AuthorityService.AUTHORITY_TIERS.STAKEHOLDER)) {
+                inferredAuthority = AuthorityService.AUTHORITY_TIERS.STAKEHOLDER;
+                inferredFromRole = roleCode;
+              }
+            }
+            
+            console.log(`[RBAC] calculateUserAuthority - Role assignment:`, {
+              roleId: role?._id || ur.roleId,
+              roleCode: role?.code,
+              roleName: role?.name,
+              roleIsPopulated: !!(role && role._id),
+              roleHasPermissions: !!(role && role.permissions),
+              permissionsCount: role?.permissions?.length || 0
+            });
+          }
+          
+          if (inferredAuthority !== null) {
+            console.log(`[RBAC] calculateUserAuthority - Inferred authority ${inferredAuthority} from role code: ${inferredFromRole}`);
+            console.log(`[RBAC] calculateUserAuthority - WARNING: This is a fallback - permissions should be resolved properly`);
+            return inferredAuthority;
+          }
         }
         
-        console.log(`[DIAG] calculateUserAuthority - Returning BASIC_USER due to no permissions`);
+        console.log(`[RBAC] calculateUserAuthority - No roles found or unable to infer authority, returning BASIC_USER`);
         return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
       }
 
@@ -222,12 +271,33 @@ class AuthorityService {
         return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
       }
       
-      if (!role.permissions) {
+      // Primary method: Check role.code directly (most reliable)
+      if (role.code) {
+        const roleCode = role.code.toLowerCase();
+        console.log(`[DIAG] calculateRoleAuthority - Checking role.code: ${roleCode}`);
+        
+        // Direct mapping from role code to authority
+        if (roleCode === 'system-admin' || roleCode === 'system_admin') {
+          console.log(`[DIAG] calculateRoleAuthority - Role ${roleCode} mapped to SYSTEM_ADMIN via role.code`);
+          return AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN;
+        }
+        if (roleCode === 'coordinator') {
+          console.log(`[DIAG] calculateRoleAuthority - Role ${roleCode} mapped to COORDINATOR via role.code`);
+          return AuthorityService.AUTHORITY_TIERS.COORDINATOR;
+        }
+        if (roleCode === 'stakeholder') {
+          console.log(`[DIAG] calculateRoleAuthority - Role ${roleCode} mapped to STAKEHOLDER via role.code`);
+          return AuthorityService.AUTHORITY_TIERS.STAKEHOLDER;
+        }
+      }
+      
+      // Fallback method: Calculate from permissions (if role.code doesn't match known codes)
+      if (!role.permissions || role.permissions.length === 0) {
         console.log(`[DIAG] calculateRoleAuthority - Role ${role.code || roleId} has no permissions, returning BASIC_USER`);
         return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
       }
       
-      console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has ${role.permissions.length} permissions`);
+      console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has ${role.permissions.length} permissions, calculating from permissions`);
 
       // Convert role permissions to same format as user permissions
       const permissions = role.permissions.map(perm => ({
@@ -369,9 +439,10 @@ class AuthorityService {
    * @param {string|ObjectId} viewerId - Viewer's user ID
    * @param {Array<string|ObjectId>} userIds - Array of user IDs to filter
    * @param {Object} context - Optional context
+   * @param {boolean} allowEqualAuthority - If true, allows viewing users with equal authority (for staff management)
    * @returns {Promise<Array<string|ObjectId>>} Filtered array of user IDs
    */
-  async filterUsersByAuthority(viewerId, userIds, context = {}) {
+  async filterUsersByAuthority(viewerId, userIds, context = {}, allowEqualAuthority = false) {
     try {
       if (!userIds || userIds.length === 0) {
         return [];
@@ -383,7 +454,7 @@ class AuthorityService {
         return userIds;
       }
 
-      // Filter users with lower authority
+      // Filter users with lower authority (or equal if allowEqualAuthority is true)
       const filteredIds = [];
       
       // Batch calculate authorities for performance
@@ -393,8 +464,16 @@ class AuthorityService {
       const authorities = await Promise.all(authorityPromises);
 
       for (let i = 0; i < userIds.length; i++) {
-        if (viewerAuthority > authorities[i]) {
-          filteredIds.push(userIds[i]);
+        if (allowEqualAuthority) {
+          // Allow equal or lower authority (for staff management - coordinators can see other coordinators)
+          if (viewerAuthority >= authorities[i]) {
+            filteredIds.push(userIds[i]);
+          }
+        } else {
+          // Original: only lower authority (strict hierarchy)
+          if (viewerAuthority > authorities[i]) {
+            filteredIds.push(userIds[i]);
+          }
         }
       }
 

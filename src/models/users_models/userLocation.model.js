@@ -147,7 +147,8 @@ userLocationSchema.statics.assignLocation = async function(userId, locationId, o
     scope = 'exact',
     isPrimary = false,
     assignedBy = null,
-    expiresAt = null
+    expiresAt = null,
+    session = null
   } = options;
   
   // If setting as primary, unset other primary locations for this user
@@ -155,11 +156,11 @@ userLocationSchema.statics.assignLocation = async function(userId, locationId, o
     await this.updateMany(
       { userId, isPrimary: true },
       { isPrimary: false }
-    );
+    ).session(session);
   }
   
   // Check if assignment already exists
-  const existing = await this.findOne({ userId, locationId });
+  const existing = await this.findOne({ userId, locationId }).session(session);
   
   if (existing) {
     // Update existing assignment
@@ -169,10 +170,10 @@ userLocationSchema.statics.assignLocation = async function(userId, locationId, o
     existing.expiresAt = expiresAt;
     existing.isActive = true;
     existing.assignedAt = new Date();
-    return existing.save();
+    return existing.save({ session });
   } else {
     // Create new assignment
-    return this.create({
+    return this.create([{
       userId,
       locationId,
       scope,
@@ -180,7 +181,7 @@ userLocationSchema.statics.assignLocation = async function(userId, locationId, o
       assignedBy,
       expiresAt,
       assignedAt: new Date()
-    });
+    }], { session }).then(docs => docs[0]);
   }
 };
 

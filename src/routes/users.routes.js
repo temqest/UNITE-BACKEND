@@ -51,6 +51,19 @@ router.get('/users', authenticate, requirePermission('user', 'read'), async (req
 });
 
 /**
+ * @route   GET /api/users/create-context
+ * @desc    Get create context for user creation forms (allowedRoles, lockedFields, etc.)
+ * @access  Private (requires authentication)
+ */
+router.get('/users/create-context', authenticate, async (req, res, next) => {
+  try {
+    await userController.getCreateContext(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/users/by-capability
  * @desc    List users filtered by permission capabilities
  * @access  Private (requires user.read permission)

@@ -45,6 +45,16 @@ const userCoverageAssignmentSchema = new mongoose.Schema({
     index: true
   },
   
+  // Auto-cover descendants flag
+  // If true, user automatically covers all descendant locations (barangays) under this coverage area
+  // For coordinators: typically true (auto-covers all barangays under their municipalities)
+  // For stakeholders: typically false (assigned to specific municipality/barangay)
+  autoCoverDescendants: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  
   // User who assigned this coverage (admin/system)
   assignedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -140,8 +150,10 @@ userCoverageAssignmentSchema.statics.findCoverageAreaUsers = function(coverageAr
 userCoverageAssignmentSchema.statics.assignCoverageArea = async function(userId, coverageAreaId, options = {}) {
   const {
     isPrimary = false,
+    autoCoverDescendants = false,
     assignedBy = null,
-    expiresAt = null
+    expiresAt = null,
+    session = null
   } = options;
   
   // If setting as primary, unset other primary assignments for this user
@@ -149,30 +161,32 @@ userCoverageAssignmentSchema.statics.assignCoverageArea = async function(userId,
     await this.updateMany(
       { userId, isPrimary: true },
       { isPrimary: false }
-    );
+    ).session(session);
   }
   
   // Check if assignment already exists
-  const existing = await this.findOne({ userId, coverageAreaId });
+  const existing = await this.findOne({ userId, coverageAreaId }).session(session);
   
   if (existing) {
     // Update existing assignment
     existing.isPrimary = isPrimary;
+    existing.autoCoverDescendants = autoCoverDescendants;
     existing.assignedBy = assignedBy;
     existing.expiresAt = expiresAt;
     existing.isActive = true;
     existing.assignedAt = new Date();
-    return existing.save();
+    return existing.save({ session });
   } else {
     // Create new assignment
-    return this.create({
+    return this.create([{
       userId,
       coverageAreaId,
       isPrimary,
+      autoCoverDescendants,
       assignedBy,
       expiresAt,
       assignedAt: new Date()
-    });
+    }], { session }).then(docs => docs[0]);
   }
 };
 

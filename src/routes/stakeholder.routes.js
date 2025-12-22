@@ -13,5 +13,15 @@ router.get('/stakeholders/creation-context',
   stakeholderController.getCreationContext.bind(stakeholderController)
 );
 
+/**
+ * @route   GET /api/stakeholders/barangays/:municipalityId
+ * @desc    Get barangays for a municipality
+ * @access  Private (requires authentication)
+ */
+router.get('/stakeholders/barangays/:municipalityId',
+  authenticate,
+  stakeholderController.getBarangays.bind(stakeholderController)
+);
+
 module.exports = router;
 

@@ -13,6 +13,7 @@ const Permission = require('./users_models/permission.model');
 const UserRole = require('./users_models/userRole.model');
 const UserLocation = require('./users_models/userLocation.model');
 const UserCoverageAssignment = require('./users_models/userCoverageAssignment.model');
+const UserOrganization = require('./users_models/userOrganization.model');
 
 // ============================================
 // EVENT MODELS
@@ -169,6 +170,7 @@ module.exports = {
   UserRole,
   UserLocation,
   UserCoverageAssignment,
+  UserOrganization,
   
   // Event Models
   Event,

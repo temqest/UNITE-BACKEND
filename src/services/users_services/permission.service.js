@@ -178,10 +178,10 @@ class PermissionService {
    * @param {Date} expiresAt - Optional expiration date
    * @returns {Promise<Object>} Created UserRole document
    */
-  async assignRole(userId, roleId, locationScope = [], assignedBy = null, expiresAt = null, coverageAreaScope = []) {
+  async assignRole(userId, roleId, locationScope = [], assignedBy = null, expiresAt = null, coverageAreaScope = [], session = null) {
     try {
       // Verify role exists
-      const role = await Role.findById(roleId);
+      const role = await Role.findById(roleId).session(session);
       if (!role) {
         throw new Error('Role not found');
       }
@@ -191,7 +191,7 @@ class PermissionService {
         userId,
         roleId,
         isActive: true
-      });
+      }).session(session);
 
       if (existingRole) {
         // Update existing role assignment
@@ -201,7 +201,7 @@ class PermissionService {
         existingRole.assignedBy = assignedBy;
         existingRole.expiresAt = expiresAt;
         existingRole.assignedAt = new Date();
-        return await existingRole.save();
+        return await existingRole.save({ session });
       }
 
       // Create new role assignment
@@ -216,7 +216,7 @@ class PermissionService {
         }
       });
 
-      return await userRole.save();
+      return await userRole.save({ session });
     } catch (error) {
       throw new Error(`Failed to assign role: ${error.message}`);
     }
@@ -284,7 +284,11 @@ class PermissionService {
         ]
       });
 
+      console.log(`[getUsersWithPermission] Found ${roles.length} roles with permission ${resource}.${action}:`, 
+        roles.map(r => ({ id: r._id, code: r.code, name: r.name })));
+
       if (roles.length === 0) {
+        console.log(`[getUsersWithPermission] No roles found with permission ${resource}.${action}`);
         return [];
       }
 
@@ -300,6 +304,8 @@ class PermissionService {
           { expiresAt: { $gt: new Date() } }
         ]
       }).populate('roleId');
+
+      console.log(`[getUsersWithPermission] Found ${userRoles.length} active UserRole assignments for permission ${resource}.${action}`);
 
       // Filter by location scope if provided (backward compatible)
       // Only filter if locationScope is a valid value (not null, undefined, or empty object)
@@ -317,6 +323,7 @@ class PermissionService {
 
       // Extract unique user IDs
       const userIds = [...new Set(userRoles.map(ur => ur.userId.toString()))];
+      console.log(`[getUsersWithPermission] Returning ${userIds.length} unique user IDs for permission ${resource}.${action}:`, userIds);
       return userIds;
     } catch (error) {
       console.error('Error getting users with permission:', error);
@@ -385,7 +392,7 @@ class PermissionService {
     let skippedRoles = 0;
     
     for (const userRole of userRoles) {
-      const role = userRole.roleId;
+      let role = userRole.roleId;
       
       // Check if role is a Mongoose document (not just an ObjectId reference)
       const isMongooseDocument = role && typeof role === 'object' && role._id && role.constructor && role.constructor.name !== 'Object';
@@ -411,11 +418,26 @@ class PermissionService {
         continue;
       }
       
-      // If role is just an ObjectId (not populated), skip it
+      // If role is just an ObjectId (not populated), try to populate it
       if (isObjectId && !isMongooseDocument) {
-        skippedRoles++;
-        console.log(`[DIAG] Skipping userRole ${userRole._id}: role is not populated (ObjectId only)`);
-        continue;
+        console.log(`[RBAC] aggregatePermissions - Role not populated for userRole ${userRole._id}, attempting to populate...`);
+        try {
+          const roleId = userRole.roleId;
+          const populatedRole = await Role.findById(roleId);
+          if (populatedRole) {
+            userRole.roleId = populatedRole;
+            role = populatedRole;
+            console.log(`[RBAC] aggregatePermissions - Successfully populated role ${populatedRole.code} for userRole ${userRole._id}`);
+          } else {
+            skippedRoles++;
+            console.error(`[RBAC] aggregatePermissions - Role ${roleId} not found in database for userRole ${userRole._id}`);
+            continue;
+          }
+        } catch (populateError) {
+          skippedRoles++;
+          console.error(`[RBAC] aggregatePermissions - Failed to populate role for userRole ${userRole._id}:`, populateError.message);
+          continue;
+        }
       }
       
       if (!role.permissions) {
