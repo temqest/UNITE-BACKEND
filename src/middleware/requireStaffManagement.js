@@ -1,6 +1,46 @@
 const permissionService = require('../services/users_services/permission.service');
 
 /**
+ * Map role code to staff type based on role capabilities
+ * @param {string} roleCode - Role code to map
+ * @returns {Promise<string|null>} Staff type ('stakeholder', 'coordinator', or null)
+ */
+async function getStaffTypeFromRoleCode(roleCode) {
+  if (!roleCode) return null;
+  
+  const role = await permissionService.getRoleByCode(roleCode);
+  
+  if (!role) return null;
+  
+  // Determine staff type from role's capabilities
+  const hasReview = await permissionService.roleHasCapability(role._id, 'request.review');
+  const hasOperational = await permissionService.roleHasCapability(role._id, 'request.create') ||
+                         await permissionService.roleHasCapability(role._id, 'event.create') ||
+                         await permissionService.roleHasCapability(role._id, 'staff.create');
+  
+  if (hasReview && !hasOperational) {
+    return 'stakeholder';
+  } else if (hasOperational) {
+    return 'coordinator';
+  }
+  
+  // Check role metadata or name for staff type hint
+  if (role.metadata?.staffType) {
+    return role.metadata.staffType;
+  }
+  
+  // Fallback: infer from role code pattern
+  const codeLower = roleCode.toLowerCase();
+  if (codeLower.includes('stakeholder') || codeLower.includes('reviewer')) {
+    return 'stakeholder';
+  } else if (codeLower.includes('coordinator') || codeLower.includes('admin')) {
+    return 'coordinator';
+  }
+  
+  return null;
+}
+
+/**
  * Middleware to require staff management permission
  * @param {string} action - Action (e.g., 'create', 'update', 'delete')
  * @param {string} staffTypeParam - Request parameter name that contains staff type (default: 'staffType')
@@ -25,19 +65,28 @@ function requireStaffManagement(action, staffTypeParam = 'staffType') {
                         req.body?.location?.province ||
                         null;
 
-      // Get staff type from request (body, params, or query)
-      const staffType = req.body?.[staffTypeParam] || 
-                       req.params?.[staffTypeParam] || 
-                       req.query?.[staffTypeParam] ||
-                       req.body?.role ||
-                       req.body?.roles?.[0] ||
-                       null;
+      // Get staff type from request or map from role code
+      let staffType = req.body?.[staffTypeParam] || 
+                     req.params?.[staffTypeParam] || 
+                     req.query?.[staffTypeParam] ||
+                     null;
+      
+      // If not provided, try to extract from roles array
+      if (!staffType && req.body?.roles && req.body.roles.length > 0) {
+        const roleCode = req.body.roles[0];
+        staffType = await getStaffTypeFromRoleCode(roleCode);
+      }
+      
+      // If still not found, try role field
+      if (!staffType && req.body?.role) {
+        staffType = await getStaffTypeFromRoleCode(req.body.role);
+      }
 
       // Check staff management permission
       const canManage = await permissionService.canManageStaff(
         userId,
         action,
-        staffType,
+        staffType, // Now correctly mapped to staff type
         { locationId }
       );
 
@@ -54,6 +103,16 @@ function requireStaffManagement(action, staffTypeParam = 'staffType') {
       // Attach allowed staff types to request for use in controllers
       const allowedTypes = await permissionService.getAllowedStaffTypes(userId, action, { locationId });
       req.allowedStaffTypes = allowedTypes;
+
+      // Diagnostic logging
+      console.log('[DIAG] requireStaffManagement:', {
+        userId: userId.toString(),
+        action,
+        staffType: staffType || 'none',
+        canManage,
+        allowedStaffTypes: allowedTypes,
+        locationId: locationId || 'none'
+      });
 
       next();
     } catch (error) {
@@ -139,6 +198,16 @@ function validatePageContext(pageContext) {
 
         if (hasRequiredCapability) break;
       }
+
+      // Diagnostic logging
+      console.log('[DIAG] validatePageContext:', {
+        context: context || 'none',
+        roles: roles,
+        rolesCount: roles.length,
+        requiredCapabilities: requirements.required,
+        hasRequiredCapability,
+        roleCapabilities: roleCapabilities
+      });
 
       if (!hasRequiredCapability) {
         return res.status(400).json({

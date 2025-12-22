@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { Role, Permission, UserRole, UserCoverageAssignment, CoverageArea } = require('../../models/index');
 const userCoverageAssignmentService = require('./userCoverageAssignment.service');
 
@@ -71,6 +72,9 @@ class PermissionService {
    */
   async getUserPermissions(userId, locationScopeOrContext = null, context = {}) {
     try {
+      // Diagnostic logging
+      console.log(`[DIAG] getUserPermissions called with userId: ${userId}, type: ${typeof userId}`);
+      
       // Handle backward compatibility: if second param is an object with context properties, treat it as context
       let locationScope = null;
       let actualContext = context;
@@ -85,8 +89,25 @@ class PermissionService {
         locationScope = locationScopeOrContext;
       }
 
+      // Convert userId to ObjectId if it's a valid ObjectId string
+      let actualUserId = userId;
+      let userIdIsObjectId = false;
+      
+      if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
+        actualUserId = new mongoose.Types.ObjectId(userId);
+        userIdIsObjectId = true;
+        console.log(`[DIAG] Converted userId string to ObjectId: ${actualUserId}`);
+      } else if (userId instanceof mongoose.Types.ObjectId) {
+        userIdIsObjectId = true;
+        console.log(`[DIAG] userId is already ObjectId: ${actualUserId}`);
+      } else {
+        console.log(`[DIAG] userId is string format: ${actualUserId}`);
+      }
+      
+      console.log(`[DIAG] Querying UserRole.find({ userId: ${actualUserId}, isActive: true })`);
+
       let userRoles = await UserRole.find({ 
-        userId, 
+        userId: actualUserId, 
         isActive: true,
         $or: [
           { expiresAt: { $exists: false } },
@@ -94,6 +115,39 @@ class PermissionService {
           { expiresAt: { $gt: new Date() } }
         ]
       }).populate('roleId');
+      
+      console.log(`[DIAG] Found ${userRoles.length} active role assignments`);
+      
+      // Fallback: if no roles found and userId was converted to ObjectId, try original string format
+      if (userRoles.length === 0 && userIdIsObjectId && typeof userId === 'string') {
+        console.log(`[DIAG] No roles found with ObjectId, trying string format: ${userId}`);
+        userRoles = await UserRole.find({ 
+          userId: userId, 
+          isActive: true,
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: new Date() } }
+          ]
+        }).populate('roleId');
+        console.log(`[DIAG] Found ${userRoles.length} active role assignments with string format`);
+      }
+      
+      // Diagnostic: Check if roles are populated
+      for (let i = 0; i < userRoles.length; i++) {
+        const ur = userRoles[i];
+        const role = ur.roleId;
+        console.log(`[DIAG] UserRole[${i}]:`, {
+          userRoleId: ur._id,
+          roleIdRef: ur.roleId,
+          roleIsPopulated: role && typeof role === 'object' && role._id,
+          roleType: typeof role,
+          roleCode: role?.code,
+          roleName: role?.name,
+          hasPermissions: !!(role && role.permissions),
+          permissionsLength: role?.permissions?.length || 0
+        });
+      }
 
       if (locationScope) {
         userRoles = await this.filterByLocationScope(userRoles, locationScope);
@@ -102,11 +156,15 @@ class PermissionService {
       // Support coverage area scope (new)
       if (actualContext?.coverageAreaId) {
         userRoles = await this.filterByCoverageAreaScope(userRoles, actualContext.coverageAreaId);
+        console.log(`[DIAG] After coverage area filter: ${userRoles.length} roles`);
       }
 
-      return await this.aggregatePermissions(userRoles);
+      const permissions = await this.aggregatePermissions(userRoles);
+      console.log(`[DIAG] Aggregated ${permissions.length} permissions from ${userRoles.length} roles`);
+      
+      return permissions;
     } catch (error) {
-      console.error('Error getting user permissions:', error);
+      console.error('[DIAG] Error getting user permissions:', error);
       return [];
     }
   }
@@ -273,8 +331,20 @@ class PermissionService {
    */
   async getUserRoles(userId) {
     try {
+      // Diagnostic logging
+      console.log(`[DIAG] getUserRoles called with userId: ${userId}, type: ${typeof userId}`);
+      
+      // Convert userId to ObjectId if it's a valid ObjectId string
+      let actualUserId = userId;
+      if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
+        actualUserId = new mongoose.Types.ObjectId(userId);
+        console.log(`[DIAG] Converted userId string to ObjectId: ${actualUserId}`);
+      }
+      
+      console.log(`[DIAG] Querying UserRole.find({ userId: ${actualUserId}, isActive: true })`);
+      
       const userRoles = await UserRole.find({
-        userId,
+        userId: actualUserId,
         isActive: true,
         $or: [
           { expiresAt: { $exists: false } },
@@ -283,9 +353,14 @@ class PermissionService {
         ]
       }).populate('roleId');
 
+      console.log(`[DIAG] Found ${userRoles.length} active role assignments for user ${userId}`);
+      if (userRoles.length > 0) {
+        console.log(`[DIAG] Role codes: [${userRoles.map(ur => ur.roleId?.code || 'N/A').join(', ')}]`);
+      }
+
       return userRoles.map(ur => ur.roleId).filter(r => r !== null);
     } catch (error) {
-      console.error('Error getting user roles:', error);
+      console.error('[DIAG] Error getting user roles:', error);
       return [];
     }
   }
@@ -299,11 +374,87 @@ class PermissionService {
   async aggregatePermissions(userRoles) {
     const permissionsMap = new Map();
 
+    console.log(`[DIAG] aggregatePermissions called with ${userRoles.length} userRoles`);
+    
+    if (!userRoles || userRoles.length === 0) {
+      console.log(`[DIAG] aggregatePermissions: No userRoles provided, returning empty permissions`);
+      return [];
+    }
+    
+    let processedRoles = 0;
+    let skippedRoles = 0;
+    
     for (const userRole of userRoles) {
       const role = userRole.roleId;
-      if (!role || !role.permissions) continue;
+      
+      // Check if role is a Mongoose document (not just an ObjectId reference)
+      const isMongooseDocument = role && typeof role === 'object' && role._id && role.constructor && role.constructor.name !== 'Object';
+      const isObjectId = role && (role instanceof mongoose.Types.ObjectId || (typeof role === 'object' && role.toString && role.toString().length === 24));
+      
+      console.log(`[DIAG] Processing userRole:`, {
+        userRoleId: userRole._id,
+        roleId: role?._id || role,
+        roleType: typeof role,
+        roleIsObject: role && typeof role === 'object',
+        isMongooseDocument,
+        isObjectId,
+        hasRole: !!role,
+        hasPermissions: !!(role && role.permissions),
+        permissionsCount: role?.permissions?.length || 0,
+        roleCode: role?.code,
+        roleName: role?.name
+      });
+      
+      if (!role) {
+        skippedRoles++;
+        console.log(`[DIAG] Skipping userRole ${userRole._id}: role is null/undefined`);
+        continue;
+      }
+      
+      // If role is just an ObjectId (not populated), skip it
+      if (isObjectId && !isMongooseDocument) {
+        skippedRoles++;
+        console.log(`[DIAG] Skipping userRole ${userRole._id}: role is not populated (ObjectId only)`);
+        continue;
+      }
+      
+      if (!role.permissions) {
+        skippedRoles++;
+        console.log(`[DIAG] Skipping userRole ${userRole._id}: role.permissions is null/undefined`);
+        continue;
+      }
+      
+      if (!Array.isArray(role.permissions)) {
+        skippedRoles++;
+        console.log(`[DIAG] Skipping userRole ${userRole._id}: role.permissions is not an array (type: ${typeof role.permissions})`);
+        continue;
+      }
+      
+      if (role.permissions.length === 0) {
+        skippedRoles++;
+        console.log(`[DIAG] Skipping userRole ${userRole._id}: role.permissions is empty array`);
+        continue;
+      }
+
+      processedRoles++;
+      console.log(`[DIAG] Processing permissions from role ${role.code || role._id} (${role.permissions.length} permissions)`);
 
       for (const perm of role.permissions) {
+        // Validate permission structure
+        if (!perm || typeof perm !== 'object') {
+          console.log(`[DIAG] Skipping invalid permission object in role ${role.code || role._id}`);
+          continue;
+        }
+        
+        if (!perm.resource || typeof perm.resource !== 'string') {
+          console.log(`[DIAG] Skipping permission with invalid resource in role ${role.code || role._id}`);
+          continue;
+        }
+        
+        if (!perm.actions || !Array.isArray(perm.actions) || perm.actions.length === 0) {
+          console.log(`[DIAG] Skipping permission with invalid actions in role ${role.code || role._id}`);
+          continue;
+        }
         // Use resource as key to merge all permissions for same resource
         const key = perm.resource;
         if (!permissionsMap.has(key)) {
@@ -348,7 +499,16 @@ class PermissionService {
       }
     }
 
-    return Array.from(permissionsMap.values());
+    const finalPermissions = Array.from(permissionsMap.values());
+    console.log(`[DIAG] aggregatePermissions summary:`, {
+      totalUserRoles: userRoles.length,
+      processedRoles,
+      skippedRoles,
+      finalPermissionsCount: finalPermissions.length,
+      permissions: finalPermissions.map(p => `${p.resource}.${p.actions?.join(',') || '[]'}`)
+    });
+
+    return finalPermissions;
   }
 
   /**

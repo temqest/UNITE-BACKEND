@@ -368,6 +368,7 @@ class PermissionController {
     try {
       const userId = req.user?.id || req.user?._id;
       const locationId = req.query.locationId || null;
+      const { capability } = req.query;
       const context = locationId ? { locationId } : {};
 
       if (!userId) {
@@ -378,6 +379,7 @@ class PermissionController {
       }
 
       const authorityService = require('../../services/users_services/authority.service');
+      const AuthorityService = authorityService.AuthorityService || authorityService.constructor;
       const { Role } = require('../../models/index');
       
       // Helper to get tier name
@@ -396,20 +398,136 @@ class PermissionController {
       const userAuthority = await authorityService.calculateUserAuthority(userId, context);
       
       // Filter roles that user can assign (user authority > role authority)
-      const assignableRoles = [];
+      let assignableRoles = [];
+      const filteredOutByAuthority = [];
+      
       for (const role of allRoles) {
         const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
-        if (userAuthority > roleAuthority) {
-          assignableRoles.push({
-            _id: role._id,
+        
+        // Log why roles are filtered out
+        if (userAuthority <= roleAuthority) {
+          filteredOutByAuthority.push({
             code: role.code,
             name: role.name,
-            description: role.description,
-            authority: roleAuthority,
-            tierName: getTierName(roleAuthority)
+            roleAuthority,
+            userAuthority,
+            reason: userAuthority === roleAuthority ? 'equal authority' : 'user authority too low'
           });
+          continue;
         }
+        
+        // Get role capabilities
+        let capabilities = [];
+        try {
+          capabilities = await permissionService.getRoleCapabilities(role._id);
+        } catch (err) {
+          console.error(`[DIAG] Failed to get capabilities for role ${role._id}:`, err);
+        }
+        
+        assignableRoles.push({
+          _id: role._id,
+          code: role.code,
+          name: role.name,
+          description: role.description,
+          authority: roleAuthority,
+          tierName: getTierName(roleAuthority),
+          capabilities: capabilities
+        });
       }
+      
+      console.log(`[DIAG] getAssignableRoles - Authority filter:`, {
+        totalRoles: allRoles.length,
+        passedAuthorityFilter: assignableRoles.length,
+        filteredOut: filteredOutByAuthority.length,
+        filteredOutRoles: filteredOutByAuthority
+      });
+
+      // Filter by capability if provided
+      if (capability) {
+        const beforeCapabilityFilter = assignableRoles.length;
+        const filteredOutByCapability = [];
+        
+        assignableRoles = assignableRoles.filter(role => {
+          const hasCapability = role.capabilities.includes(capability) || role.capabilities.includes('*');
+          
+          if (!hasCapability) {
+            filteredOutByCapability.push({
+              code: role.code,
+              name: role.name,
+              capabilities: role.capabilities,
+              requiredCapability: capability,
+              reason: 'missing required capability'
+            });
+            return false;
+          }
+          return true;
+        });
+        
+        console.log(`[DIAG] getAssignableRoles - Capability filter:`, {
+          requiredCapability: capability,
+          beforeFilter: beforeCapabilityFilter,
+          afterFilter: assignableRoles.length,
+          filteredOut: filteredOutByCapability.length,
+          filteredOutRoles: filteredOutByCapability
+        });
+      }
+
+      // Exclude operational roles for stakeholder-management page (when capability is request.review)
+      // BUT: System admin should be able to assign ANY role, including coordinator
+      const beforeOperationalFilter = assignableRoles.length;
+      const filteredOutByOperational = [];
+      
+      if (capability === 'request.review' && userAuthority < AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        // Only apply operational filter for non-system-admins
+        // System admins can assign any role, including coordinator
+        const operationalCapabilities = ['request.create', 'event.create', 'staff.create', 'staff.update'];
+        assignableRoles = assignableRoles.filter(role => {
+          // Exclude roles that have operational capabilities
+          const hasOperational = role.capabilities.some(cap => 
+            operationalCapabilities.includes(cap) || cap === '*'
+          );
+          
+          if (hasOperational) {
+            filteredOutByOperational.push({
+              code: role.code,
+              name: role.name,
+              capabilities: role.capabilities,
+              reason: 'has operational capabilities (non-admin filter)'
+            });
+            return false;
+          }
+          return true;
+        });
+        
+        console.log(`[DIAG] getAssignableRoles - Operational filter (non-admin):`, {
+          beforeFilter: beforeOperationalFilter,
+          afterFilter: assignableRoles.length,
+          filteredOut: filteredOutByOperational.length,
+          filteredOutRoles: filteredOutByOperational
+        });
+      } else if (capability === 'request.review' && userAuthority >= AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        console.log(`[DIAG] getAssignableRoles - Skipping operational filter for system admin`);
+      }
+
+      // Diagnostic logging
+      console.log('[DIAG] getAssignableRoles:', {
+        userId: userId.toString(),
+        userAuthority,
+        userTierName: getTierName(userAuthority),
+        capability: capability || 'none',
+        allRolesCount: allRoles.length,
+        afterAuthorityFilter: assignableRoles.length + (beforeOperationalFilter - assignableRoles.length),
+        afterCapabilityFilter: capability ? assignableRoles.length : 'N/A',
+        afterOperationalFilter: capability === 'request.review' ? assignableRoles.length : 'N/A',
+        finalRolesCount: assignableRoles.length,
+        finalRoles: assignableRoles.map(r => ({ 
+          code: r.code, 
+          name: r.name,
+          authority: r.authority,
+          tierName: r.tierName,
+          capabilities: r.capabilities
+        }))
+      });
 
       return res.status(200).json({
         success: true,

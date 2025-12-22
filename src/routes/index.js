@@ -15,6 +15,7 @@ const organizationsRoutes = require('./organizations.routes'); // Organization m
 const coverageAreasRoutes = require('./coverageAreas.routes'); // Coverage area management routes
 const rbacRoutes = require('./rbac.routes'); // RBAC management routes
 const pagesRoutes = require('./pages.routes'); // Page and feature access routes
+const stakeholderRoutes = require('./stakeholder.routes'); // Stakeholder management routes
 
 // Mount routes
 // Auth routes are mounted under /api/auth (canonical) and also under /api
@@ -29,8 +30,9 @@ router.use('/api', inventoryRoutes);
 router.use('/api', locationsRoutes); // New flexible location routes
 router.use('/api', organizationsRoutes); // Organization management routes
 router.use('/api', coverageAreasRoutes); // Coverage area management routes
-router.use('/api', rbacRoutes); // RBAC management routes
+router.use('/api/rbac', rbacRoutes); // RBAC management routes
 router.use('/api', pagesRoutes); // Page and feature access routes
+router.use('/api', stakeholderRoutes); // Stakeholder management routes
 router.use('/api/chat', chatRoutes);
 router.use('/api/files', filesRoutes);
 

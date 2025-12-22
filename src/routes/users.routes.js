@@ -8,6 +8,7 @@ const { Location } = require('../models/index');
 const authenticate = require('../middleware/authenticate');
 const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
 const { requireStaffManagement, validatePageContext } = require('../middleware/requireStaffManagement');
+const validateJurisdiction = require('../middleware/validateJurisdiction');
 
 const { validateCreateUser, validateUpdateUser } = require('../validators/users_validators/user.validators');
 const { validateAssignUserCoverageArea } = require('../validators/users_validators/userCoverageAssignment.validators');
@@ -97,11 +98,32 @@ router.post('/users',
   authenticate, 
   requireStaffManagement('create', 'staffType'), 
   validatePageContext(), 
+  validateJurisdiction,
   validateCreateUser, 
   async (req, res, next) => {
     try {
-      // Check if requested staff type is allowed
-      const requestedStaffType = req.body.roles?.[0] || req.body.staffType;
+      // Map role code to staff type for validation
+      const permissionService = require('../services/users_services/permission.service');
+      let requestedStaffType = req.body.staffType;
+      
+      if (!requestedStaffType && req.body.roles && req.body.roles.length > 0) {
+        const roleCode = req.body.roles[0];
+        const role = await permissionService.getRoleByCode(roleCode);
+        
+        if (role) {
+          // Determine staff type from role capabilities
+          const hasReview = await permissionService.roleHasCapability(role._id, 'request.review');
+          const hasOperational = await permissionService.roleHasCapability(role._id, 'request.create') ||
+                                 await permissionService.roleHasCapability(role._id, 'event.create');
+          
+          if (hasReview && !hasOperational) {
+            requestedStaffType = 'stakeholder';
+          } else if (hasOperational) {
+            requestedStaffType = 'coordinator';
+          }
+        }
+      }
+      
       const allowedTypes = req.allowedStaffTypes || [];
       
       if (requestedStaffType && allowedTypes.length > 0 && !allowedTypes.includes('*')) {

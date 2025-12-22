@@ -18,13 +18,31 @@ class UserCoverageAssignmentService {
    */
   async assignUserToCoverageArea(userId, coverageAreaId, options = {}) {
     try {
+      // Diagnostic logging
+      console.log(`[DIAG] assignUserToCoverageArea called with userId: ${userId}, coverageAreaId: ${coverageAreaId}`);
+      
       const { isPrimary = false, assignedBy = null, expiresAt = null } = options;
 
-      // Validate user exists
-      const user = await User.findById(userId);
+      // Validate user exists - try multiple lookup methods
+      const mongoose = require('mongoose');
+      let user = null;
+      
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        console.log(`[DIAG] Attempting User.findById('${userId}')...`);
+        user = await User.findById(userId);
+      }
+      
       if (!user) {
+        console.log(`[DIAG] Attempting User.findByLegacyId('${userId}')...`);
+        user = await User.findByLegacyId(userId);
+      }
+      
+      if (!user) {
+        console.log(`[DIAG] ERROR: User not found: ${userId}`);
         throw new Error('User not found');
       }
+      
+      console.log(`[DIAG] User found: ${user.email} (_id: ${user._id})`);
 
       // Validate coverage area exists
       const coverageArea = await CoverageArea.findById(coverageAreaId);
@@ -69,11 +87,36 @@ class UserCoverageAssignmentService {
    */
   async getUserCoverageAreas(userId, options = {}) {
     try {
+      // Diagnostic logging
+      console.log(`[DIAG] getUserCoverageAreas called with userId: ${userId}, type: ${typeof userId}`);
+      
       const { includeInactive = false } = options;
+      console.log(`[DIAG] Options: includeInactive=${includeInactive}`);
 
-      const assignments = await UserCoverageAssignment.findUserCoverageAreas(userId, includeInactive);
+      // Convert userId to ObjectId if needed
+      const mongoose = require('mongoose');
+      let actualUserId = userId;
+      if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
+        actualUserId = new mongoose.Types.ObjectId(userId);
+        console.log(`[DIAG] Converted userId string to ObjectId: ${actualUserId}`);
+      }
+
+      console.log(`[DIAG] Calling UserCoverageAssignment.findUserCoverageAreas(${actualUserId}, ${includeInactive})...`);
+      const assignments = await UserCoverageAssignment.findUserCoverageAreas(actualUserId, includeInactive);
+      
+      console.log(`[DIAG] Found ${assignments.length} coverage area assignments for user ${userId}`);
+      if (assignments.length > 0) {
+        assignments.forEach((assignment, index) => {
+          const ca = assignment.coverageAreaId;
+          const caId = ca?._id || assignment.coverageAreaId;
+          const caName = ca?.name || 'N/A';
+          console.log(`[DIAG] Assignment ${index + 1}: Coverage Area ${caName} (${caId}), Primary: ${assignment.isPrimary || false}`);
+        });
+      }
+      
       return assignments;
     } catch (error) {
+      console.error(`[DIAG] Error in getUserCoverageAreas: ${error.message}`);
       throw new Error(`Failed to get user coverage areas: ${error.message}`);
     }
   }

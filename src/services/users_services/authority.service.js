@@ -11,7 +11,7 @@ const { Role } = require('../../models/index');
  * - SYSTEM_ADMIN (100): Has *.* permission
  * - OPERATIONAL_ADMIN (80): Can manage all staff types
  * - COORDINATOR (60): Has operational capabilities
- * - STAKEHOLDER (40): Has review-only capabilities
+ * - STAKEHOLDER (30): Has review-only capabilities
  * - BASIC_USER (20): Minimal permissions
  */
 class AuthorityService {
@@ -20,7 +20,7 @@ class AuthorityService {
     SYSTEM_ADMIN: 100,
     OPERATIONAL_ADMIN: 80,
     COORDINATOR: 60,
-    STAKEHOLDER: 40,
+    STAKEHOLDER: 30,
     BASIC_USER: 20
   };
 
@@ -32,32 +32,93 @@ class AuthorityService {
    */
   async calculateUserAuthority(userId, context = {}) {
     try {
+      // Diagnostic logging
+      console.log(`[DIAG] calculateUserAuthority called with userId: ${userId}, type: ${typeof userId}`);
+      
       // First, check if user has isSystemAdmin flag (highest priority)
       const { User } = require('../../models/index');
-      const user = await User.findById(userId);
+      
+      // Try multiple lookup methods
+      let user = null;
+      const mongoose = require('mongoose');
+      
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        console.log(`[DIAG] Attempting User.findById('${userId}')...`);
+        user = await User.findById(userId);
+        if (user) {
+          console.log(`[DIAG] ✓ User found via findById: ${user.email} (_id: ${user._id}, isSystemAdmin: ${user.isSystemAdmin})`);
+        } else {
+          console.log(`[DIAG] ✗ findById returned null`);
+        }
+      }
+      
+      if (!user) {
+        console.log(`[DIAG] Attempting User.findByLegacyId('${userId}')...`);
+        user = await User.findByLegacyId(userId);
+        if (user) {
+          console.log(`[DIAG] ✓ User found via findByLegacyId: ${user.email} (_id: ${user._id}, isSystemAdmin: ${user.isSystemAdmin})`);
+        } else {
+          console.log(`[DIAG] ✗ findByLegacyId returned null`);
+        }
+      }
+      
+      if (!user) {
+        console.log(`[DIAG] WARNING: User not found for authority calculation: ${userId}`);
+        console.log(`[DIAG] Returning BASIC_USER authority as fallback`);
+        return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
+      }
+      
       if (user && user.isSystemAdmin) {
+        console.log(`[DIAG] User is system admin, returning SYSTEM_ADMIN authority`);
         return AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN;
       }
 
       // Get user's effective permissions
       const permissions = await permissionService.getUserPermissions(userId, context);
 
-      // Debug logging for authority calculation (can be removed in production)
+      // Enhanced logging for authority calculation
+      console.log(`[DIAG] calculateUserAuthority - Permission resolution:`, {
+        userId: userId.toString(),
+        permissionsCount: permissions.length,
+        permissions: permissions.map(p => ({
+          resource: p.resource,
+          actions: p.actions,
+          metadata: p.metadata
+        }))
+      });
+
       if (permissions.length === 0) {
-        console.log(`[calculateUserAuthority] User ${userId} has no permissions`);
-      } else {
-        // Log permissions for debugging (only for first few calls to avoid spam)
-        const debugKey = `auth_debug_${userId}`;
-        if (!this._debugLogged || !this._debugLogged[debugKey]) {
-          if (!this._debugLogged) this._debugLogged = {};
-          this._debugLogged[debugKey] = true;
-          console.log(`[calculateUserAuthority] User ${userId} permissions:`, 
-            permissions.map(p => `${p.resource}.${p.actions?.join(',') || '[]'}`));
+        console.log(`[DIAG] calculateUserAuthority - WARNING: User ${userId} has no permissions`);
+        console.log(`[DIAG] calculateUserAuthority - Checking if user has roles assigned...`);
+        
+        // Diagnostic: Check if user has any role assignments
+        const { UserRole } = require('../../models/index');
+        const userRoles = await UserRole.find({ 
+          userId: user._id, 
+          isActive: true 
+        }).populate('roleId');
+        
+        console.log(`[DIAG] calculateUserAuthority - User has ${userRoles.length} active role assignments`);
+        for (const ur of userRoles) {
+          const role = ur.roleId;
+          console.log(`[DIAG] calculateUserAuthority - Role assignment:`, {
+            roleId: role?._id || ur.roleId,
+            roleCode: role?.code,
+            roleName: role?.name,
+            roleIsPopulated: !!(role && role._id),
+            roleHasPermissions: !!(role && role.permissions),
+            permissionsCount: role?.permissions?.length || 0
+          });
         }
+        
+        console.log(`[DIAG] calculateUserAuthority - Returning BASIC_USER due to no permissions`);
+        return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
       }
 
       // Check for system admin (wildcard permission)
-      if (permissions.some(p => p.resource === '*' && p.actions.includes('*'))) {
+      const hasWildcard = permissions.some(p => p.resource === '*' && p.actions.includes('*'));
+      if (hasWildcard) {
+        console.log(`[DIAG] calculateUserAuthority - User ${userId} has wildcard permission, returning SYSTEM_ADMIN`);
         return AuthorityService.AUTHORITY_TIERS.SYSTEM_ADMIN;
       }
 
@@ -72,8 +133,23 @@ class AuthorityService {
       });
 
       if (hasOperationalAdmin) {
+        console.log(`[DIAG] calculateUserAuthority - User ${userId} has operational admin permissions, returning OPERATIONAL_ADMIN`);
         return AuthorityService.AUTHORITY_TIERS.OPERATIONAL_ADMIN;
       }
+
+      // Check for stakeholder (review-only capabilities) - MUST check BEFORE coordinator
+      // A user is STAKEHOLDER if they have review capabilities but NO operational capabilities
+      const hasReview = permissions.some(p => {
+        // Check wildcard permissions
+        if (p.resource === '*' && (p.actions.includes('*') || p.actions.includes('review'))) {
+          return true;
+        }
+        // Check specific review permission
+        if (p.resource === 'request' && (p.actions.includes('*') || p.actions.includes('review'))) {
+          return true;
+        }
+        return false;
+      });
 
       // Check for coordinator (operational capabilities)
       // Must have at least one of: request.create, event.create, event.update, staff.create, staff.update
@@ -99,31 +175,33 @@ class AuthorityService {
         });
       });
 
+      // If user has review but NO operational capabilities, it's a STAKEHOLDER
+      if (hasReview && !hasOperational) {
+        console.log(`[DIAG] calculateUserAuthority - User ${userId} has review-only capabilities, returning STAKEHOLDER`);
+        return AuthorityService.AUTHORITY_TIERS.STAKEHOLDER;
+      }
+
+      // If user has operational capabilities, it's a COORDINATOR
       if (hasOperational) {
+        console.log(`[DIAG] calculateUserAuthority - User ${userId} has operational capabilities, returning COORDINATOR`);
         return AuthorityService.AUTHORITY_TIERS.COORDINATOR;
       }
 
-      // Check for stakeholder (review-only capabilities)
-      const hasReview = permissions.some(p => {
-        // Check wildcard permissions
-        if (p.resource === '*' && (p.actions.includes('*') || p.actions.includes('review'))) {
-          return true;
-        }
-        // Check specific review permission
-        if (p.resource === 'request' && (p.actions.includes('*') || p.actions.includes('review'))) {
-          return true;
-        }
-        return false;
-      });
-
+      // If user only has review (but we already checked above), fall through
       if (hasReview) {
+        console.log(`[DIAG] calculateUserAuthority - User ${userId} has review capabilities, returning STAKEHOLDER`);
         return AuthorityService.AUTHORITY_TIERS.STAKEHOLDER;
       }
 
       // Default to basic user
+      console.log(`[DIAG] calculateUserAuthority - User ${userId} has no matching authority tier, returning BASIC_USER`);
       return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
     } catch (error) {
-      console.error('Error calculating user authority:', error);
+      console.error('[DIAG] calculateUserAuthority - ERROR:', {
+        userId: userId?.toString() || 'unknown',
+        error: error.message,
+        stack: error.stack
+      });
       // On error, return lowest authority for security
       return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
     }
@@ -136,11 +214,20 @@ class AuthorityService {
    */
   async calculateRoleAuthority(roleId) {
     try {
-      const role = await Role.findById(roleId).populate('permissions');
+      console.log(`[DIAG] calculateRoleAuthority called with roleId: ${roleId}`);
+      const role = await Role.findById(roleId);
       
-      if (!role || !role.permissions) {
+      if (!role) {
+        console.log(`[DIAG] calculateRoleAuthority - Role ${roleId} not found, returning BASIC_USER`);
         return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
       }
+      
+      if (!role.permissions) {
+        console.log(`[DIAG] calculateRoleAuthority - Role ${role.code || roleId} has no permissions, returning BASIC_USER`);
+        return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
+      }
+      
+      console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has ${role.permissions.length} permissions`);
 
       // Convert role permissions to same format as user permissions
       const permissions = role.permissions.map(perm => ({
@@ -168,6 +255,18 @@ class AuthorityService {
         return AuthorityService.AUTHORITY_TIERS.OPERATIONAL_ADMIN;
       }
 
+      // Check for stakeholder (review-only capabilities) - MUST check BEFORE coordinator
+      // A role is STAKEHOLDER if it has review capabilities but NO operational capabilities
+      const hasReview = permissions.some(p => {
+        if (p.resource === '*' && (p.actions.includes('*') || p.actions.includes('review'))) {
+          return true;
+        }
+        if (p.resource === 'request' && (p.actions.includes('*') || p.actions.includes('review'))) {
+          return true;
+        }
+        return false;
+      });
+
       // Check for coordinator (operational capabilities)
       const operationalCapabilities = [
         { resource: 'request', action: 'create' },
@@ -187,28 +286,32 @@ class AuthorityService {
         });
       });
 
-      if (hasOperational) {
-        return AuthorityService.AUTHORITY_TIERS.COORDINATOR;
-      }
-
-      // Check for stakeholder (review-only capabilities)
-      const hasReview = permissions.some(p => {
-        if (p.resource === '*' && (p.actions.includes('*') || p.actions.includes('review'))) {
-          return true;
-        }
-        if (p.resource === 'request' && (p.actions.includes('*') || p.actions.includes('review'))) {
-          return true;
-        }
-        return false;
-      });
-
-      if (hasReview) {
+      // If role has review but NO operational capabilities, it's a STAKEHOLDER
+      if (hasReview && !hasOperational) {
+        console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has review-only capabilities, returning STAKEHOLDER`);
         return AuthorityService.AUTHORITY_TIERS.STAKEHOLDER;
       }
 
+      // If role has operational capabilities, it's a COORDINATOR
+      if (hasOperational) {
+        console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has operational capabilities, returning COORDINATOR`);
+        return AuthorityService.AUTHORITY_TIERS.COORDINATOR;
+      }
+
+      // If role only has review (but we already checked above), fall through
+      if (hasReview) {
+        console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has review capabilities, returning STAKEHOLDER`);
+        return AuthorityService.AUTHORITY_TIERS.STAKEHOLDER;
+      }
+
+      console.log(`[DIAG] calculateRoleAuthority - Role ${role.code} has no matching authority tier, returning BASIC_USER`);
       return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
     } catch (error) {
-      console.error('Error calculating role authority:', error);
+      console.error('[DIAG] calculateRoleAuthority - ERROR:', {
+        roleId: roleId?.toString() || 'unknown',
+        error: error.message,
+        stack: error.stack
+      });
       return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
     }
   }
@@ -333,5 +436,10 @@ class AuthorityService {
   }
 }
 
-module.exports = new AuthorityService();
+// Export both the instance and the class/constants for flexibility
+const authorityServiceInstance = new AuthorityService();
+module.exports = authorityServiceInstance;
+// Also export the class and constants for static access
+module.exports.AuthorityService = AuthorityService;
+module.exports.AUTHORITY_TIERS = AuthorityService.AUTHORITY_TIERS;
 

@@ -7,6 +7,7 @@
 const { User, UserRole, UserLocation } = require('../../models');
 const permissionService = require('../../services/users_services/permission.service');
 const locationService = require('../../services/utility_services/location.service');
+const userCoverageAssignmentService = require('../../services/users_services/userCoverageAssignment.service');
 const bcrypt = require('bcrypt');
 const { signToken } = require('../../utils/jwt');
 
@@ -18,7 +19,26 @@ class UserController {
   async createUser(req, res) {
     try {
       const userData = req.validatedData || req.body;
-      const { roles = [], locations = [] } = userData;
+      let { roles = [], locations = [], coverageAreaId, organizationId } = userData;
+      const pageContext = req.headers['x-page-context'] || req.body.pageContext;
+      const requesterId = req.user?.id || req.user?._id;
+
+      // For stakeholder-management page, force role to stakeholder
+      if (pageContext === 'stakeholder-management') {
+        roles = ['stakeholder'];
+        console.log('[DIAG] createUser - Stakeholder management page: forcing role to stakeholder');
+      }
+
+      // Diagnostic logging
+      console.log('[DIAG] createUser:', {
+        requesterId: requesterId ? requesterId.toString() : 'none',
+        roles: roles,
+        rolesCount: roles.length,
+        pageContext: pageContext || 'none',
+        coverageAreaId: coverageAreaId || 'none',
+        organizationId: organizationId || 'none',
+        email: userData.email || 'none'
+      });
 
       // Check if email already exists
       const existingUser = await User.findOne({ email: userData.email });
@@ -29,11 +49,61 @@ class UserController {
         });
       }
 
+      // Validate role authority BEFORE creating user
+      if (requesterId && roles.length > 0) {
+        const authorityService = require('../../services/users_services/authority.service');
+        const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
+        
+        // Diagnostic logging for authority check
+        console.log('[DIAG] createUser - Authority Check:', {
+          requesterId: requesterId.toString(),
+          requesterAuthority,
+          roles: roles,
+          pageContext: pageContext || 'none'
+        });
+        
+        // Validate role authority (creator must have higher authority than role)
+        // For stakeholder-management page, we already forced role to 'stakeholder' above
+        const roleAuthorityChecks = [];
+        for (const roleCode of roles) {
+          const role = await permissionService.getRoleByCode(roleCode);
+          if (role) {
+            const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
+            roleAuthorityChecks.push({ 
+              roleCode, 
+              roleAuthority, 
+              canAssign: requesterAuthority > roleAuthority 
+            });
+            if (requesterAuthority <= roleAuthority) {
+              // Diagnostic logging for authority rejection
+              console.log('[DIAG] createUser - Authority Rejection:', {
+                requesterAuthority,
+                roleCode,
+                roleAuthority,
+                result: 'REJECTED: insufficient authority'
+              });
+              return res.status(403).json({
+                success: false,
+                message: `Cannot create staff with role '${roleCode}': Your authority level is insufficient`,
+                code: 'INSUFFICIENT_AUTHORITY'
+              });
+            }
+          }
+        }
+        
+        // Diagnostic logging for successful authority validation
+        console.log('[DIAG] createUser - Authority Validation:', {
+          requesterAuthority,
+          roleAuthorityChecks,
+          result: 'PASSED'
+        });
+      }
+
       // Hash password
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(userData.password, saltRounds);
 
-      // Create user
+      // Create user (now safe to create)
       const user = new User({
         email: userData.email,
         firstName: userData.firstName,
@@ -43,34 +113,13 @@ class UserController {
         password: hashedPassword,
         organizationType: userData.organizationType || null,
         organizationInstitution: userData.organizationInstitution || null,
+        organizationId: organizationId || null,
         field: userData.field || null,
         isSystemAdmin: userData.isSystemAdmin || false,
         isActive: true
       });
 
       await user.save();
-
-      // NEW: Validate role authority before assignment
-      const requesterId = req.user?.id || req.user?._id;
-      if (requesterId && roles.length > 0) {
-        const authorityService = require('../../services/users_services/authority.service');
-        const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
-        
-        for (const roleCode of roles) {
-          const role = await permissionService.getRoleByCode(roleCode);
-          if (role) {
-            const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
-            if (requesterAuthority <= roleAuthority) {
-              // Rollback user creation
-              await User.findByIdAndDelete(user._id);
-              return res.status(403).json({
-                success: false,
-                message: `Cannot create staff with role '${roleCode}': Your authority level is insufficient`
-              });
-            }
-          }
-        }
-      }
 
       // Assign roles if provided
       if (roles.length > 0) {
@@ -80,6 +129,18 @@ class UserController {
             await permissionService.assignRole(user._id, role._id, [], requesterId || null, null);
           }
         }
+      }
+
+      // Assign coverage area if provided
+      if (coverageAreaId) {
+        await userCoverageAssignmentService.assignUserToCoverageArea(
+          user._id,
+          coverageAreaId,
+          {
+            isPrimary: true,
+            assignedBy: requesterId || null
+          }
+        );
       }
 
       // Assign locations if provided
