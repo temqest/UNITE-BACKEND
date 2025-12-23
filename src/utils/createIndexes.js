@@ -1,11 +1,10 @@
 const mongoose = require('mongoose');
-require('dotenv').config();
-
-const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL;
+const { connect, disconnect, getConnectionUri } = require('./dbConnection');
 
 async function createIndexes() {
   try {
-    await mongoose.connect(uri);
+    const uri = getConnectionUri();
+    await connect(uri);
     console.log('Connected to MongoDB');
 
     const Event = require('../models/events_models/event.model');
@@ -48,7 +47,7 @@ async function createIndexes() {
   } catch (error) {
     console.error('Error creating indexes:', error);
   } finally {
-    await mongoose.disconnect();
+    await disconnect();
   }
 }
 

@@ -18,36 +18,15 @@
  * The `--dry-run` flag will report changes without writing.
  */
 
-const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' : '.env' });
 
 // Import seed functions
-const { seed: seedRoles } = require('./seedRoles');
-const { seed: seedLocations } = require('./seedLocations');
-const { seed: seedOrganizations } = require('./seedOrganizations');
-const { seed: seedCoverageSystem } = require('./seedCoverageSystem');
+const { seed: seedRoles } = require('./seed/seedRoles');
+const { seed: seedLocations } = require('./seed/seedLocations');
+const { seed: seedOrganizations } = require('./seed/seedOrganizations');
+const { seed: seedCoverageSystem } = require('./seed/seedCoverageSystem');
 const { createAdminAccount } = require('./createAdmin');
-const { fixOrganizationTypes } = require('./fixOrganizationTypes');
-
-// Accept multiple env var names for compatibility with existing .env
-const rawMongoUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
-const mongoDbName = process.env.MONGO_DB_NAME || null;
-
-let uri = rawMongoUri;
-if (mongoDbName) {
-  const idx = rawMongoUri.indexOf('?');
-  const beforeQuery = idx === -1 ? rawMongoUri : rawMongoUri.slice(0, idx);
-  const hasDb = /\/[A-Za-z0-9_\-]+$/.test(beforeQuery);
-  if (!hasDb) {
-    if (idx === -1) {
-      uri = `${rawMongoUri.replace(/\/$/, '')}/${mongoDbName}`;
-    } else {
-      uri = `${rawMongoUri.slice(0, idx).replace(/\/$/, '')}/${mongoDbName}${rawMongoUri.slice(idx)}`;
-    }
-  }
-}
 
 const dryRun = process.argv.includes('--dry-run');
 
@@ -152,18 +131,6 @@ async function setupSystem() {
     // Note: seedCoverageSystem connects/disconnects internally
     await seedCoverageSystem();
     console.log('✓ Coverage system seeded');
-
-    // Step 4.5: Fix Organization Types
-    console.log('\n' + '='.repeat(60));
-    console.log('🔧 Step 4.5: Fixing Organization Types');
-    console.log('='.repeat(60));
-    // Note: fixOrganizationTypes connects/disconnects internally
-    if (!dryRun) {
-      await fixOrganizationTypes();
-      console.log('✓ Organization types fixed');
-    } else {
-      console.log('⚠ Skipping organization type fix (dry-run mode)');
-    }
 
     // Step 5: Create Admin Account
     console.log('\n' + '='.repeat(60));

@@ -115,7 +115,14 @@ userCoverageAssignmentSchema.statics.findUserCoverageAreas = function(userId, in
       { expiresAt: { $gt: new Date() } }
     ];
   }
-  return this.find(query).populate('coverageAreaId');
+  // Populate coverageAreaId and nested geographicUnits
+  return this.find(query).populate({
+    path: 'coverageAreaId',
+    populate: {
+      path: 'geographicUnits',
+      model: 'Location'
+    }
+  });
 };
 
 // Static method to find primary coverage area for a user
@@ -129,7 +136,13 @@ userCoverageAssignmentSchema.statics.findPrimaryCoverageArea = function(userId) 
       { expiresAt: null },
       { expiresAt: { $gt: new Date() } }
     ]
-  }).populate('coverageAreaId');
+  }).populate({
+    path: 'coverageAreaId',
+    populate: {
+      path: 'geographicUnits',
+      model: 'Location'
+    }
+  });
 };
 
 // Static method to find all users assigned to a coverage area

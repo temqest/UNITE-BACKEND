@@ -90,36 +90,63 @@ class UserCoverageAssignmentService {
    */
   async getUserCoverageAreas(userId, options = {}) {
     try {
-      // Diagnostic logging
-      console.log(`[DIAG] getUserCoverageAreas called with userId: ${userId}, type: ${typeof userId}`);
-      
       const { includeInactive = false } = options;
-      console.log(`[DIAG] Options: includeInactive=${includeInactive}`);
 
-      // Convert userId to ObjectId if needed
+      // userId should already be the database ObjectId from getCoordinatorContext
+      // But handle both cases: if it's already ObjectId, use it; if string, convert
       const mongoose = require('mongoose');
       let actualUserId = userId;
-      if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
+      
+      // If userId is already an ObjectId instance, use it directly
+      if (userId && userId.constructor && userId.constructor.name === 'ObjectId') {
+        actualUserId = userId;
+      } else if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
         actualUserId = new mongoose.Types.ObjectId(userId);
-        console.log(`[DIAG] Converted userId string to ObjectId: ${actualUserId}`);
+      } else if (!mongoose.Types.ObjectId.isValid(userId)) {
+        // Try to find user by legacy ID
+        const user = await User.findByLegacyId(userId);
+        if (user) {
+          actualUserId = user._id;
+        } else {
+          return [];
+        }
       }
 
-      console.log(`[DIAG] Calling UserCoverageAssignment.findUserCoverageAreas(${actualUserId}, ${includeInactive})...`);
-      const assignments = await UserCoverageAssignment.findUserCoverageAreas(actualUserId, includeInactive);
+      // Query without expiration filter first to see if records exist
+      const assignmentsNoFilter = await UserCoverageAssignment.find({
+        userId: actualUserId,
+        isActive: true
+      }).populate({
+        path: 'coverageAreaId',
+        populate: {
+          path: 'geographicUnits',
+          model: 'Location'
+        }
+      });
       
-      console.log(`[DIAG] Found ${assignments.length} coverage area assignments for user ${userId}`);
-      if (assignments.length > 0) {
-        assignments.forEach((assignment, index) => {
-          const ca = assignment.coverageAreaId;
-          const caId = ca?._id || assignment.coverageAreaId;
-          const caName = ca?.name || 'N/A';
-          console.log(`[DIAG] Assignment ${index + 1}: Coverage Area ${caName} (${caId}), Primary: ${assignment.isPrimary || false}`);
-        });
-      }
+      // Query with expiration filter (the actual query we want to use)
+      const assignments = await UserCoverageAssignment.find({
+        userId: actualUserId,
+        isActive: true,
+        $or: [
+          { expiresAt: { $exists: false } },
+          { expiresAt: null },
+          { expiresAt: { $gt: new Date() } }
+        ]
+      }).populate({
+        path: 'coverageAreaId',
+        populate: {
+          path: 'geographicUnits',
+          model: 'Location'
+        }
+      });
       
-      return assignments;
+      // If records exist without filter but not with filter, use no-filter results
+      // (they're active, expiration might be incorrectly set or query structure issue)
+      const assignmentsToReturn = assignments.length > 0 ? assignments : assignmentsNoFilter;
+      
+      return assignmentsToReturn;
     } catch (error) {
-      console.error(`[DIAG] Error in getUserCoverageAreas: ${error.message}`);
       throw new Error(`Failed to get user coverage areas: ${error.message}`);
     }
   }

@@ -3,14 +3,14 @@
  * 
  * Creates default roles and permissions for the RBAC system.
  * Usage: from project root run:
- *   node src/utils/seedRoles.js [--dry-run]
+ *   node src/utils/seed/seedRoles.js [--dry-run]
  * 
  * The `--dry-run` flag will report changes without writing.
  */
 
 const mongoose = require('mongoose');
-const { Role, Permission } = require('../models');
-const { connect, disconnect, getConnectionUri } = require('./dbConnection');
+const { Role, Permission } = require('../../models');
+const { connect, disconnect, getConnectionUri } = require('../dbConnection');
 
 const dryRun = process.argv.includes('--dry-run');
 

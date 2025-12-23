@@ -117,128 +117,72 @@ class JurisdictionService {
 
   /**
    * Get organizations a creator can assign to users
+   * Uses embedded User.organizations[] array
    * @param {string|ObjectId} creatorId - Creator's user ID
    * @returns {Promise<Array>} Array of Organization documents
    */
   async getAllowedOrganizations(creatorId) {
     try {
-      // Diagnostic logging
-      console.log(`[DIAG] getAllowedOrganizations called with creatorId: ${creatorId}, type: ${typeof creatorId}`);
-      
       if (!creatorId) {
-        console.log(`[DIAG] No creatorId provided, returning empty array`);
         return [];
       }
 
-      const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
-      console.log(`[DIAG] Creator authority: ${creatorAuthority}`);
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      if (!creator) {
+        return [];
+      }
+
+      const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = creator.authority || await authorityService.calculateUserAuthority(creatorId);
       
       // System admins can assign any organization
-      const { AUTHORITY_TIERS } = require('./authority.service');
-      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
-        console.log(`[DIAG] Creator is system admin, returning all active organizations`);
-        const allOrganizations = await Organization.find({ isActive: true }).sort({ name: 1 });
-        console.log(`[DIAG] Found ${allOrganizations.length} active organizations`);
-        return allOrganizations;
+      if (creator.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        return await Organization.find({ isActive: true }).sort({ name: 1 });
       }
 
-      // Non-system-admins can only assign their own organization
-      // Try multiple lookup methods
-      const mongoose = require('mongoose');
-      let creator = null;
-      
-      if (mongoose.Types.ObjectId.isValid(creatorId)) {
-        console.log(`[DIAG] Attempting User.findById('${creatorId}')...`);
-        creator = await User.findById(creatorId);
-      }
-      
-      if (!creator) {
-        console.log(`[DIAG] Attempting User.findByLegacyId('${creatorId}')...`);
-        creator = await User.findByLegacyId(creatorId);
-      }
-      
-      if (!creator) {
-        console.log(`[DIAG] WARNING: Creator not found: ${creatorId}`);
-        return [];
-      }
-      
-      console.log(`[DIAG] Creator found: ${creator.email} (organizationId: ${creator.organizationId || 'NONE'})`);
-      
-      if (!creator.organizationId) {
-        console.log(`[DIAG] Creator has no organizationId, returning empty array`);
-        return [];
+      // Use embedded organizations array
+      if (creator.organizations && creator.organizations.length > 0) {
+        // Return organization documents for the embedded IDs
+        const orgIds = creator.organizations.map(o => o.organizationId);
+        return await Organization.find({ 
+          _id: { $in: orgIds },
+          isActive: true 
+        }).sort({ name: 1 });
       }
 
-      const organization = await Organization.findById(creator.organizationId);
-      if (!organization) {
-        console.log(`[DIAG] WARNING: Organization ${creator.organizationId} not found`);
-        return [];
-      }
-      
-      if (!organization.isActive) {
-        console.log(`[DIAG] WARNING: Organization ${creator.organizationId} is not active`);
-        return [];
-      }
-      
-      console.log(`[DIAG] Returning creator's organization: ${organization.name}`);
-      return [organization];
+      return [];
     } catch (error) {
-      console.error('[DIAG] Error getting allowed organizations:', error);
+      console.error('[JURIS] Error getting allowed organizations:', error);
       return [];
     }
   }
 
   /**
    * Get creator's organization
+   * Uses embedded User.organizations[] array
    * @param {string|ObjectId} creatorId - Creator's user ID
    * @returns {Promise<Object|null>} Organization document or null
    */
   async getUserOrganization(creatorId) {
     try {
-      // Diagnostic logging
-      console.log(`[DIAG] getUserOrganization called with creatorId: ${creatorId}, type: ${typeof creatorId}`);
-      
       if (!creatorId) {
-        console.log(`[DIAG] No creatorId provided, returning null`);
         return null;
       }
 
-      // Try multiple lookup methods
-      const mongoose = require('mongoose');
-      let user = null;
-      
-      if (mongoose.Types.ObjectId.isValid(creatorId)) {
-        console.log(`[DIAG] Attempting User.findById('${creatorId}')...`);
-        user = await User.findById(creatorId);
-      }
-      
+      const user = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
       if (!user) {
-        console.log(`[DIAG] Attempting User.findByLegacyId('${creatorId}')...`);
-        user = await User.findByLegacyId(creatorId);
-      }
-      
-      if (!user) {
-        console.log(`[DIAG] WARNING: User not found: ${creatorId}`);
-        return null;
-      }
-      
-      console.log(`[DIAG] User found: ${user.email} (organizationId: ${user.organizationId || 'NONE'})`);
-      
-      if (!user.organizationId) {
-        console.log(`[DIAG] User has no organizationId, returning null`);
         return null;
       }
 
-      const organization = await Organization.findById(user.organizationId);
-      if (organization) {
-        console.log(`[DIAG] Organization found: ${organization.name}`);
-      } else {
-        console.log(`[DIAG] WARNING: Organization ${user.organizationId} not found`);
+      // Use embedded organizations array (primary first)
+      if (user.organizations && user.organizations.length > 0) {
+        const primaryOrg = user.organizations.find(o => o.isPrimary) || user.organizations[0];
+        return await Organization.findById(primaryOrg.organizationId);
       }
-      
-      return organization;
+
+      return null;
     } catch (error) {
-      console.error('[DIAG] Error getting user organization:', error);
+      console.error('[JURIS] Error getting user organization:', error);
       return null;
     }
   }
@@ -338,180 +282,200 @@ class JurisdictionService {
 
   /**
    * Get organizations for stakeholder creation
-   * System admin: Returns all active organizations
-   * Coordinator: Returns their own organization (ensured to be returned if exists)
+   * Uses embedded User.organizations[] array
    * @param {string|ObjectId} creatorId - Creator's user ID
    * @returns {Promise<Array>} Array of Organization documents
    */
   async getAllowedOrganizationsForStakeholderCreation(creatorId) {
     try {
-      console.log(`[DIAG] getAllowedOrganizationsForStakeholderCreation called with creatorId: ${creatorId}`);
-      
       if (!creatorId) {
-        console.log(`[DIAG] No creatorId provided, returning empty array`);
         return [];
       }
 
-      const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
-      console.log(`[DIAG] Creator authority: ${creatorAuthority}`);
-      
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      if (!creator) {
+        return [];
+      }
+
       const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = creator.authority || await authorityService.calculateUserAuthority(creatorId);
       
       // System admins get all active organizations
-      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
-        console.log(`[DIAG] Creator is system admin, returning all active organizations`);
-        const allOrganizations = await Organization.find({ isActive: true }).sort({ name: 1 });
-        console.log(`[DIAG] Found ${allOrganizations.length} active organizations`);
-        return allOrganizations;
+      if (creator.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        return await Organization.find({ isActive: true }).sort({ name: 1 });
       }
 
-      // Non-system-admins get their own organization
-      // Try multiple lookup methods to ensure we find the user
-      const mongoose = require('mongoose');
-      let creator = null;
-      
-      if (mongoose.Types.ObjectId.isValid(creatorId)) {
-        console.log(`[DIAG] Attempting User.findById('${creatorId}')...`);
-        creator = await User.findById(creatorId);
-      }
-      
-      if (!creator) {
-        console.log(`[DIAG] Attempting User.findByLegacyId('${creatorId}')...`);
-        creator = await User.findByLegacyId(creatorId);
-      }
-      
-      if (!creator) {
-        console.log(`[DIAG] WARNING: Creator not found: ${creatorId}`);
-        return [];
-      }
-      
-      console.log(`[DIAG] Creator found: ${creator.email} (organizationId: ${creator.organizationId || 'NONE'})`);
-      
-      if (!creator.organizationId) {
-        console.log(`[DIAG] Creator has no organizationId, returning empty array`);
-        return [];
+      // Use embedded organizations array
+      if (creator.organizations && creator.organizations.length > 0) {
+        const orgIds = creator.organizations.map(o => o.organizationId);
+        return await Organization.find({ 
+          _id: { $in: orgIds },
+          isActive: true 
+        }).sort({ name: 1 });
       }
 
-      const creatorOrg = await Organization.findById(creator.organizationId);
-      if (!creatorOrg) {
-        console.log(`[DIAG] WARNING: Organization ${creator.organizationId} not found`);
-        return [];
-      }
-      
-      if (!creatorOrg.isActive) {
-        console.log(`[DIAG] WARNING: Organization ${creator.organizationId} is not active`);
-        return [];
-      }
-      
-      console.log(`[DIAG] Returning creator's organization: ${creatorOrg.name}`);
-      return [creatorOrg];
+      return [];
     } catch (error) {
-      console.error('[DIAG] Error getting allowed organizations for stakeholder creation:', error);
+      console.error('[JURIS] Error getting organizations for stakeholder creation:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get organizations for coordinator creation
+   * Uses embedded User.organizations[] array
+   * Coordinators can have multiple organizations
+   * @param {string|ObjectId} creatorId - Creator's user ID
+   * @returns {Promise<Array>} Array of Organization documents
+   */
+  async getAllowedOrganizationsForCoordinatorCreation(creatorId) {
+    try {
+      if (!creatorId) {
+        return [];
+      }
+
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      if (!creator) {
+        return [];
+      }
+
+      const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = creator.authority || await authorityService.calculateUserAuthority(creatorId);
+      
+      // System admins get all active organizations
+      if (creator.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        return await Organization.find({ isActive: true }).sort({ name: 1 });
+      }
+
+      // Use embedded organizations array (coordinators can have multiple)
+      if (creator.organizations && creator.organizations.length > 0) {
+        const orgIds = creator.organizations.map(o => o.organizationId);
+        return await Organization.find({ 
+          _id: { $in: orgIds },
+          isActive: true 
+        }).sort({ name: 1 });
+      }
+
+      return [];
+    } catch (error) {
+      console.error('[JURIS] Error getting organizations for coordinator creation:', error);
       return [];
     }
   }
 
   /**
    * Get municipalities for stakeholder creation
-   * System admin: Returns all municipalities
-   * Coordinator: Returns municipalities from their assigned district(s)
+   * Uses embedded User.coverageAreas[].municipalityIds array
    * @param {string|ObjectId} creatorId - Creator's user ID
    * @returns {Promise<Array>} Array of Location documents (type: 'municipality')
    */
   async getMunicipalitiesForStakeholderCreation(creatorId) {
     try {
-      console.log(`[DIAG] getMunicipalitiesForStakeholderCreation called with creatorId: ${creatorId}`);
-      
       if (!creatorId) {
-        console.log(`[DIAG] No creatorId provided, returning empty array`);
         return [];
       }
 
-      const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
-      console.log(`[DIAG] Creator authority: ${creatorAuthority}`);
-      
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      if (!creator) {
+        return [];
+      }
+
       const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = creator.authority || await authorityService.calculateUserAuthority(creatorId);
       
       // System admins get all municipalities
-      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
-        console.log(`[DIAG] Creator is system admin, returning all municipalities`);
-        const allMunicipalities = await Location.find({ 
+      if (creator.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        return await Location.find({ 
           type: 'municipality', 
           isActive: true 
         })
           .populate('parent')
           .populate('province')
           .sort({ name: 1 });
-        console.log(`[DIAG] Found ${allMunicipalities.length} municipalities`);
-        return allMunicipalities;
       }
 
-      // Coordinator: Get their assigned coverage areas, then extract districts
-      console.log(`[DIAG] Querying userCoverageAssignmentService.getUserCoverageAreas(${creatorId})...`);
-      const assignments = await userCoverageAssignmentService.getUserCoverageAreas(creatorId, {
-        includeInactive: false
-      });
-      
-      console.log(`[DIAG] Found ${assignments.length} coverage area assignments for creator ${creatorId}`);
-      
-      if (assignments.length === 0) {
-        console.log(`[DIAG] Coordinator has no coverage area assignments, returning empty array`);
-        return [];
-      }
-
-      // Extract geographic units (districts) from coverage areas
-      const districtIds = new Set();
-      for (const assignment of assignments) {
-        const coverageArea = assignment.coverageAreaId;
-        if (coverageArea && coverageArea.geographicUnits) {
-          // Get districts from geographic units
-          const geographicUnits = Array.isArray(coverageArea.geographicUnits) 
-            ? coverageArea.geographicUnits 
-            : [coverageArea.geographicUnits];
-          
-          for (const unit of geographicUnits) {
-            const unitId = unit._id || unit;
-            const location = await Location.findById(unitId);
-            if (location) {
-              // If it's a district, add it
-              if (location.type === 'district' || location.type === 'city') {
-                districtIds.add(location._id.toString());
-              }
-              // If it's a province, get all districts under it
-              else if (location.type === 'province') {
-                const provinceDistricts = await Location.find({
-                  type: { $in: ['district', 'city'] },
-                  parent: location._id,
-                  isActive: true
-                });
-                provinceDistricts.forEach(d => districtIds.add(d._id.toString()));
-              }
-            }
-          }
+      // Use embedded municipalityIds from coverage areas
+      if (creator.coverageAreas && creator.coverageAreas.length > 0) {
+        const municipalityIds = creator.coverageAreas
+          .flatMap(ca => ca.municipalityIds || [])
+          .filter(Boolean);
+        
+        if (municipalityIds.length === 0) {
+          return [];
         }
+
+        return await Location.find({
+          _id: { $in: municipalityIds },
+          type: 'municipality',
+          isActive: true
+        })
+          .populate('parent')
+          .populate('province')
+          .sort({ name: 1 });
       }
 
-      console.log(`[DIAG] Found ${districtIds.size} districts from coverage areas`);
-      
-      if (districtIds.size === 0) {
-        console.log(`[DIAG] No districts found in coverage areas, returning empty array`);
+      return [];
+    } catch (error) {
+      console.error('[JURIS] Error getting municipalities for stakeholder creation:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get municipalities for coordinator creation
+   * Uses embedded User.coverageAreas[].municipalityIds array
+   * Returns municipalities under creator's coverage areas
+   * @param {string|ObjectId} creatorId - Creator's user ID
+   * @returns {Promise<Array>} Array of Location documents (type: 'municipality')
+   */
+  async getMunicipalitiesForCoordinatorCreation(creatorId) {
+    try {
+      if (!creatorId) {
         return [];
       }
 
-      // Get all municipalities under these districts
-      const municipalities = await Location.find({
-        type: 'municipality',
-        parent: { $in: Array.from(districtIds).map(id => require('mongoose').Types.ObjectId(id)) },
-        isActive: true
-      })
-        .populate('parent')
-        .populate('province')
-        .sort({ name: 1 });
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      if (!creator) {
+        return [];
+      }
 
-      console.log(`[DIAG] Returning ${municipalities.length} municipalities`);
-      return municipalities;
+      const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = creator.authority || await authorityService.calculateUserAuthority(creatorId);
+      
+      // System admins get all municipalities
+      if (creator.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        return await Location.find({ 
+          type: 'municipality', 
+          isActive: true 
+        })
+          .populate('parent')
+          .populate('province')
+          .sort({ name: 1 });
+      }
+
+      // Use embedded municipalityIds from coverage areas
+      if (creator.coverageAreas && creator.coverageAreas.length > 0) {
+        const municipalityIds = creator.coverageAreas
+          .flatMap(ca => ca.municipalityIds || [])
+          .filter(Boolean);
+        
+        if (municipalityIds.length === 0) {
+          return [];
+        }
+
+        return await Location.find({
+          _id: { $in: municipalityIds },
+          type: 'municipality',
+          isActive: true
+        })
+          .populate('parent')
+          .populate('province')
+          .sort({ name: 1 });
+      }
+
+      return [];
     } catch (error) {
-      console.error('[DIAG] Error getting municipalities for stakeholder creation:', error);
+      console.error('[JURIS] Error getting municipalities for coordinator creation:', error);
       return [];
     }
   }
@@ -543,6 +507,45 @@ class JurisdictionService {
       return barangays;
     } catch (error) {
       console.error('[DIAG] Error getting barangays for municipality:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get stakeholder roles that the creator can assign (authority-based filtering)
+   * @param {string|ObjectId} creatorId - Creator's user ID
+   * @returns {Promise<Array>} Array of Role documents with authority < creator's authority
+   */
+  async getCreatableRolesForStakeholders(creatorId) {
+    try {
+      console.log(`[DIAG] getCreatableRolesForStakeholders called with creatorId: ${creatorId}`);
+      
+      if (!creatorId) {
+        console.log(`[DIAG] No creatorId provided, returning empty array`);
+        return [];
+      }
+
+      const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
+      console.log(`[DIAG] Creator authority: ${creatorAuthority}`);
+
+      const { Role } = require('../../models/index');
+      const { AUTHORITY_TIERS } = require('./authority.service');
+
+      // Get all active roles with authority lower than creator's authority
+      // Stakeholder roles typically have authority < 60 (COORDINATOR authority)
+      // Use Math.min to get the stricter constraint (must be below both creator authority AND coordinator level)
+      const maxAuthority = Math.min(creatorAuthority, AUTHORITY_TIERS.COORDINATOR);
+      const roles = await Role.find({
+        isActive: true,
+        authority: { $lt: maxAuthority } // Must be below both creator authority and coordinator level
+      }).sort({ authority: -1, name: 1 });
+
+      console.log(`[DIAG] Found ${roles.length} stakeholder roles with authority < ${maxAuthority} (creator: ${creatorAuthority}, coordinator: ${AUTHORITY_TIERS.COORDINATOR}):`, 
+        roles.map(r => `${r.code} (${r.authority})`).join(', '));
+
+      return roles;
+    } catch (error) {
+      console.error('[DIAG] Error getting creatable roles for stakeholders:', error);
       return [];
     }
   }

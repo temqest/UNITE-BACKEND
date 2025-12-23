@@ -17,14 +17,14 @@
  *   - MongoDB connection configured in .env
  * 
  * Usage: from project root run:
- *   node src/utils/seedOrganizations.js [--dry-run]
+ *   node src/utils/seed/seedOrganizations.js [--dry-run]
  * 
  * The `--dry-run` flag will report changes without writing.
  */
 
 const mongoose = require('mongoose');
-const { Organization } = require('../models');
-const { connect, disconnect, getConnectionUri } = require('./dbConnection');
+const { Organization } = require('../../models');
+const { connect, disconnect, getConnectionUri } = require('../dbConnection');
 
 const dryRun = process.argv.includes('--dry-run');
 

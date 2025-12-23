@@ -37,23 +37,13 @@ class UserController {
       // For stakeholder-management page, force role to stakeholder
       if (pageContext === 'stakeholder-management') {
         roles = ['stakeholder'];
-        console.log('[DIAG] createUser - Stakeholder management page: forcing role to stakeholder');
+        console.log('[STAKEHOLDER] Creating stakeholder:', {
+          email: userData.email,
+          requesterId: requesterId?.toString(),
+          municipalityId: municipalityId || 'none',
+          organizationId: organizationId || 'none'
+        });
       }
-
-      // Diagnostic logging
-      console.log('[DIAG] createUser:', {
-        requesterId: requesterId ? requesterId.toString() : 'none',
-        roles: roles,
-        rolesCount: roles.length,
-        pageContext: pageContext || 'none',
-        coverageAreaId: coverageAreaId || 'none',
-        coverageAreaIds: coverageAreaIds || [],
-        coverageAreaIdsCount: coverageAreaIds.length,
-        municipalityId: municipalityId || 'none',
-        barangayId: barangayId || 'none',
-        organizationId: organizationId || 'none',
-        email: userData.email || 'none'
-      });
 
       // Check if email already exists
       const existingUser = await User.findOne({ email: userData.email });
@@ -84,39 +74,37 @@ class UserController {
         });
       }
 
+      // Validation: For coordinator creation, require at least one organization
+      if (pageContext === 'coordinator-management' && organizationIds.length === 0 && !organizationId) {
+        console.log('[DIAG] createUser - VALIDATION FAILED: Coordinator creation requires at least one organization');
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator must have at least one organization assigned',
+          code: 'MISSING_ORGANIZATION'
+        });
+      }
+
       // Validate role authority BEFORE creating user
       if (requesterId && roles.length > 0) {
         const authorityService = require('../../services/users_services/authority.service');
         const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
         
-        // Diagnostic logging for authority check
-        console.log('[DIAG] createUser - Authority Check:', {
-          requesterId: requesterId.toString(),
-          requesterAuthority,
-          roles: roles,
-          pageContext: pageContext || 'none'
-        });
+        // For coordinator creation, creator must have authority ≥ 60
+        if (pageContext === 'coordinator-management' && requesterAuthority < 60) {
+          return res.status(403).json({
+            success: false,
+            message: 'Only users with authority level 60 or higher can create coordinators',
+            code: 'INSUFFICIENT_AUTHORITY_FOR_COORDINATOR_CREATION'
+          });
+        }
         
         // Validate role authority (creator must have higher authority than role)
         // For stakeholder-management page, we already forced role to 'stakeholder' above
-        const roleAuthorityChecks = [];
         for (const roleCode of roles) {
           const role = await permissionService.getRoleByCode(roleCode);
           if (role) {
             const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
-            roleAuthorityChecks.push({ 
-              roleCode, 
-              roleAuthority, 
-              canAssign: requesterAuthority > roleAuthority 
-            });
             if (requesterAuthority <= roleAuthority) {
-              // Diagnostic logging for authority rejection
-              console.log('[DIAG] createUser - Authority Rejection:', {
-                requesterAuthority,
-                roleCode,
-                roleAuthority,
-                result: 'REJECTED: insufficient authority'
-              });
               return res.status(403).json({
                 success: false,
                 message: `Cannot create staff with role '${roleCode}': Your authority level is insufficient`,
@@ -126,15 +114,8 @@ class UserController {
           }
         }
         
-        // Diagnostic logging for successful authority validation
-        console.log('[DIAG] createUser - Authority Validation:', {
-          requesterAuthority,
-          roleAuthorityChecks,
-          result: 'PASSED'
-        });
         // Fail loudly if requesterAuthority is missing or cannot be determined
         if (requesterAuthority === null || requesterAuthority === undefined) {
-          console.error('[DIAG] createUser - ERROR: requesterAuthority undefined for requester:', requesterId);
           return res.status(500).json({ success: false, message: 'Unable to determine creator authority' });
         }
 
@@ -142,18 +123,56 @@ class UserController {
         const jurisdictionService = require('../../services/users_services/jurisdiction.service');
 
         if (pageContext === 'stakeholder-management') {
-          // Municipality is required for stakeholder creation (defensive check)
+          // Municipality is required for stakeholder creation
           if (!municipalityId) {
-            console.log('[DIAG] createUser - REJECTED: municipality required for stakeholder creation');
             return res.status(400).json({ success: false, message: 'Municipality is required for stakeholder creation', code: 'MUNICIPALITY_REQUIRED' });
           }
 
           // Ensure municipality is within creator's jurisdiction
           const allowedMunicipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(requesterId);
           const allowedIds = allowedMunicipalities.map(m => m._id.toString());
+          
           if (!allowedIds.includes(municipalityId.toString())) {
-            console.log('[DIAG] createUser - REJECTED: municipality outside jurisdiction', { requesterId: requesterId.toString(), municipalityId });
-            return res.status(403).json({ success: false, message: 'Cannot create stakeholder in municipality outside your jurisdiction', code: 'MUNICIPALITY_OUTSIDE_JURISDICTION' });
+            return res.status(403).json({ 
+              success: false, 
+              message: 'Cannot create stakeholder in municipality outside your jurisdiction', 
+              code: 'MUNICIPALITY_OUTSIDE_JURISDICTION' 
+            });
+          }
+          
+          // Validate barangay if provided
+          if (barangayId) {
+            const { Location } = require('../../models');
+            const barangay = await Location.findById(barangayId);
+            if (!barangay || barangay.type !== 'barangay') {
+              return res.status(400).json({
+                success: false,
+                message: 'Invalid barangay specified',
+                code: 'INVALID_BARANGAY'
+              });
+            }
+            
+            if (barangay.parent?.toString() !== municipalityId.toString() && barangay.parent?.toString() !== municipalityId) {
+              return res.status(400).json({
+                success: false,
+                message: 'Barangay does not belong to the selected municipality',
+                code: 'BARANGAY_MISMATCH'
+              });
+            }
+          }
+          
+          // Validate organization if provided
+          if (organizationId) {
+            const allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(requesterId);
+            const allowedOrgIds = allowedOrganizations.map(o => o._id.toString());
+            
+            if (!allowedOrgIds.includes(organizationId.toString())) {
+              return res.status(403).json({
+                success: false,
+                message: 'Cannot assign organization outside your jurisdiction',
+                code: 'ORGANIZATION_OUTSIDE_JURISDICTION'
+              });
+            }
           }
         } else {
           // For staff/coordinator creation: validate coverage areas
@@ -161,8 +180,23 @@ class UserController {
             for (const caId of coverageAreaIds) {
               const ok = await jurisdictionService.canCreateUserInCoverageArea(requesterId, caId);
               if (!ok) {
-                console.log('[DIAG] createUser - REJECTED: coverage area outside jurisdiction', { requesterId: requesterId.toString(), coverageAreaId: caId });
                 return res.status(403).json({ success: false, message: 'Cannot create user in coverage area outside your jurisdiction', code: 'COVERAGE_AREA_OUTSIDE_JURISDICTION' });
+              }
+            }
+          }
+          
+          // For coordinator creation: validate organizations
+          if (pageContext === 'coordinator-management' && organizationIds && organizationIds.length > 0) {
+            const allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForCoordinatorCreation(requesterId);
+            const allowedOrgIds = allowedOrganizations.map(o => o._id.toString());
+            
+            for (const orgId of organizationIds) {
+              if (!allowedOrgIds.includes(orgId.toString())) {
+                return res.status(403).json({
+                  success: false,
+                  message: 'Cannot assign organization outside your jurisdiction',
+                  code: 'ORGANIZATION_OUTSIDE_JURISDICTION'
+                });
               }
             }
           }
@@ -180,6 +214,7 @@ class UserController {
       let user = null;
       try {
         // Create user (now safe to create) - within transaction
+        // Initialize with default authority (will be updated when roles are assigned)
         user = new User({
           email: userData.email,
           firstName: userData.firstName,
@@ -192,7 +227,12 @@ class UserController {
           organizationId: organizationId || null,
           field: userData.field || null,
           isSystemAdmin: userData.isSystemAdmin || false,
-          isActive: true
+          isActive: true,
+          authority: 20, // Default, will be updated from roles
+          roles: [],
+          organizations: [],
+          coverageAreas: [],
+          locations: {}
         });
 
         await user.save({ session });
@@ -208,6 +248,7 @@ class UserController {
           
           const { Role } = require('../../models/index');
           const assignedRoles = [];
+          let maxAuthority = 20;
           
           for (const roleIdentifier of roles) {
             console.log(`[RBAC] createUser - Assigning role: ${roleIdentifier} (type: ${typeof roleIdentifier})`);
@@ -224,7 +265,6 @@ class UserController {
             // If not found by ID, try by code (string)
             if (!role) {
               role = await permissionService.getRoleByCode(roleIdentifier);
-              // Note: getRoleByCode might not support session, but it's a lookup only
             }
             
             if (!role) {
@@ -232,6 +272,11 @@ class UserController {
               throw new Error(`Role not found: ${roleIdentifier}`);
             }
             
+            // Get role authority (use persisted field)
+            const roleAuthority = role.authority || await authorityService.calculateRoleAuthority(role._id);
+            maxAuthority = Math.max(maxAuthority, roleAuthority);
+            
+            // Assign role via UserRole collection
             const userRole = await permissionService.assignRole(
               user._id, 
               role._id, 
@@ -241,14 +286,30 @@ class UserController {
               [], 
               session
             );
+            
+            // Add to embedded roles array
+            user.roles.push({
+              roleId: role._id,
+              roleCode: role.code,
+              roleAuthority: roleAuthority,
+              assignedAt: new Date(),
+              assignedBy: requesterId || null,
+              isActive: true
+            });
+            
             assignedRoles.push({ roleIdentifier, roleCode: role.code, roleId: role._id, userRoleId: userRole._id });
             console.log(`[RBAC] createUser - ✓ Role assigned successfully: ${role.code} (${role.name})`);
           }
           
+          // Update user authority from roles
+          user.authority = maxAuthority;
+          await user.save({ session });
+          
           console.log('[RBAC] createUser - Role assignment completed:', {
             userId: user._id.toString(),
             assignedRolesCount: assignedRoles.length,
-            assignedRoles: assignedRoles.map(r => r.roleCode)
+            assignedRoles: assignedRoles.map(r => r.roleCode),
+            userAuthority: user.authority
           });
         } else {
           // For coordinators, roles are required
@@ -261,6 +322,13 @@ class UserController {
         if (pageContext === 'stakeholder-management') {
           // Stakeholders use Location model (municipality/barangay), not CoverageArea
           if (municipalityId) {
+            // Get municipality for denormalization
+            const { Location } = require('../../models');
+            const municipality = await Location.findById(municipalityId).session(session);
+            if (!municipality) {
+              throw new Error(`Municipality not found: ${municipalityId}`);
+            }
+            
             // Assign municipality location (required for stakeholders)
             await locationService.assignUserToLocation(
               user._id,
@@ -272,10 +340,26 @@ class UserController {
                 session
               }
             );
+            
+            // Update embedded locations
+            user.locations = {
+              municipalityId: municipality._id,
+              municipalityName: municipality.name,
+              barangayId: null,
+              barangayName: null
+            };
+            
             console.log(`[RBAC] createUser - Assigned municipality ${municipalityId} to stakeholder`);
           }
 
           if (barangayId) {
+            // Get barangay for denormalization
+            const { Location } = require('../../models');
+            const barangay = await Location.findById(barangayId).session(session);
+            if (!barangay) {
+              throw new Error(`Barangay not found: ${barangayId}`);
+            }
+            
             // Assign barangay location (optional for stakeholders)
             await locationService.assignUserToLocation(
               user._id,
@@ -287,7 +371,19 @@ class UserController {
                 session
               }
             );
+            
+            // Update embedded locations
+            if (user.locations) {
+              user.locations.barangayId = barangay._id;
+              user.locations.barangayName = barangay.name;
+            }
+            
             console.log(`[RBAC] createUser - Assigned barangay ${barangayId} to stakeholder`);
+          }
+          
+          // Save updated locations
+          if (user.locations && user.locations.municipalityId) {
+            await user.save({ session });
           }
         } else {
           // For staff creation, use coverage areas (support multiple)
@@ -298,46 +394,163 @@ class UserController {
               coverageAreaIds: coverageAreaIds
             });
             
-            // For coordinators, set autoCoverDescendants to true (auto-cover all barangays)
-            const isCoordinator = roles.some(r => {
-              const roleCode = typeof r === 'string' ? r : (r.code || '');
-              return roleCode.toLowerCase() === 'coordinator';
-            });
-            const autoCoverDescendants = isCoordinator;
+            const { CoverageArea, Location } = require('../../models');
             
             for (let i = 0; i < coverageAreaIds.length; i++) {
               const coverageAreaId = coverageAreaIds[i];
-              console.log(`[RBAC] createUser - Assigning coverage area ${i + 1}/${coverageAreaIds.length}: ${coverageAreaId} (autoCoverDescendants: ${autoCoverDescendants})`);
+              console.log(`[RBAC] createUser - Assigning coverage area ${i + 1}/${coverageAreaIds.length}: ${coverageAreaId}`);
+              
+              // Get coverage area for denormalization
+              const coverageArea = await CoverageArea.findById(coverageAreaId)
+                .populate('geographicUnits')
+                .session(session);
+              
+              if (!coverageArea) {
+                throw new Error(`Coverage area not found: ${coverageAreaId}`);
+              }
+              
+              // Derive districts and municipalities from geographic units
+              const districtIds = [];
+              const provinceIds = [];
+              
+              for (const unit of coverageArea.geographicUnits || []) {
+                const unitDoc = typeof unit === 'object' && unit._id ? unit : await Location.findById(unit).session(session);
+                if (!unitDoc) continue;
+                
+                if (unitDoc.type === 'district' || unitDoc.type === 'city') {
+                  districtIds.push(unitDoc._id);
+                } else if (unitDoc.type === 'province') {
+                  provinceIds.push(unitDoc._id);
+                }
+              }
+              
+              // If coverage area contains provinces, get all districts under those provinces
+              if (provinceIds.length > 0) {
+                const provinceDistricts = await Location.find({
+                  type: { $in: ['district', 'city'] },
+                  parent: { $in: provinceIds },
+                  isActive: true
+                }).session(session);
+                provinceDistricts.forEach(d => {
+                  if (!districtIds.some(id => id.toString() === d._id.toString())) {
+                    districtIds.push(d._id);
+                  }
+                });
+              }
+              
+              // Get all municipalities under these districts
+              const municipalityIds = [];
+              if (districtIds.length > 0) {
+                const municipalities = await Location.find({
+                  type: 'municipality',
+                  parent: { $in: districtIds },
+                  isActive: true
+                }).session(session);
+                municipalities.forEach(m => municipalityIds.push(m._id));
+              }
+              
+              // Assign coverage area via UserCoverageAssignment
               await userCoverageAssignmentService.assignUserToCoverageArea(
                 user._id,
                 coverageAreaId,
                 {
-                  isPrimary: i === 0, // First one is primary
-                  autoCoverDescendants: autoCoverDescendants,
+                  isPrimary: i === 0,
+                  autoCoverDescendants: true,
                   assignedBy: requesterId || null,
                   session
                 }
               );
-              console.log(`[RBAC] createUser - ✓ Coverage area assigned successfully: ${coverageAreaId}`);
+              
+              // Add to embedded coverageAreas array
+              user.coverageAreas.push({
+                coverageAreaId: coverageArea._id,
+                coverageAreaName: coverageArea.name,
+                districtIds: districtIds,
+                municipalityIds: municipalityIds,
+                isPrimary: i === 0,
+                assignedAt: new Date(),
+                assignedBy: requesterId || null
+              });
+              
+              console.log(`[RBAC] createUser - ✓ Coverage area assigned: ${coverageArea.name} (${municipalityIds.length} municipalities)`);
             }
+            
+            // Save updated coverage areas
+            await user.save({ session });
           } else if (coverageAreaId) {
             // Fallback for backward compatibility (single coverageAreaId)
             console.log('[RBAC] createUser - Using single coverageAreaId (backward compatibility):', coverageAreaId);
-            const isCoordinator = roles.some(r => {
-              const roleCode = typeof r === 'string' ? r : (r.code || '');
-              return roleCode.toLowerCase() === 'coordinator';
-            });
+            
+            const { CoverageArea, Location } = require('../../models');
+            const coverageArea = await CoverageArea.findById(coverageAreaId)
+              .populate('geographicUnits')
+              .session(session);
+            
+            if (!coverageArea) {
+              throw new Error(`Coverage area not found: ${coverageAreaId}`);
+            }
+            
+            // Derive districts and municipalities (same logic as above)
+            const districtIds = [];
+            const provinceIds = [];
+            
+            for (const unit of coverageArea.geographicUnits || []) {
+              const unitDoc = typeof unit === 'object' && unit._id ? unit : await Location.findById(unit).session(session);
+              if (!unitDoc) continue;
+              
+              if (unitDoc.type === 'district' || unitDoc.type === 'city') {
+                districtIds.push(unitDoc._id);
+              } else if (unitDoc.type === 'province') {
+                provinceIds.push(unitDoc._id);
+              }
+            }
+            
+            if (provinceIds.length > 0) {
+              const provinceDistricts = await Location.find({
+                type: { $in: ['district', 'city'] },
+                parent: { $in: provinceIds },
+                isActive: true
+              }).session(session);
+              provinceDistricts.forEach(d => {
+                if (!districtIds.some(id => id.toString() === d._id.toString())) {
+                  districtIds.push(d._id);
+                }
+              });
+            }
+            
+            const municipalityIds = [];
+            if (districtIds.length > 0) {
+              const municipalities = await Location.find({
+                type: 'municipality',
+                parent: { $in: districtIds },
+                isActive: true
+              }).session(session);
+              municipalities.forEach(m => municipalityIds.push(m._id));
+            }
+            
             await userCoverageAssignmentService.assignUserToCoverageArea(
               user._id,
               coverageAreaId,
               {
                 isPrimary: true,
-                autoCoverDescendants: isCoordinator,
+                autoCoverDescendants: true,
                 assignedBy: requesterId || null,
                 session
               }
             );
-            console.log(`[RBAC] createUser - ✓ Single coverage area assigned: ${coverageAreaId}`);
+            
+            user.coverageAreas.push({
+              coverageAreaId: coverageArea._id,
+              coverageAreaName: coverageArea.name,
+              districtIds: districtIds,
+              municipalityIds: municipalityIds,
+              isPrimary: true,
+              assignedAt: new Date(),
+              assignedBy: requesterId || null
+            });
+            
+            await user.save({ session });
+            console.log(`[RBAC] createUser - ✓ Single coverage area assigned: ${coverageArea.name}`);
           }
         }
 
@@ -349,11 +562,17 @@ class UserController {
             organizationIds: organizationIds
           });
           
-          const { UserOrganization } = require('../../models');
+          const { UserOrganization, Organization } = require('../../models');
           
           for (let i = 0; i < organizationIds.length; i++) {
             const orgId = organizationIds[i];
             console.log(`[RBAC] createUser - Assigning organization ${i + 1}/${organizationIds.length}: ${orgId}`);
+            
+            // Get organization for denormalization
+            const org = await Organization.findById(orgId).session(session);
+            if (!org || !org.isActive) {
+              throw new Error(`Organization not found or inactive: ${orgId}`);
+            }
             
             // Determine roleInOrg based on user's role
             let roleInOrg = 'member';
@@ -364,22 +583,43 @@ class UserController {
               }
             }
             
+            // Assign via UserOrganization collection
             await UserOrganization.assignOrganization(
               user._id,
               orgId,
               {
                 roleInOrg: roleInOrg,
-                isPrimary: i === 0, // First one is primary
+                isPrimary: i === 0,
                 assignedBy: requesterId || null,
                 session
               }
             );
-            console.log(`[RBAC] createUser - ✓ Organization assigned successfully: ${orgId}`);
+            
+            // Add to embedded organizations array
+            user.organizations.push({
+              organizationId: org._id,
+              organizationName: org.name,
+              organizationType: org.type,
+              isPrimary: i === 0,
+              assignedAt: new Date(),
+              assignedBy: requesterId || null
+            });
+            
+            console.log(`[RBAC] createUser - ✓ Organization assigned: ${org.name}`);
           }
+          
+          // Save updated organizations
+          await user.save({ session });
         } else if (organizationId) {
           // Fallback for backward compatibility (single organizationId)
           console.log('[RBAC] createUser - Using single organizationId (backward compatibility):', organizationId);
-          const { UserOrganization } = require('../../models');
+          
+          const { UserOrganization, Organization } = require('../../models');
+          const org = await Organization.findById(organizationId).session(session);
+          
+          if (!org || !org.isActive) {
+            throw new Error(`Organization not found or inactive: ${organizationId}`);
+          }
           
           let roleInOrg = 'member';
           if (roles.length > 0) {
@@ -399,7 +639,18 @@ class UserController {
               session
             }
           );
-          console.log(`[RBAC] createUser - ✓ Single organization assigned: ${organizationId}`);
+          
+          user.organizations.push({
+            organizationId: org._id,
+            organizationName: org.name,
+            organizationType: org.type,
+            isPrimary: true,
+            assignedAt: new Date(),
+            assignedBy: requesterId || null
+          });
+          
+          await user.save({ session });
+          console.log(`[RBAC] createUser - ✓ Single organization assigned: ${org.name}`);
         }
 
         // Assign additional locations if provided (for backward compatibility)
@@ -419,12 +670,23 @@ class UserController {
 
         // Commit transaction - all operations succeeded
         await session.commitTransaction();
-        console.log('[RBAC] createUser - Transaction committed successfully');
+        
+        // Log successful stakeholder creation
+        if (pageContext === 'stakeholder-management') {
+          console.log('[STAKEHOLDER] Stakeholder created successfully:', {
+            userId: user._id.toString(),
+            email: user.email,
+            municipalityId: municipalityId || 'none',
+            organizationId: organizationId || 'none'
+          });
+        }
         
       } catch (transactionError) {
         // Abort transaction on any error
         await session.abortTransaction();
-        console.error('[RBAC] createUser - Transaction aborted due to error:', transactionError.message);
+        if (pageContext === 'stakeholder-management') {
+          console.error('[STAKEHOLDER] Stakeholder creation failed:', transactionError.message);
+        }
         throw transactionError;
       } finally {
         // End session
@@ -1121,6 +1383,73 @@ class UserController {
           filteredUserIds = [];
         }
       }
+
+      // Role type filtering: For stakeholder pages (request.review), explicitly filter to stakeholder roles only
+      // This ensures coordinators don't appear in stakeholder lists
+      const roleTypeFilteredCount = filteredUserIds.length;
+      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.')) && filteredUserIds.length > 0) {
+        try {
+          const { Role, UserRole } = require('../../models');
+          const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+          
+          // Get all stakeholder role IDs (authority < COORDINATOR)
+          const stakeholderRoleIds = await Role.find({
+            isActive: true,
+            authority: { $lt: AUTHORITY_TIERS.COORDINATOR }
+          }).distinct('_id');
+          
+          console.log('[listUsersByCapability] Role type filtering - Stakeholder roles found:', stakeholderRoleIds.length);
+          
+          if (stakeholderRoleIds.length > 0) {
+            // Get users who have stakeholder roles
+            const usersWithStakeholderRoles = await UserRole.find({
+              userId: { $in: filteredUserIds },
+              roleId: { $in: stakeholderRoleIds },
+              isActive: true,
+              $or: [
+                { expiresAt: { $exists: false } },
+                { expiresAt: null },
+                { expiresAt: { $gt: new Date() } }
+              ]
+            }).distinct('userId');
+            
+            const stakeholderUserIds = usersWithStakeholderRoles.map(id => id.toString());
+            const beforeRoleFilter = filteredUserIds.length;
+            filteredUserIds = filteredUserIds.filter(id => 
+              stakeholderUserIds.includes(id.toString())
+            );
+            
+            console.log('[listUsersByCapability] Role type filtering:', {
+              before: beforeRoleFilter,
+              after: filteredUserIds.length,
+              filteredOut: beforeRoleFilter - filteredUserIds.length,
+              stakeholderRoleIds: stakeholderRoleIds.length
+            });
+          } else {
+            console.log('[listUsersByCapability] Role type filtering - No stakeholder roles found, filtering all out');
+            filteredUserIds = [];
+          }
+        } catch (err) {
+          console.error('[listUsersByCapability] Role type filtering error:', err);
+          // On error, fail safe: return empty list for stakeholder pages
+          filteredUserIds = [];
+        }
+      }
+      
+      // Comprehensive diagnostic logging for stakeholder display
+      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.'))) {
+        console.log('[DIAG] Stakeholder Display:', {
+          totalUsersFound: userIdsSet.size,
+          afterAuthorityFilter: roleTypeFilteredCount,
+          afterJurisdictionFilter: roleTypeFilteredCount,
+          afterRoleTypeFilter: filteredUserIds.length,
+          filteredOut: {
+            authority: userIdsSet.size - roleTypeFilteredCount,
+            jurisdiction: 0, // Already accounted in roleTypeFilteredCount
+            roleType: roleTypeFilteredCount - filteredUserIds.length
+          }
+        });
+      }
       
       if (filteredUserIds.length > 0) {
         query._id = { $in: filteredUserIds };
@@ -1259,27 +1588,33 @@ class UserController {
           defaultValues.role = allowedRoles[0].code;
         }
         
-        // Organization is locked for coordinators (they can only assign their own organizations)
-        if (!isSystemAdmin) {
-          lockedFields.push('organization');
-        }
+        // Organization is NOT locked - coordinators can select multiple organizations
+        // Only lock if creator has no organizations (shouldn't happen, but safety check)
       }
       
       // Get allowed organizations for the creator
       let allowedOrganizations = [];
+      let allowedMunicipalities = [];
+      let allowedCoverageAreas = [];
+      
       try {
-        allowedOrganizations = await jurisdictionService.getAllowedOrganizations(userId);
+        if (pageContext === 'coordinator-management') {
+          // For coordinator creation, use coordinator-specific methods
+          allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForCoordinatorCreation(userId);
+          allowedMunicipalities = await jurisdictionService.getMunicipalitiesForCoordinatorCreation(userId);
+          allowedCoverageAreas = await jurisdictionService.getCreatorJurisdictionForStakeholderCreation(userId);
+        } else {
+          // For stakeholder creation, use stakeholder-specific methods
+          allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(userId);
+          allowedCoverageAreas = await jurisdictionService.getCreatorJurisdictionForStakeholderCreation(userId);
+        }
       } catch (error) {
-        console.error('[RBAC] getCreateContext - Error getting allowed organizations:', error);
+        console.error('[RBAC] getCreateContext - Error getting allowed data:', error);
       }
       
-      // Get allowed coverage areas for the creator
-      let allowedCoverageAreas = [];
-      try {
-        allowedCoverageAreas = await jurisdictionService.getCreatorJurisdictionForStakeholderCreation(userId);
-      } catch (error) {
-        console.error('[RBAC] getCreateContext - Error getting allowed coverage areas:', error);
-      }
+      // Roles are already filtered by getAssignableRoles based on authority and context
+      // For coordinator-management, it only returns 'coordinator' role
+      // For stakeholder-management, it only returns 'stakeholder' role
       
       return res.status(200).json({
         success: true,
@@ -1289,7 +1624,8 @@ class UserController {
             _id: r._id,
             code: r.code,
             name: r.name,
-            description: r.description
+            description: r.description,
+            authority: r.authority
           })),
           lockedFields,
           defaultValues,
@@ -1298,11 +1634,21 @@ class UserController {
           allowedOrganizations: allowedOrganizations.map(org => ({
             _id: org._id,
             name: org.name,
-            type: org.type
+            type: org.type,
+            code: org.code
+          })),
+          allowedMunicipalities: allowedMunicipalities.map(muni => ({
+            _id: muni._id,
+            name: muni.name,
+            code: muni.code,
+            type: muni.type,
+            parent: muni.parent?._id || muni.parent,
+            districtId: muni.parent?._id || muni.parent,
+            province: muni.province?._id || muni.province
           })),
           allowedCoverageAreas: allowedCoverageAreas.map(ca => ({
-            _id: ca._id,
-            name: ca.name
+            _id: ca._id || ca.coverageAreaId?._id || ca.coverageAreaId,
+            name: ca.name || ca.coverageAreaId?.name
           })),
           isSystemAdmin
         }
@@ -1312,6 +1658,266 @@ class UserController {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to get create context'
+      });
+    }
+  }
+
+  /**
+   * Get municipalities with nested barangays for coordinator creation
+   * GET /api/users/creation-context/municipalities
+   */
+  async getMunicipalitiesWithBarangays(req, res) {
+    try {
+      const userId = req.user?.id || req.user?._id;
+      
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication required'
+        });
+      }
+
+      const jurisdictionService = require('../../services/users_services/jurisdiction.service');
+      const { Location } = require('../../models');
+      
+      // Get municipalities available to creator
+      const municipalities = await jurisdictionService.getMunicipalitiesForCoordinatorCreation(userId);
+      
+      // Get barangays for each municipality
+      const municipalitiesWithBarangays = await Promise.all(
+        municipalities.map(async (municipality) => {
+          const barangays = await Location.find({
+            type: 'barangay',
+            parent: municipality._id,
+            isActive: true
+          })
+            .sort({ name: 1 })
+            .select('_id name code type parent');
+          
+          return {
+            _id: municipality._id,
+            name: municipality.name,
+            code: municipality.code,
+            type: municipality.type,
+            parent: municipality.parent?._id || municipality.parent,
+            districtId: municipality.parent?._id || municipality.parent,
+            province: municipality.province?._id || municipality.province,
+            barangays: barangays.map(b => ({
+              _id: b._id,
+              name: b.name,
+              code: b.code,
+              type: b.type,
+              parent: b.parent
+            }))
+          };
+        })
+      );
+      
+      return res.status(200).json({
+        success: true,
+        data: {
+          municipalities: municipalitiesWithBarangays
+        }
+      });
+    } catch (error) {
+      console.error('[RBAC] getMunicipalitiesWithBarangays - Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get municipalities with barangays'
+      });
+    }
+  }
+
+  /**
+   * Get comprehensive diagnostic information for a user
+   * GET /api/users/:userId/diagnostics
+   */
+  async getUserDiagnostics(req, res) {
+    try {
+      const { userId } = req.params;
+      const requesterId = req.user?.id || req.user?._id;
+      
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'User ID is required'
+        });
+      }
+
+      // Get user
+      const user = await User.findById(userId) || await User.findByLegacyId(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Check if requester can view this user (authority check)
+      const authorityService = require('../../services/users_services/authority.service');
+      const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
+      const targetAuthority = user.authority || await authorityService.calculateUserAuthority(user._id);
+      
+      const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+      const isSystemAdmin = requesterAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN;
+      const canView = isSystemAdmin || requesterAuthority > targetAuthority || requesterId?.toString() === userId;
+      
+      if (!canView) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to view diagnostics for this user'
+        });
+      }
+
+      // Get role details
+      const { Role } = require('../../models');
+      const roleDetails = [];
+      for (const embeddedRole of user.roles || []) {
+        if (embeddedRole.isActive) {
+          const role = await Role.findById(embeddedRole.roleId);
+          if (role) {
+            roleDetails.push({
+              roleId: role._id,
+              roleCode: embeddedRole.roleCode,
+              roleName: role.name,
+              roleAuthority: embeddedRole.roleAuthority,
+              assignedAt: embeddedRole.assignedAt,
+              assignedBy: embeddedRole.assignedBy
+            });
+          }
+        }
+      }
+
+      // Get organization details
+      const { Organization } = require('../../models');
+      const organizationDetails = [];
+      for (const embeddedOrg of user.organizations || []) {
+        const org = await Organization.findById(embeddedOrg.organizationId);
+        if (org) {
+          organizationDetails.push({
+            organizationId: org._id,
+            organizationName: embeddedOrg.organizationName,
+            organizationType: embeddedOrg.organizationType,
+            isPrimary: embeddedOrg.isPrimary,
+            assignedAt: embeddedOrg.assignedAt,
+            assignedBy: embeddedOrg.assignedBy
+          });
+        }
+      }
+
+      // Get coverage area details
+      const { CoverageArea } = require('../../models');
+      const coverageAreaDetails = [];
+      for (const embeddedCA of user.coverageAreas || []) {
+        const ca = await CoverageArea.findById(embeddedCA.coverageAreaId);
+        if (ca) {
+          coverageAreaDetails.push({
+            coverageAreaId: ca._id,
+            coverageAreaName: embeddedCA.coverageAreaName,
+            districtCount: embeddedCA.districtIds?.length || 0,
+            municipalityCount: embeddedCA.municipalityIds?.length || 0,
+            isPrimary: embeddedCA.isPrimary,
+            assignedAt: embeddedCA.assignedAt
+          });
+        }
+      }
+
+      // Get location details (for stakeholders)
+      const { Location } = require('../../models');
+      let locationDetails = null;
+      if (user.locations && user.locations.municipalityId) {
+        const municipality = await Location.findById(user.locations.municipalityId);
+        const barangay = user.locations.barangayId ? await Location.findById(user.locations.barangayId) : null;
+        
+        locationDetails = {
+          municipality: municipality ? {
+            _id: municipality._id,
+            name: user.locations.municipalityName,
+            code: municipality.code
+          } : null,
+          barangay: barangay ? {
+            _id: barangay._id,
+            name: user.locations.barangayName,
+            code: barangay.code
+          } : null
+        };
+      }
+
+      // Validation summary
+      const validation = {
+        hasRequiredRole: (user.roles || []).some(r => r.isActive),
+        hasRequiredOrganization: (user.organizations || []).length > 0,
+        hasRequiredCoverage: (user.coverageAreas || []).length > 0 || (user.locations && user.locations.municipalityId),
+        canCreateStakeholders: (user.authority >= 60 || user.isSystemAdmin) && 
+                              (user.organizations || []).length > 0 && 
+                              ((user.coverageAreas || []).some(ca => (ca.municipalityIds || []).length > 0) || user.isSystemAdmin),
+        isValid: true
+      };
+
+      // Check for issues
+      const issues = [];
+      if (user.authority >= 60 && !user.isSystemAdmin) {
+        if ((user.organizations || []).length === 0) {
+          issues.push('NO_ORGANIZATIONS');
+          validation.isValid = false;
+        }
+        if ((user.coverageAreas || []).length === 0) {
+          issues.push('NO_COVERAGE_AREAS');
+          validation.isValid = false;
+        }
+        const hasMunicipalities = (user.coverageAreas || []).some(ca => (ca.municipalityIds || []).length > 0);
+        if (!hasMunicipalities && (user.coverageAreas || []).length > 0) {
+          issues.push('NO_MUNICIPALITIES');
+          validation.isValid = false;
+        }
+      }
+      if (user.authority < 60) {
+        if (!user.locations || !user.locations.municipalityId) {
+          issues.push('NO_MUNICIPALITY');
+          validation.isValid = false;
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          user: {
+            _id: user._id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            authority: user.authority,
+            authorityTier: (() => {
+              const { AuthorityService } = require('../../services/users_services/authority.service');
+              return AuthorityService.getAuthorityTierName ? AuthorityService.getAuthorityTierName(user.authority) : 'UNKNOWN';
+            })(),
+            isSystemAdmin: user.isSystemAdmin,
+            isActive: user.isActive
+          },
+          roles: roleDetails,
+          organizations: organizationDetails,
+          coverageAreas: coverageAreaDetails,
+          locations: locationDetails,
+          validation: {
+            ...validation,
+            issues: issues
+          },
+          summary: {
+            canCreateStakeholders: validation.canCreateStakeholders,
+            missingData: {
+              organizations: (user.organizations || []).length === 0,
+              coverageAreas: (user.coverageAreas || []).length === 0,
+              municipalities: !(user.coverageAreas || []).some(ca => (ca.municipalityIds || []).length > 0),
+              municipality: !(user.locations && user.locations.municipalityId)
+            }
+          }
+        }
+      });
+    } catch (error) {
+      console.error('[DIAG] Error in getUserDiagnostics:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get user diagnostics'
       });
     }
   }

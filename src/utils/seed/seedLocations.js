@@ -2,23 +2,23 @@
  * Seeder for provinces, districts and municipalities using the flexible Location model.
  * It reads `src/utils/locations.json` (if present) and inserts the hierarchy.
  * Usage: from project root run:
- *   node src/utils/seedLocations.js [--dry-run]
+ *   node src/utils/seed/seedLocations.js [--dry-run]
  *
  * The `--dry-run` flag will report changes without writing.
  */
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const { Location } = require('../models');
-const { connect, disconnect, getConnectionUri } = require('./dbConnection');
+const { Location } = require('../../models');
+const { connect, disconnect, getConnectionUri } = require('../dbConnection');
 
 // Barangay data file paths
 const barangayFiles = {
-  'Camarines Norte': path.join(__dirname, 'camnorte-dis-barangay.txt'),
-  'Camarines Sur': path.join(__dirname, 'camsur-dis-barangay.txt'),
-  'Masbate': path.join(__dirname, 'masbate-dis-barangay.txt')
+  'Camarines Norte': path.join(__dirname, '..', 'camnorte-dis-barangay.txt'),
+  'Camarines Sur': path.join(__dirname, '..', 'camsur-dis-barangay.txt'),
+  'Masbate': path.join(__dirname, '..', 'masbate-dis-barangay.txt')
 };
-const dataPath = path.join(__dirname, 'locations.json');
+const dataPath = path.join(__dirname, '..', 'locations.json');
 const dryRun = process.argv.includes('--dry-run');
 
 function makeSlug(s) {

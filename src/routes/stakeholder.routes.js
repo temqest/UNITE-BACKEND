@@ -23,5 +23,15 @@ router.get('/stakeholders/barangays/:municipalityId',
   stakeholderController.getBarangays.bind(stakeholderController)
 );
 
+/**
+ * @route   GET /api/stakeholders/diagnostics/:userId
+ * @desc    Get diagnostic information for a user (authority, organizations, coverage areas, municipalities)
+ * @access  Private (requires authentication, users can only view their own diagnostics unless system admin)
+ */
+router.get('/stakeholders/diagnostics/:userId',
+  authenticate,
+  stakeholderController.getDiagnostics.bind(stakeholderController)
+);
+
 module.exports = router;
 

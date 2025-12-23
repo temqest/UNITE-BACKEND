@@ -22,6 +22,14 @@ const roleSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  authority: {
+    type: Number,
+    required: true,
+    default: 20,
+    index: true,
+    min: 20,
+    max: 100
+  },
   permissions: [{
     resource: {
       type: String,
@@ -45,6 +53,7 @@ const roleSchema = new mongoose.Schema({
 // Index for faster lookups
 roleSchema.index({ code: 1 }, { unique: true });
 roleSchema.index({ isSystemRole: 1 });
+roleSchema.index({ authority: 1 });
 
 const Role = mongoose.model('Role', roleSchema);
 

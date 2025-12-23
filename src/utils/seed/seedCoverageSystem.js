@@ -13,7 +13,7 @@
  *   - The locations.json file must exist at src/utils/locations.json
  * 
  * Usage: from project root run:
- *   node src/utils/seedCoverageSystem.js [--dry-run]
+ *   node src/utils/seed/seedCoverageSystem.js [--dry-run]
  * 
  * The `--dry-run` flag will report changes without writing.
  * 
@@ -26,10 +26,10 @@
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const { Location, Organization, CoverageArea } = require('../models');
-const { connect, disconnect, getConnectionUri } = require('./dbConnection');
+const { Location, Organization, CoverageArea } = require('../../models');
+const { connect, disconnect, getConnectionUri } = require('../dbConnection');
 
-const dataPath = path.join(__dirname, 'locations.json');
+const dataPath = path.join(__dirname, '..', 'locations.json');
 const dryRun = process.argv.includes('--dry-run');
 
 function makeSlug(s) {

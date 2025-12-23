@@ -24,10 +24,7 @@ const { User } = require('../models');
 const permissionService = require('../services/users_services/permission.service');
 const locationService = require('../services/utility_services/location.service');
 
-// Accept multiple env names
-const uri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
-// Database name (optional) — allows connecting to a specific DB in the cluster
-const dbName = process.env.MONGO_DB_NAME || process.env.MONGO_DB || process.env.DB_NAME || null;
+const { connect, disconnect, getConnectionUri } = require('./dbConnection');
 
 function loadConfig() {
   if (fs.existsSync(adminPath)) {
@@ -62,18 +59,14 @@ async function createAdminAccount() {
     locations: locations.length > 0 ? locations : 'none'
   }, null, 2));
 
-  // Log which database will be used (shows even for --dry-run)
-  console.log('Database to use:', dbName ? dbName : '(from URI)');
-
   if (dryRun) {
     console.log('--dry-run provided; exiting without writing to DB.');
     return;
   }
 
-  console.log('Connecting to DB:', uri.replace(/(mongodb\+srv:\/\/.*?:).*@/, '$1****@'), dbName ? `(using database: ${dbName})` : '');
-  const connectOptions = { useNewUrlParser: true, useUnifiedTopology: true };
-  if (dbName) connectOptions.dbName = dbName;
-  await mongoose.connect(uri, connectOptions);
+  const uri = getConnectionUri();
+  console.log('Connecting to DB:', uri.replace(/(mongodb\+srv:\/\/.*?:).*@/, '$1****@'));
+  await connect(uri);
 
   try {
     // Check if email already exists
@@ -204,7 +197,7 @@ async function createAdminAccount() {
     }
     process.exit(1);
   } finally {
-    await mongoose.disconnect();
+    await disconnect();
   }
 }
 

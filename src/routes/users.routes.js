@@ -64,6 +64,19 @@ router.get('/users/create-context', authenticate, async (req, res, next) => {
 });
 
 /**
+ * @route   GET /api/users/creation-context/municipalities
+ * @desc    Get municipalities with nested barangays for coordinator creation
+ * @access  Private (requires authentication)
+ */
+router.get('/users/creation-context/municipalities', authenticate, async (req, res, next) => {
+  try {
+    await userController.getMunicipalitiesWithBarangays(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/users/by-capability
  * @desc    List users filtered by permission capabilities
  * @access  Private (requires user.read permission)
@@ -97,6 +110,19 @@ router.get('/users/:userId', authenticate, requirePermission('user', 'read'), as
 router.get('/users/:userId/capabilities', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
     await userController.getUserCapabilities(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/users/:userId/diagnostics
+ * @desc    Get comprehensive diagnostic information for a user
+ * @access  Private (requires user.read permission or viewing own diagnostics)
+ */
+router.get('/users/:userId/diagnostics', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await userController.getUserDiagnostics(req, res);
   } catch (error) {
     next(error);
   }

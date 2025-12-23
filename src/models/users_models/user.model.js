@@ -92,6 +92,141 @@ const userSchema = new mongoose.Schema({
     trim: true
   },
   
+  // AUTHORITY: Explicit, persisted, never inferred
+  authority: {
+    type: Number,
+    required: true,
+    default: 20,
+    index: true,
+    min: 20,
+    max: 100
+  },
+  
+  // ROLES: Embedded array of role references with authority
+  roles: [{
+    roleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Role',
+      required: true
+    },
+    roleCode: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true
+    },
+    roleAuthority: {
+      type: Number,
+      required: true,
+      min: 20,
+      max: 100
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now
+    },
+    assignedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: false
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    }
+  }],
+  
+  // ORGANIZATIONS: Embedded array (coordinators can have multiple)
+  organizations: [{
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true
+    },
+    organizationName: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    organizationType: {
+      type: String,
+      required: true,
+      enum: ['LGU', 'NGO', 'Hospital', 'BloodBank', 'RedCross', 'Non-LGU', 'Other']
+    },
+    isPrimary: {
+      type: Boolean,
+      default: false
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now
+    },
+    assignedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: false
+    }
+  }],
+  
+  // COVERAGE: For coordinators (district-level)
+  coverageAreas: [{
+    coverageAreaId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CoverageArea',
+      required: true
+    },
+    coverageAreaName: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    districtIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Location'
+    }],
+    municipalityIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Location'
+    }],
+    isPrimary: {
+      type: Boolean,
+      default: false
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now
+    },
+    assignedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: false
+    }
+  }],
+  
+  // LOCATION: For stakeholders (municipality/barangay)
+  locations: {
+    municipalityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Location',
+      required: false
+    },
+    municipalityName: {
+      type: String,
+      required: false,
+      trim: true
+    },
+    barangayId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Location',
+      required: false
+    },
+    barangayName: {
+      type: String,
+      required: false,
+      trim: true
+    }
+  },
+  
   // System Admin Flag
   // Simplified flag for system administrators (replaces SystemAdmin model)
   isSystemAdmin: {
@@ -128,6 +263,11 @@ userSchema.index({ userId: 1 }, { unique: true, sparse: true });
 userSchema.index({ isActive: 1, isSystemAdmin: 1 });
 userSchema.index({ organizationType: 1 });
 userSchema.index({ createdAt: -1 });
+userSchema.index({ authority: 1 });
+userSchema.index({ 'roles.roleId': 1 });
+userSchema.index({ 'organizations.organizationId': 1 });
+userSchema.index({ 'coverageAreas.coverageAreaId': 1 });
+userSchema.index({ 'locations.municipalityId': 1 });
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {
@@ -163,6 +303,37 @@ userSchema.pre('save', function(next) {
   if (this.isModified('email')) {
     this.email = this.email.toLowerCase();
   }
+  next();
+});
+
+// Pre-save hook to validate user completeness
+userSchema.pre('save', async function(next) {
+  // Skip validation for system admins
+  if (this.isSystemAdmin) {
+    return next();
+  }
+
+  // Coordinators (authority >= 60) must have at least one organization
+  if (this.authority >= 60) {
+    if (!this.organizations || this.organizations.length === 0) {
+      return next(new Error('Coordinators must have at least one organization'));
+    }
+  }
+
+  // Coordinators (authority >= 60) must have at least one coverage area
+  if (this.authority >= 60) {
+    if (!this.coverageAreas || this.coverageAreas.length === 0) {
+      return next(new Error('Coordinators must have at least one coverage area'));
+    }
+  }
+
+  // Stakeholders (authority < 60) must have municipality
+  if (this.authority < 60) {
+    if (!this.locations || !this.locations.municipalityId) {
+      return next(new Error('Stakeholders must have a municipality assignment'));
+    }
+  }
+
   next();
 });
 
