@@ -378,11 +378,25 @@ userSchema.pre('save', async function(next) {
   // 3. Has stakeholder role (not a coordinator)
   // 4. No coordinator indicators (definitely a stakeholder)
   // 5. Authority < 60 (stakeholder level)
+  // 6. Municipality is missing AND this is NOT during creation
+  //    During creation, municipality is assigned after roles but before organizations
+  //    So if organizations are assigned, creation is complete and municipality should exist
   if (!isCoordinator && !hasCoordinatorIndicators && hasStakeholderRole && this.authority < 60) {
     if (!isNewDocument && hasRoles) {
-      if (!this.locations || !this.locations.municipalityId) {
+      // Check if this is during creation (organizations not assigned yet)
+      // During stakeholder creation flow:
+      // 1. User created with locations: {}
+      // 2. Roles assigned and saved (locations still {}, no organizations) - SKIP validation
+      // 3. Municipality assigned and saved (locations.municipalityId exists) - SKIP (organizations not assigned yet)
+      // 4. Organizations assigned and saved (organizations exist) - VALIDATE (creation complete)
+      const hasOrganizations = this.organizations && this.organizations.length > 0;
+      
+      // Only validate if municipality is missing AND organizations are assigned (creation is complete)
+      // If organizations are not assigned yet, we're still in creation - municipality will be assigned
+      if (!this.locations?.municipalityId && hasOrganizations) {
         return next(new Error('Stakeholders must have a municipality assignment'));
       }
+      // If organizations are not assigned yet, allow save to proceed - creation in progress
     }
   }
 

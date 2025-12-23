@@ -102,12 +102,17 @@ const defaultPermissions = [
 ];
 
 // Default roles to create
+// Authority mapping:
+// - system-admin: 100 (System Administrator)
+// - coordinator: 60 (Coordinator)
+// - stakeholder: 30 (Stakeholder)
 const defaultRoles = [
   {
     code: 'system-admin',
     name: 'System Administrator',
     description: 'Full system access with all permissions',
     isSystemRole: true,
+    authority: 100,
     permissions: [
       { resource: '*', actions: ['*'] } // Full access
     ]
@@ -117,6 +122,7 @@ const defaultRoles = [
     name: 'Coordinator',
     description: 'Event and request coordinator with review and approval capabilities',
     isSystemRole: true,
+    authority: 60,
     permissions: [
       { resource: 'event', actions: ['create', 'read', 'update'] },
       { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule'] },
@@ -133,6 +139,7 @@ const defaultRoles = [
     name: 'Stakeholder',
     description: 'Stakeholder with event creation and request confirmation capabilities',
     isSystemRole: true,
+    authority: 30,
     permissions: [
       { resource: 'event', actions: ['create', 'read'] },
       { resource: 'request', actions: ['create', 'read', 'confirm', 'decline'] },
@@ -170,14 +177,28 @@ async function seedRoles() {
     
     if (existing) {
       console.log(`  Role exists: ${roleData.code} (${roleData.name})`);
-      // Optionally update permissions if they've changed
+      let needsUpdate = false;
+      
+      // Update permissions if they've changed
       if (!dryRun && JSON.stringify(existing.permissions) !== JSON.stringify(roleData.permissions)) {
         console.log(`    Updating permissions for role: ${roleData.code}`);
         existing.permissions = roleData.permissions;
+        needsUpdate = true;
+      }
+      
+      // Update authority if it doesn't match expected value
+      if (roleData.authority !== undefined && existing.authority !== roleData.authority) {
+        console.log(`    Updating authority for role: ${roleData.code} (current: ${existing.authority || 'not set'}, expected: ${roleData.authority})`);
+        existing.authority = roleData.authority;
+        needsUpdate = true;
+      }
+      
+      if (needsUpdate && !dryRun) {
         await existing.save();
+        console.log(`    ✓ Role updated: ${roleData.code}`);
       }
     } else {
-      console.log(`  Will create role: ${roleData.code} (${roleData.name})`);
+      console.log(`  Will create role: ${roleData.code} (${roleData.name}) with authority ${roleData.authority || 'default'}`);
       if (!dryRun) {
         await Role.create(roleData);
       }

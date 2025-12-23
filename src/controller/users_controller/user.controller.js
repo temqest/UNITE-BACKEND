@@ -34,12 +34,53 @@ class UserController {
         organizationIds = [organizationId];
       }
 
-      // For stakeholder-management page, force role to stakeholder
+      // For stakeholder-management page, validate that roles are provided and are stakeholder roles
       if (pageContext === 'stakeholder-management') {
-        roles = ['stakeholder'];
+        // Require at least one role
+        if (!roles || roles.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'At least one role is required for stakeholder creation',
+            code: 'MISSING_ROLE'
+          });
+        }
+        
+        // Validate that all provided roles are stakeholder roles (authority < 60)
+        const { Role } = require('../../models');
+        const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+        const authorityService = require('../../services/users_services/authority.service');
+        
+        for (const roleIdentifier of roles) {
+          // Support both role codes and role IDs
+          let role;
+          if (mongoose.Types.ObjectId.isValid(roleIdentifier)) {
+            role = await Role.findById(roleIdentifier);
+          } else {
+            role = await Role.findOne({ code: roleIdentifier });
+          }
+          
+          if (!role) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid role: ${roleIdentifier}`,
+              code: 'INVALID_ROLE'
+            });
+          }
+          
+          const roleAuthority = role.authority || await authorityService.calculateRoleAuthority(role._id);
+          if (roleAuthority >= AUTHORITY_TIERS.COORDINATOR) {
+            return res.status(403).json({
+              success: false,
+              message: `Cannot assign coordinator-level or higher role to stakeholder: ${role.code}`,
+              code: 'INVALID_ROLE_AUTHORITY'
+            });
+          }
+        }
+        
         console.log('[STAKEHOLDER] Creating stakeholder:', {
           email: userData.email,
           requesterId: requesterId?.toString(),
+          roles: roles,
           municipalityId: municipalityId || 'none',
           organizationId: organizationId || 'none'
         });
@@ -99,18 +140,31 @@ class UserController {
         }
         
         // Validate role authority (creator must have higher authority than role)
-        // For stakeholder-management page, we already forced role to 'stakeholder' above
-        for (const roleCode of roles) {
-          const role = await permissionService.getRoleByCode(roleCode);
-          if (role) {
-            const roleAuthority = await authorityService.calculateRoleAuthority(role._id);
-            if (requesterAuthority <= roleAuthority) {
-              return res.status(403).json({
-                success: false,
-                message: `Cannot create staff with role '${roleCode}': Your authority level is insufficient`,
-                code: 'INSUFFICIENT_AUTHORITY'
-              });
-            }
+        // Support both role codes and role IDs
+        const { Role } = require('../../models');
+        for (const roleIdentifier of roles) {
+          let role;
+          if (mongoose.Types.ObjectId.isValid(roleIdentifier)) {
+            role = await Role.findById(roleIdentifier);
+          } else {
+            role = await Role.findOne({ code: roleIdentifier });
+          }
+          
+          if (!role) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid role: ${roleIdentifier}`,
+              code: 'INVALID_ROLE'
+            });
+          }
+          
+          const roleAuthority = role.authority || await authorityService.calculateRoleAuthority(role._id);
+          if (requesterAuthority <= roleAuthority) {
+            return res.status(403).json({
+              success: false,
+              message: `Cannot create staff with role '${role.code || roleIdentifier}': Your authority level is insufficient`,
+              code: 'INSUFFICIENT_AUTHORITY'
+            });
           }
         }
         
@@ -682,15 +736,24 @@ class UserController {
         }
         
       } catch (transactionError) {
-        // Abort transaction on any error
-        await session.abortTransaction();
+        // Abort transaction on any error - ensures no partial saves
+        try {
+          await session.abortTransaction();
+          console.log('[RBAC] createUser - Transaction aborted due to error');
+        } catch (abortError) {
+          console.error('[RBAC] createUser - Error aborting transaction:', abortError);
+        }
         if (pageContext === 'stakeholder-management') {
           console.error('[STAKEHOLDER] Stakeholder creation failed:', transactionError.message);
         }
         throw transactionError;
       } finally {
-        // End session
-        session.endSession();
+        // End session - always cleanup
+        try {
+          session.endSession();
+        } catch (endError) {
+          console.error('[RBAC] createUser - Error ending session:', endError);
+        }
       }
 
       // Remove password from response
@@ -1327,9 +1390,61 @@ class UserController {
       // Only pass locationId if it's defined
       const context = locationId ? { locationId } : {};
       
+      // Detailed logging: Get user details for each capability to see what we're finding
+      const { User } = require('../../models/index');
+      const authorityService = require('../../services/users_services/authority.service');
+      
       for (const cap of capabilities) {
-        const userIds = await permissionService.getUsersWithPermission(cap, context);
+        let userIds = await permissionService.getUsersWithPermission(cap, context);
         capabilityResults[cap] = userIds.length;
+        
+        // SPECIAL CASE: For 'request.review' capability (stakeholder page),
+        // stakeholders don't have request.review permission, so we MUST query them by authority
+        // and merge with any users found via permission lookup
+        if (cap === 'request.review' && !capabilities.some(c => c.startsWith('staff.'))) {
+          console.log('[listUsersByCapability] request.review requested - querying stakeholders by authority and merging with permission results');
+          const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+          const stakeholderUsers = await User.find({
+            authority: { $lt: AUTHORITY_TIERS.COORDINATOR },
+            isActive: true
+          }).select('_id').lean();
+          
+          const stakeholderIds = stakeholderUsers.map(u => u._id.toString());
+          const permissionUserIds = userIds.map(id => id.toString());
+          console.log(`[listUsersByCapability] Found ${stakeholderIds.length} stakeholders by authority, ${permissionUserIds.length} users via permission lookup`);
+          
+          // Merge: combine permission-based results with stakeholder results
+          const mergedSet = new Set([...permissionUserIds, ...stakeholderIds]);
+          userIds = Array.from(mergedSet);
+          capabilityResults[cap] = userIds.length;
+          const uniqueFromPermissions = permissionUserIds.filter(id => !stakeholderIds.includes(id)).length;
+          const uniqueStakeholders = stakeholderIds.filter(id => !permissionUserIds.includes(id)).length;
+          const overlap = userIds.length - uniqueFromPermissions - uniqueStakeholders;
+          console.log(`[listUsersByCapability] Merged results: ${userIds.length} total users (${uniqueFromPermissions} unique from permissions, ${uniqueStakeholders} unique stakeholders, ${overlap} overlap)`);
+        }
+        
+        // DETAILED DIAGNOSTIC: Log each user found with their authority and role info
+        if (userIds.length > 0) {
+          const usersFound = await User.find({ _id: { $in: userIds } }).select('_id email firstName lastName authority isSystemAdmin roles');
+          const userDetails = await Promise.all(usersFound.map(async (u) => {
+            const auth = u.authority || await authorityService.calculateUserAuthority(u._id);
+            const roleCodes = (u.roles || []).filter(r => r.isActive).map(r => r.roleCode || 'unknown');
+            return {
+              userId: u._id.toString(),
+              email: u.email,
+              name: `${u.firstName || ''} ${u.lastName || ''}`.trim(),
+              authority: auth,
+              isSystemAdmin: u.isSystemAdmin,
+              roles: roleCodes,
+              hasRequestReviewPermission: cap === 'request.review'
+            };
+          }));
+          
+          console.log(`[DIAG] getUsersWithPermission for "${cap}" returned ${userIds.length} users:`, userDetails);
+        } else {
+          console.log(`[DIAG] getUsersWithPermission for "${cap}" returned NO users`);
+        }
+        
         userIds.forEach(id => userIdsSet.add(id.toString()));
       }
       
@@ -1338,6 +1453,53 @@ class UserController {
         usersPerCapability: capabilityResults,
         totalUniqueUsers: userIdsSet.size
       });
+      
+      // ADDITIONAL DIAGNOSTIC: Check if there are any stakeholders in the database at all
+      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.'))) {
+        const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+        const allStakeholders = await User.find({
+          authority: { $lt: AUTHORITY_TIERS.COORDINATOR },
+          isActive: true
+        }).select('_id email firstName lastName authority roles organizations locations').limit(20);
+        
+        console.log('[DIAG] Database check - All stakeholders in database (first 20):', {
+          totalStakeholdersFound: allStakeholders.length,
+          stakeholders: allStakeholders.map(s => ({
+            userId: s._id.toString(),
+            email: s.email,
+            name: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+            authority: s.authority,
+            roles: (s.roles || []).filter(r => r.isActive).map(r => r.roleCode || 'unknown'),
+            hasOrganizations: (s.organizations || []).length > 0,
+            organizationsCount: (s.organizations || []).length,
+            hasMunicipality: !!(s.locations && s.locations.municipalityId),
+            municipalityId: s.locations?.municipalityId?.toString() || 'none'
+          }))
+        });
+        
+        // Check if stakeholders have request.review permission via their roles
+        const stakeholderRoleIds = allStakeholders
+          .flatMap(s => (s.roles || []).filter(r => r.isActive).map(r => r.roleId))
+          .filter(Boolean);
+        
+        if (stakeholderRoleIds.length > 0) {
+          const { Role } = require('../../models/index');
+          const stakeholderRoles = await Role.find({
+            _id: { $in: stakeholderRoleIds }
+          }).select('_id code name authority permissions');
+          
+          console.log('[DIAG] Stakeholder roles and permissions:', stakeholderRoles.map(r => ({
+            roleId: r._id.toString(),
+            code: r.code,
+            name: r.name,
+            authority: r.authority,
+            hasRequestReview: r.permissions?.some(p => 
+              (p.resource === '*' || p.resource === 'request') && 
+              (p.actions?.includes('*') || p.actions?.includes('review'))
+            ) || false
+          })));
+        }
+      }
 
       // NEW: Authority filtering - filter out users with equal/higher authority than requester
       const requesterId = req.user?.id || req.user?._id;
@@ -1368,15 +1530,27 @@ class UserController {
       const query = {};
 
       // Server-side jurisdiction filtering: ensure users are within requester's jurisdiction
+      // Operational admins (authority ≥ 80) bypass jurisdiction filtering
       if (requesterId && filteredUserIds.length > 0) {
         try {
-          const jurisdictionService = require('../../services/users_services/jurisdiction.service');
-          const jurisdictionFiltered = await jurisdictionService.filterUsersByJurisdiction(requesterId, filteredUserIds);
-          console.log('[listUsersByCapability] Jurisdiction filtering:', {
-            before: filteredUserIds.length,
-            after: jurisdictionFiltered.length
-          });
-          filteredUserIds = jurisdictionFiltered;
+          const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
+          
+          // Operational admins (≥80) bypass jurisdiction checks
+          if (requesterAuthority >= 80) {
+            console.log('[listUsersByCapability] Jurisdiction filtering bypassed (admin):', {
+              requesterAuthority,
+              userIdsCount: filteredUserIds.length
+            });
+          } else {
+            const jurisdictionService = require('../../services/users_services/jurisdiction.service');
+            const jurisdictionFiltered = await jurisdictionService.filterUsersByJurisdiction(requesterId, filteredUserIds);
+            console.log('[listUsersByCapability] Jurisdiction filtering:', {
+              before: filteredUserIds.length,
+              after: jurisdictionFiltered.length,
+              requesterAuthority
+            });
+            filteredUserIds = jurisdictionFiltered;
+          }
         } catch (err) {
           console.error('[listUsersByCapability] Jurisdiction filtering error:', err);
           // On error, fail safe: return empty list
@@ -1386,68 +1560,134 @@ class UserController {
 
       // Role type filtering: For stakeholder pages (request.review), explicitly filter to stakeholder roles only
       // This ensures coordinators don't appear in stakeholder lists
+      // Use embedded User.roles[] array AND user authority field
       const roleTypeFilteredCount = filteredUserIds.length;
       if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.')) && filteredUserIds.length > 0) {
         try {
-          const { Role, UserRole } = require('../../models');
           const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
           
-          // Get all stakeholder role IDs (authority < COORDINATOR)
-          const stakeholderRoleIds = await Role.find({
-            isActive: true,
+          // Get stakeholder role codes (authority < COORDINATOR)
+          const { Role } = require('../../models');
+          const stakeholderRoles = await Role.find({
             authority: { $lt: AUTHORITY_TIERS.COORDINATOR }
-          }).distinct('_id');
+          }).select('_id code authority');
           
-          console.log('[listUsersByCapability] Role type filtering - Stakeholder roles found:', stakeholderRoleIds.length);
+          const stakeholderRoleIds = new Set(stakeholderRoles.map(r => r._id.toString()));
+          const stakeholderRoleCodes = new Set(stakeholderRoles.map(r => r.code));
           
-          if (stakeholderRoleIds.length > 0) {
-            // Get users who have stakeholder roles
-            const usersWithStakeholderRoles = await UserRole.find({
-              userId: { $in: filteredUserIds },
-              roleId: { $in: stakeholderRoleIds },
-              isActive: true,
+          console.log('[listUsersByCapability] Role type filtering - Stakeholder roles found:', {
+            count: stakeholderRoles.length,
+            roleCodes: Array.from(stakeholderRoleCodes),
+            roleIds: Array.from(stakeholderRoleIds)
+          });
+          
+          if (stakeholderRoleIds.size > 0) {
+            // Get users who have stakeholder roles OR have authority < COORDINATOR
+            // This handles cases where authority is set but roles might be missing
+            const usersToCheck = await User.find({
+              _id: { $in: filteredUserIds },
               $or: [
-                { expiresAt: { $exists: false } },
-                { expiresAt: null },
-                { expiresAt: { $gt: new Date() } }
+                { 'roles.roleAuthority': { $lt: AUTHORITY_TIERS.COORDINATOR }, 'roles.isActive': true },
+                { authority: { $lt: AUTHORITY_TIERS.COORDINATOR } }
               ]
-            }).distinct('userId');
+            }).select('_id roles authority');
             
-            const stakeholderUserIds = usersWithStakeholderRoles.map(id => id.toString());
+            const stakeholderUserIds = new Set();
+            usersToCheck.forEach(user => {
+              // Check 1: User authority < COORDINATOR (most reliable)
+              const userAuthority = user.authority || 20;
+              if (userAuthority < AUTHORITY_TIERS.COORDINATOR) {
+                stakeholderUserIds.add(user._id.toString());
+                return;
+              }
+              
+              // Check 2: User has stakeholder role in embedded array
+              if (user.roles && user.roles.length > 0) {
+                const hasStakeholderRole = user.roles.some(role => {
+                  if (!role.isActive) return false;
+                  
+                  const roleId = role.roleId?.toString();
+                  const roleCode = role.roleCode;
+                  const roleAuthority = role.roleAuthority;
+                  
+                  // Check by role ID, code, or authority
+                  return (roleId && stakeholderRoleIds.has(roleId)) ||
+                         (roleCode && stakeholderRoleCodes.has(roleCode)) ||
+                         (roleAuthority !== undefined && roleAuthority < AUTHORITY_TIERS.COORDINATOR);
+                });
+                
+                if (hasStakeholderRole) {
+                  stakeholderUserIds.add(user._id.toString());
+                }
+              }
+            });
+            
             const beforeRoleFilter = filteredUserIds.length;
             filteredUserIds = filteredUserIds.filter(id => 
-              stakeholderUserIds.includes(id.toString())
+              stakeholderUserIds.has(id.toString())
             );
             
             console.log('[listUsersByCapability] Role type filtering:', {
               before: beforeRoleFilter,
               after: filteredUserIds.length,
               filteredOut: beforeRoleFilter - filteredUserIds.length,
-              stakeholderRoleIds: stakeholderRoleIds.length
+              stakeholderRoleIds: stakeholderRoleIds.size,
+              usersChecked: usersToCheck.length,
+              usersWithStakeholderRoles: stakeholderUserIds.size,
+              method: 'authority_and_roles'
             });
           } else {
-            console.log('[listUsersByCapability] Role type filtering - No stakeholder roles found, filtering all out');
-            filteredUserIds = [];
+            console.log('[listUsersByCapability] Role type filtering - No stakeholder roles found, using authority-based filtering');
+            // Fallback: filter by authority only if no stakeholder roles exist
+            const usersByAuthority = await User.find({
+              _id: { $in: filteredUserIds },
+              authority: { $lt: AUTHORITY_TIERS.COORDINATOR }
+            }).select('_id authority');
+            
+            filteredUserIds = usersByAuthority.map(u => u._id.toString());
+            
+            console.log('[listUsersByCapability] Authority-based filtering (fallback):', {
+              before: roleTypeFilteredCount,
+              after: filteredUserIds.length
+            });
           }
         } catch (err) {
           console.error('[listUsersByCapability] Role type filtering error:', err);
-          // On error, fail safe: return empty list for stakeholder pages
-          filteredUserIds = [];
+          // On error, try fallback to authority-based filtering
+          try {
+            const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+            const usersByAuthority = await User.find({
+              _id: { $in: filteredUserIds },
+              authority: { $lt: AUTHORITY_TIERS.COORDINATOR }
+            }).select('_id authority');
+            
+            filteredUserIds = usersByAuthority.map(u => u._id.toString());
+            console.log('[listUsersByCapability] Fallback authority filtering:', {
+              after: filteredUserIds.length
+            });
+          } catch (fallbackErr) {
+            console.error('[listUsersByCapability] Fallback filtering also failed:', fallbackErr);
+            // Final fail safe: return empty list
+            filteredUserIds = [];
+          }
         }
       }
       
       // Comprehensive diagnostic logging for stakeholder display
       if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.'))) {
-        console.log('[DIAG] Stakeholder Display:', {
-          totalUsersFound: userIdsSet.size,
+        const afterJurisdictionCount = filteredUserIds.length; // This is after jurisdiction filter
+        console.log('[DIAG] Stakeholder Display Filtering Breakdown:', {
+          totalUsersWithCapability: userIdsSet.size,
           afterAuthorityFilter: roleTypeFilteredCount,
-          afterJurisdictionFilter: roleTypeFilteredCount,
+          afterJurisdictionFilter: afterJurisdictionCount,
           afterRoleTypeFilter: filteredUserIds.length,
           filteredOut: {
-            authority: userIdsSet.size - roleTypeFilteredCount,
-            jurisdiction: 0, // Already accounted in roleTypeFilteredCount
-            roleType: roleTypeFilteredCount - filteredUserIds.length
-          }
+            byAuthority: userIdsSet.size - roleTypeFilteredCount,
+            byJurisdiction: roleTypeFilteredCount - afterJurisdictionCount,
+            byRoleType: afterJurisdictionCount - filteredUserIds.length
+          },
+          requesterId: requesterId?.toString(),
+          requesterAuthority: requesterId ? await require('../../services/users_services/authority.service').calculateUserAuthority(requesterId) : 'unknown'
         });
       }
       
@@ -1483,10 +1723,17 @@ class UserController {
         limit
       });
 
-      // Remove passwords from response
+      // Remove passwords from response and ensure coverage area/organization data is included
       const usersResponse = users.map(u => {
         const userObj = u.toObject();
         delete userObj.password;
+        
+        // Ensure locations (municipality/barangay) are properly formatted
+        // Locations are already embedded in user document as: { municipalityId, municipalityName, barangayId?, barangayName? }
+        
+        // Ensure organizations array is included (for stakeholders, should have one organization)
+        // Organizations are already embedded in user document as: [{ organizationId, organizationName, organizationType, ... }]
+        
         return userObj;
       });
 
@@ -1567,8 +1814,13 @@ class UserController {
       
       if (pageContext === 'stakeholder-management') {
         // Stakeholder creation context
-        defaultValues.role = 'stakeholder';
-        lockedFields.push('role'); // Role is forced to stakeholder
+        // Note: This endpoint is deprecated in favor of /api/stakeholders/creation-context
+        // Role is dynamically determined based on creator's authority
+        // Default to first available role if only one option
+        if (allowedRoles.length === 1) {
+          defaultValues.role = allowedRoles[0].code;
+          lockedFields.push('role');
+        }
         
         requiredFields = ['municipality', 'organization'];
         optionalFields = ['barangay'];
@@ -1613,8 +1865,8 @@ class UserController {
       }
       
       // Roles are already filtered by getAssignableRoles based on authority and context
-      // For coordinator-management, it only returns 'coordinator' role
-      // For stakeholder-management, it only returns 'stakeholder' role
+      // For coordinator-management, returns coordinator-level roles (authority >= 60)
+      // For stakeholder-management, returns stakeholder-level roles (authority < 60)
       
       return res.status(200).json({
         success: true,

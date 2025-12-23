@@ -161,8 +161,8 @@ function validatePageContext(pageContext) {
       // Note: These must match the actual permissions in the database
       const contextRequirements = {
         'stakeholder-management': {
-          required: ['request.review'],
-          description: 'Stakeholder (Review & Approval)'
+          required: ['request.confirm', 'request.decline'], // Stakeholders have confirm/decline, not review
+          description: 'Stakeholder'
         },
         'coordinator-management': {
           required: ['request.create', 'event.create', 'event.update', 'staff.create', 'staff.update'],

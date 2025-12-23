@@ -127,10 +127,19 @@ async function validateJurisdiction(req, res, next) {
     // Validate organization if provided
     let canAssignOrg = null;
     if (organizationId) {
-      canAssignOrg = await jurisdictionService.canAssignOrganization(
-        creatorId,
-        organizationId
-      );
+      let allowedOrganizations = [];
+      
+      // For stakeholder creation, use stakeholder-specific method
+      if (pageContext === 'stakeholder-management') {
+        allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(creatorId);
+      } else {
+        // For coordinator creation, use coordinator-specific method
+        allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForCoordinatorCreation(creatorId);
+      }
+      
+      const allowedOrgIds = allowedOrganizations.map(o => o._id.toString());
+      canAssignOrg = allowedOrgIds.includes(organizationId.toString());
+      
       if (!canAssignOrg) {
         // Diagnostic logging
         console.log('[DIAG] validateJurisdiction:', {
@@ -140,6 +149,7 @@ async function validateJurisdiction(req, res, next) {
           coverageAreaId: coverageAreaId || 'none',
           organizationId,
           pageContext: pageContext || 'none',
+          allowedOrgIds,
           canAssignOrg: false,
           result: 'REJECTED: organization outside jurisdiction'
         });

@@ -531,12 +531,11 @@ class JurisdictionService {
       const { Role } = require('../../models/index');
       const { AUTHORITY_TIERS } = require('./authority.service');
 
-      // Get all active roles with authority lower than creator's authority
+      // Get all roles with authority lower than creator's authority
       // Stakeholder roles typically have authority < 60 (COORDINATOR authority)
       // Use Math.min to get the stricter constraint (must be below both creator authority AND coordinator level)
       const maxAuthority = Math.min(creatorAuthority, AUTHORITY_TIERS.COORDINATOR);
       const roles = await Role.find({
-        isActive: true,
         authority: { $lt: maxAuthority } // Must be below both creator authority and coordinator level
       }).sort({ authority: -1, name: 1 });
 
@@ -561,38 +560,292 @@ class JurisdictionService {
       if (!creatorId || !targetUserId) return false;
 
       const { AUTHORITY_TIERS } = require('./authority.service');
-      const creatorAuthority = await require('./authority.service').calculateUserAuthority(creatorId);
-      // System admins bypass jurisdiction checks
-      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) return true;
-
-      // Get creator effective coverage (locations)
-      const creatorLocations = await userCoverageAssignmentService.getUserCoverageAreas(creatorId, { includeInactive: false });
-      // Transform to set of location ids (geographicUnits)
-      const creatorLocationIds = new Set();
-      for (const a of creatorLocations) {
-        const ca = a.coverageAreaId;
-        if (!ca) continue;
-        const units = Array.isArray(ca.geographicUnits) ? ca.geographicUnits : (ca.geographicUnits ? [ca.geographicUnits] : []);
-        for (const u of units) creatorLocationIds.add(u.toString());
+      const authorityService = require('./authority.service');
+      const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
+      
+      // Operational admins (authority ≥ 80) and system admins bypass jurisdiction checks
+      if (creatorAuthority >= 80) {
+        console.log('[DIAG] isUserInCreatorJurisdiction - Admin bypass:', {
+          creatorId: creatorId.toString(),
+          creatorAuthority,
+          targetUserId: targetUserId.toString()
+        });
+        return true;
       }
 
-      // If creator has no explicit coverage areas, fall back to user locations
-      if (creatorLocationIds.size === 0) {
-        const locationService = require('../utility_services/location.service');
-        const locs = await locationService.getUserLocations(creatorId);
-        locs.forEach(l => creatorLocationIds.add(l._id.toString()));
-      }
-
-      if (creatorLocationIds.size === 0) {
-        // No jurisdiction defined - deny by default
-        console.log('[DIAG] isUserInCreatorJurisdiction - Creator has no jurisdiction:', { creatorId: creatorId.toString() });
+      // Get creator user to access embedded coverage areas
+      const { User } = require('../../models/index');
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      if (!creator) {
+        console.log('[DIAG] isUserInCreatorJurisdiction - Creator not found:', { creatorId: creatorId.toString() });
         return false;
       }
 
-      // Collect target user's location ids (from UserLocation assignments)
+      // STEP 1: Flatten creator's organizations into a Set (once, for efficient lookups)
+      const creatorOrgIds = new Set();
+      if (creator.organizations && creator.organizations.length > 0) {
+        creator.organizations.forEach(org => {
+          if (org.isActive !== false && org.organizationId) {
+            creatorOrgIds.add(org.organizationId.toString());
+          }
+        });
+      }
+      
+      // Fallback: If no organizations in embedded data, get from UserOrganization
+      if (creatorOrgIds.size === 0) {
+        const { UserOrganization } = require('../../models/index');
+        const userOrgAssignments = await UserOrganization.find({
+          userId: creatorId,
+          isActive: true,
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: new Date() } }
+          ]
+        }).populate('organizationId');
+        
+        userOrgAssignments.forEach(assignment => {
+          if (assignment.organizationId && assignment.organizationId.isActive !== false) {
+            creatorOrgIds.add(assignment.organizationId._id.toString());
+          }
+        });
+      }
+
+      // STEP 2: Flatten creator's municipalities from coverageAreas into a Set (once, for efficient lookups)
+      const creatorMunicipalityIds = new Set();
+      const creatorLocationIds = new Set();
+      
+      // First, try embedded municipalityIds
+      if (creator.coverageAreas && creator.coverageAreas.length > 0) {
+        creator.coverageAreas.forEach(ca => {
+          // Add municipality IDs directly from embedded data
+          if (ca.municipalityIds && Array.isArray(ca.municipalityIds) && ca.municipalityIds.length > 0) {
+            ca.municipalityIds.forEach(muniId => {
+              if (muniId) {
+                const muniIdStr = muniId.toString();
+                creatorMunicipalityIds.add(muniIdStr);
+                creatorLocationIds.add(muniIdStr);
+              }
+            });
+          }
+          // Also add district IDs if available
+          if (ca.districtIds && Array.isArray(ca.districtIds)) {
+            ca.districtIds.forEach(distId => {
+              if (distId) creatorLocationIds.add(distId.toString());
+            });
+          }
+        });
+      }
+      
+      // Fallback: If no municipalities found in embedded data, derive them from coverage areas
+      if (creatorMunicipalityIds.size === 0 && creator.coverageAreas && creator.coverageAreas.length > 0) {
+        const { Location } = require('../../models/index');
+        const { CoverageArea } = require('../../models/index');
+        const mongoose = require('mongoose');
+        
+        // Get all coverage area IDs from embedded data
+        const coverageAreaIds = creator.coverageAreas
+          .map(ca => ca.coverageAreaId)
+          .filter(Boolean);
+        
+        if (coverageAreaIds.length > 0) {
+          // Fetch coverage areas to get their geographic units
+          const coverageAreas = await CoverageArea.find({
+            _id: { $in: coverageAreaIds },
+            isActive: true
+          }).populate('geographicUnits');
+          
+          // Collect all district/province IDs from geographic units
+          const districtIds = new Set();
+          coverageAreas.forEach(ca => {
+            if (ca.geographicUnits && Array.isArray(ca.geographicUnits)) {
+              ca.geographicUnits.forEach(unit => {
+                if (unit && (unit.type === 'district' || unit.type === 'province')) {
+                  districtIds.add(unit._id.toString());
+                  creatorLocationIds.add(unit._id.toString());
+                }
+              });
+            }
+          });
+          
+          // Find municipalities under these districts/provinces
+          if (districtIds.size > 0) {
+            const municipalities = await Location.find({
+              parent: { $in: Array.from(districtIds).map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id) },
+              type: 'municipality',
+              isActive: true
+            });
+            
+            municipalities.forEach(muni => {
+              const muniIdStr = muni._id.toString();
+              creatorMunicipalityIds.add(muniIdStr);
+              creatorLocationIds.add(muniIdStr);
+            });
+          }
+        }
+      }
+
+      // Fallback: If no embedded coverage areas, use UserCoverageAssignment
+      if (creatorMunicipalityIds.size === 0) {
+        const creatorLocations = await userCoverageAssignmentService.getUserCoverageAreas(creatorId, { includeInactive: false });
+        for (const a of creatorLocations) {
+          const ca = a.coverageAreaId;
+          if (!ca) continue;
+          const units = Array.isArray(ca.geographicUnits) ? ca.geographicUnits : (ca.geographicUnits ? [ca.geographicUnits] : []);
+          for (const u of units) {
+            creatorLocationIds.add(u.toString());
+            // If it's a district/province, find municipalities under it
+            if (u.type === 'district' || u.type === 'province') {
+              const { Location } = require('../../models/index');
+              const municipalities = await Location.find({
+                parent: u._id,
+                type: 'municipality',
+                isActive: true
+              });
+              municipalities.forEach(m => {
+                const mId = m._id.toString();
+                creatorMunicipalityIds.add(mId);
+                creatorLocationIds.add(mId);
+              });
+            }
+          }
+        }
+      }
+
+      // If still no locations, fall back to user locations
+      if (creatorMunicipalityIds.size === 0) {
+        const locationService = require('../utility_services/location.service');
+        const locs = await locationService.getUserLocations(creatorId);
+        locs.forEach(l => {
+          creatorLocationIds.add(l._id.toString());
+          if (l.type === 'municipality') {
+            creatorMunicipalityIds.add(l._id.toString());
+          }
+        });
+      }
+
+      // Get target user to check embedded data
+      const targetUser = await User.findById(targetUserId) || await User.findByLegacyId(targetUserId);
+      if (!targetUser) {
+        console.log('[DIAG] isUserInCreatorJurisdiction - Target user not found:', { targetUserId: targetUserId.toString() });
+        return false;
+      }
+
+      // Calculate target authority dynamically
+      const targetAuthority = targetUser.authority || await authorityService.calculateUserAuthority(targetUserId);
+      
+      // For stakeholders: Check authority, organization, AND municipality
+      const isStakeholder = targetAuthority < AUTHORITY_TIERS.COORDINATOR;
+
+      if (isStakeholder) {
+        // Initialize diagnostic object for this stakeholder
+        const diagnostic = {
+          creatorId: creatorId.toString(),
+          creatorAuthority,
+          targetUserId: targetUserId.toString(),
+          targetAuthority,
+          checks: {}
+        };
+
+        // CHECK 1: Authority check - target must have lower authority than creator
+        const authorityCheck = targetAuthority < creatorAuthority;
+        diagnostic.checks.authority = {
+          pass: authorityCheck,
+          reason: authorityCheck 
+            ? `Target authority (${targetAuthority}) < creator authority (${creatorAuthority})`
+            : `Target authority (${targetAuthority}) >= creator authority (${creatorAuthority})`
+        };
+
+        if (!authorityCheck) {
+          console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder EXCLUDED:', diagnostic);
+          return false;
+        }
+
+        // CHECK 2: Organization match - target's organization must be in creator's organizations
+        const targetOrgIds = new Set();
+        if (targetUser.organizations && targetUser.organizations.length > 0) {
+          targetUser.organizations.forEach(org => {
+            if (org.isActive !== false && org.organizationId) {
+              targetOrgIds.add(org.organizationId.toString());
+            }
+          });
+        }
+
+        let orgMatch = false;
+        if (targetOrgIds.size > 0) {
+          for (const targetOrgId of targetOrgIds) {
+            if (creatorOrgIds.has(targetOrgId)) {
+              orgMatch = true;
+              break;
+            }
+          }
+        }
+
+        diagnostic.checks.organization = {
+          pass: orgMatch || targetOrgIds.size === 0,
+          reason: targetOrgIds.size === 0
+            ? 'Target has no organizations (might be in creation)'
+            : orgMatch
+              ? `Target organization (${Array.from(targetOrgIds).join(', ')}) matches creator organizations (${Array.from(creatorOrgIds).join(', ')})`
+              : `Target organization (${Array.from(targetOrgIds).join(', ')}) NOT in creator organizations (${Array.from(creatorOrgIds).join(', ')})`,
+          targetOrgIds: Array.from(targetOrgIds),
+          creatorOrgIds: Array.from(creatorOrgIds)
+        };
+
+        // If target has organizations but none match, exclude
+        if (targetOrgIds.size > 0 && !orgMatch) {
+          diagnostic.result = 'EXCLUDED';
+          diagnostic.reason = 'Organization mismatch';
+          console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder EXCLUDED:', diagnostic);
+          return false;
+        }
+
+        // CHECK 3: Municipality match - target's municipality must be in creator's municipalities
+        if (!targetUser.locations || !targetUser.locations.municipalityId) {
+          diagnostic.checks.municipality = {
+            pass: false,
+            reason: 'Target has no municipality assigned'
+          };
+          diagnostic.result = 'EXCLUDED';
+          diagnostic.reason = 'Missing municipality';
+          console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder EXCLUDED:', diagnostic);
+          return false;
+        }
+
+        const targetMunicipalityId = targetUser.locations.municipalityId.toString();
+        const municipalityMatch = creatorMunicipalityIds.has(targetMunicipalityId);
+
+        diagnostic.checks.municipality = {
+          pass: municipalityMatch,
+          reason: municipalityMatch
+            ? `Target municipality (${targetMunicipalityId}) in creator municipalities (${creatorMunicipalityIds.size} total)`
+            : `Target municipality (${targetMunicipalityId}) NOT in creator municipalities (${Array.from(creatorMunicipalityIds).slice(0, 5).join(', ')}...)`,
+          targetMunicipalityId,
+          creatorMunicipalityCount: creatorMunicipalityIds.size
+        };
+
+        if (!municipalityMatch) {
+          diagnostic.result = 'EXCLUDED';
+          diagnostic.reason = 'Municipality mismatch';
+          console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder EXCLUDED:', diagnostic);
+          return false;
+        }
+
+        // All checks passed - include this stakeholder
+        diagnostic.result = 'INCLUDED';
+        diagnostic.reason = 'All checks passed (authority, organization, municipality)';
+        console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder INCLUDED:', diagnostic);
+        return true;
+      }
+
+      // For non-stakeholders (coordinators, etc.), use location-based matching
+      // Collect target user's location ids
+      const targetLocationIds = new Set();
+      
+      // For non-stakeholders, use UserLocation assignments
       const locationService = require('../utility_services/location.service');
       const targetLocs = await locationService.getUserLocations(targetUserId);
-      const targetLocationIds = new Set(targetLocs.map(l => l._id.toString()));
+      targetLocs.forEach(l => targetLocationIds.add(l._id.toString()));
 
       // Also consider target's coverage areas (for non-stakeholders)
       const targetCoverageAssignments = await userCoverageAssignmentService.getUserCoverageAreas(targetUserId, { includeInactive: false });
@@ -605,10 +858,22 @@ class JurisdictionService {
 
       // Check intersection between creatorLocationIds and targetLocationIds
       for (const id of targetLocationIds) {
-        if (creatorLocationIds.has(id)) return true;
+        if (creatorLocationIds.has(id)) {
+          console.log('[DIAG] isUserInCreatorJurisdiction - Non-stakeholder location match:', {
+            creatorId: creatorId.toString(),
+            targetUserId: targetUserId.toString(),
+            matchedLocationId: id
+          });
+          return true;
+        }
       }
 
       // No intersection found
+      console.log('[DIAG] isUserInCreatorJurisdiction - No match found:', {
+        creatorId: creatorId.toString(),
+        targetUserId: targetUserId.toString(),
+        isStakeholder: false
+      });
       return false;
     } catch (error) {
       console.error('[DIAG] isUserInCreatorJurisdiction - ERROR:', error);
@@ -627,8 +892,47 @@ class JurisdictionService {
       if (!creatorId || !userIds || userIds.length === 0) return [];
 
       const { AUTHORITY_TIERS } = require('./authority.service');
-      const creatorAuthority = await require('./authority.service').calculateUserAuthority(creatorId);
-      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) return userIds;
+      const authorityService = require('./authority.service');
+      const creatorAuthority = await authorityService.calculateUserAuthority(creatorId);
+      
+      // Operational admins (authority ≥ 80) and system admins bypass jurisdiction checks
+      if (creatorAuthority >= 80) {
+        console.log('[DIAG] filterUsersByJurisdiction - Admin bypass:', {
+          creatorId: creatorId.toString(),
+          creatorAuthority,
+          userIdsCount: userIds.length
+        });
+        return userIds;
+      }
+
+      // Validate creator has jurisdiction data before filtering
+      const { User } = require('../../models/index');
+      const creator = await User.findById(creatorId) || await User.findByLegacyId(creatorId);
+      
+      if (!creator) {
+        console.log('[DIAG] filterUsersByJurisdiction - Creator not found:', { creatorId: creatorId.toString() });
+        return [];
+      }
+
+      // Check if creator has organizations (for stakeholder filtering)
+      const hasOrganizations = creator.organizations && creator.organizations.length > 0;
+      
+      // Check if creator has municipalities (for stakeholder filtering)
+      const hasMunicipalities = creator.coverageAreas && creator.coverageAreas.length > 0 && 
+        creator.coverageAreas.some(ca => ca.municipalityIds && ca.municipalityIds.length > 0);
+
+      // If creator has no jurisdiction data, return empty array (fail safe)
+      // Note: This check is only for non-admins (authority < 80)
+      if (!hasOrganizations && !hasMunicipalities && creatorAuthority < 80) {
+        console.log('[DIAG] filterUsersByJurisdiction - Creator has no jurisdiction data:', {
+          creatorId: creatorId.toString(),
+          creatorAuthority,
+          hasOrganizations,
+          hasMunicipalities,
+          coverageAreasCount: creator.coverageAreas?.length || 0
+        });
+        return [];
+      }
 
       const results = [];
       for (const uid of userIds) {
@@ -639,12 +943,15 @@ class JurisdictionService {
       console.log('[DIAG] filterUsersByJurisdiction:', {
         creatorId: creatorId.toString(),
         requested: userIds.length,
-        returned: results.length
+        returned: results.length,
+        hasOrganizations,
+        hasMunicipalities
       });
 
       return results;
     } catch (error) {
       console.error('[DIAG] filterUsersByJurisdiction - ERROR:', error);
+      // Fail safe: return empty array on error
       return [];
     }
   }

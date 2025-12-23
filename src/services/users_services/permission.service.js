@@ -293,8 +293,10 @@ class PermissionService {
       }
 
       const roleIds = roles.map(r => r._id);
+      const roleCodes = roles.map(r => r.code).filter(Boolean);
+      const userIdsSet = new Set();
 
-      // Get all user roles with these role IDs
+      // Method 1: Get users from UserRole collection (legacy/backward compatibility)
       let userRoles = await UserRole.find({
         roleId: { $in: roleIds },
         isActive: true,
@@ -321,9 +323,97 @@ class PermissionService {
         userRoles = await this.filterByCoverageAreaScope(userRoles, actualContext.coverageAreaId);
       }
 
-      // Extract unique user IDs
-      const userIds = [...new Set(userRoles.map(ur => ur.userId.toString()))];
-      console.log(`[getUsersWithPermission] Returning ${userIds.length} unique user IDs for permission ${resource}.${action}:`, userIds);
+      // Add user IDs from UserRole collection
+      userRoles.forEach(ur => userIdsSet.add(ur.userId.toString()));
+
+      // Method 2: Get users from embedded User.roles[] array (new unified model)
+      const { User } = require('../../models/index');
+      const usersWithEmbeddedRoles = await User.find({
+        'roles.roleId': { $in: roleIds },
+        'roles.isActive': true
+      }).select('_id roles');
+
+      console.log(`[getUsersWithPermission] Found ${usersWithEmbeddedRoles.length} users with embedded roles for permission ${resource}.${action}`);
+
+      // Filter users by checking if they have the required role in embedded array
+      usersWithEmbeddedRoles.forEach(user => {
+        if (user.roles && user.roles.length > 0) {
+          const hasRequiredRole = user.roles.some(role => {
+            // Check if role is active
+            if (role.isActive === false) {
+              return false;
+            }
+            
+            // Check by roleId, roleCode, or by matching role permissions
+            const roleId = role.roleId?.toString();
+            const roleCode = role.roleCode;
+            
+            // Check if role ID matches
+            if (roleId && roleIds.some(rid => rid.toString() === roleId)) {
+              return true;
+            }
+            
+            // Check if role code matches
+            if (roleCode && roleCodes.includes(roleCode)) {
+              return true;
+            }
+            
+            return false;
+          });
+          
+          if (hasRequiredRole) {
+            userIdsSet.add(user._id.toString());
+          }
+        }
+      });
+
+      // Convert to array
+      const userIds = Array.from(userIdsSet);
+      
+      // DETAILED DIAGNOSTIC: Log user details with authority for each user found
+      if (userIds.length > 0) {
+        const { User } = require('../../models/index');
+        const authorityService = require('./authority.service');
+        // Fix ObjectId conversion - handle both strings and ObjectIds
+        const userIdsForQuery = userIds.map(id => {
+          if (id instanceof mongoose.Types.ObjectId) return id;
+          if (typeof id === 'string') return new mongoose.Types.ObjectId(id);
+          return mongoose.Types.ObjectId(id);
+        });
+        const usersFound = await User.find({ _id: { $in: userIdsForQuery } })
+          .select('_id email firstName lastName authority isSystemAdmin roles')
+          .limit(50); // Limit to avoid too much logging
+        
+        const userDetails = await Promise.all(usersFound.map(async (u) => {
+          const auth = u.authority || await authorityService.calculateUserAuthority(u._id);
+          const roleCodes = (u.roles || []).filter(r => r.isActive).map(r => r.roleCode || 'unknown');
+          return {
+            userId: u._id.toString(),
+            email: u.email,
+            name: `${u.firstName || ''} ${u.lastName || ''}`.trim(),
+            authority: auth,
+            isSystemAdmin: u.isSystemAdmin,
+            roles: roleCodes
+          };
+        }));
+        
+        console.log(`[DIAG] getUsersWithPermission - Users found with permission ${resource}.${action}:`, {
+          totalUsers: userIds.length,
+          usersLogged: userDetails.length,
+          users: userDetails,
+          authorityDistribution: {
+            systemAdmin: userDetails.filter(u => u.authority >= 100).length,
+            operationalAdmin: userDetails.filter(u => u.authority >= 80 && u.authority < 100).length,
+            coordinator: userDetails.filter(u => u.authority >= 60 && u.authority < 80).length,
+            stakeholder: userDetails.filter(u => u.authority >= 30 && u.authority < 60).length,
+            basicUser: userDetails.filter(u => u.authority < 30).length
+          }
+        });
+      } else {
+        console.log(`[DIAG] getUsersWithPermission - NO users found with permission ${resource}.${action}`);
+      }
+      
+      console.log(`[getUsersWithPermission] Returning ${userIds.length} unique user IDs for permission ${resource}.${action} (${userRoles.length} from UserRole, ${usersWithEmbeddedRoles.length} from embedded roles):`, userIds);
       return userIds;
     } catch (error) {
       console.error('Error getting users with permission:', error);

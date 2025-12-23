@@ -68,15 +68,38 @@ class StakeholderController {
       }
 
       // Use context as single source of truth - all data already resolved
-      const municipalities = context.municipalities || [];
-      const organizations = context.organizations || [];
+      let municipalities = context.municipalities || [];
+      let organizations = context.organizations || [];
+      
+      // Fallback: If context doesn't have organizations, try to get them directly
+      if (!isSystemAdmin && organizations.length === 0) {
+        console.log('[DIAG] getCreationContext - No organizations in context, trying fallback');
+        organizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(userId);
+      }
+      
+      // Fallback: If context doesn't have municipalities, try to get them directly
+      if (!isSystemAdmin && municipalities.length === 0 && context.coverageAreas.length > 0) {
+        console.log('[DIAG] getCreationContext - No municipalities in context, trying fallback');
+        municipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(userId);
+      }
       
       // Get stakeholder roles that creator can assign (authority-based)
       const creatableRoles = await jurisdictionService.getCreatableRolesForStakeholders(userId);
 
       // Determine permissions based on data availability
-      const canChooseMunicipality = isSystemAdmin || municipalities.length > 0;
+      // System admin can always choose, coordinators can choose if they have multiple options
+      const canChooseMunicipality = isSystemAdmin || municipalities.length > 1;
       const canChooseOrganization = isSystemAdmin || organizations.length > 1;
+      
+      console.log('[DIAG] getCreationContext - Final data:', {
+        userId: userId.toString(),
+        isSystemAdmin,
+        organizationsCount: organizations.length,
+        municipalitiesCount: municipalities.length,
+        canChooseMunicipality,
+        canChooseOrganization,
+        creatableRolesCount: creatableRoles.length
+      });
 
       return res.status(200).json({
         success: true,

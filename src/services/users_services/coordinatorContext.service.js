@@ -1,4 +1,4 @@
-const { User, UserRole, UserOrganization, UserCoverageAssignment, CoverageArea, Location } = require('../../models/index');
+const { User, UserRole, UserOrganization, UserCoverageAssignment, CoverageArea, Location, Organization } = require('../../models/index');
 const authorityService = require('./authority.service');
 const permissionService = require('./permission.service');
 const userCoverageAssignmentService = require('./userCoverageAssignment.service');
@@ -141,14 +141,45 @@ class CoordinatorContextService {
   async _resolveOrganizations(userId) {
     const user = await User.findById(userId) || await User.findByLegacyId(userId);
     if (!user || !user.organizations || user.organizations.length === 0) {
+      console.log('[CTX] _resolveOrganizations - No user or organizations found:', {
+        userId: userId?.toString(),
+        hasUser: !!user,
+        organizationsCount: user?.organizations?.length || 0
+      });
       return [];
     }
     
-    const organizationIds = user.organizations.map(o => o.organizationId);
-    return await Organization.find({ 
+    // Handle both ObjectId and string formats
+    const mongoose = require('mongoose');
+    const organizationIds = user.organizations
+      .map(o => {
+        const orgId = o.organizationId;
+        if (typeof orgId === 'string' && mongoose.Types.ObjectId.isValid(orgId)) {
+          return new mongoose.Types.ObjectId(orgId);
+        }
+        return orgId;
+      })
+      .filter(Boolean);
+    
+    console.log('[CTX] _resolveOrganizations - Extracted organization IDs:', {
+      userId: userId?.toString(),
+      organizationsCount: user.organizations.length,
+      organizationIdsCount: organizationIds.length,
+      organizationIds: organizationIds.map(id => id.toString())
+    });
+    
+    const organizations = await Organization.find({ 
       _id: { $in: organizationIds },
       isActive: true 
+    }).sort({ name: 1 });
+    
+    console.log('[CTX] _resolveOrganizations - Found organizations:', {
+      requested: organizationIds.length,
+      found: organizations.length,
+      organizationNames: organizations.map(o => o.name)
     });
+    
+    return organizations;
   }
   
   /**
@@ -163,19 +194,43 @@ class CoordinatorContextService {
   async _resolveMunicipalities(userId, coverageAreas) {
     const user = await User.findById(userId) || await User.findByLegacyId(userId);
     if (!user || !user.coverageAreas || user.coverageAreas.length === 0) {
+      console.log('[CTX] _resolveMunicipalities - No user or coverage areas found:', {
+        userId: userId?.toString(),
+        hasUser: !!user,
+        coverageAreasCount: user?.coverageAreas?.length || 0
+      });
       return [];
     }
     
     // Get municipalityIds from embedded coverage areas
+    // Handle both ObjectId and string formats
     const municipalityIds = user.coverageAreas
-      .flatMap(ca => ca.municipalityIds || [])
+      .flatMap(ca => {
+        const ids = ca.municipalityIds || [];
+        // Convert to ObjectIds if they're strings
+        return ids.map(id => {
+          if (typeof id === 'string') {
+            const mongoose = require('mongoose');
+            return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null;
+          }
+          return id;
+        }).filter(Boolean);
+      })
       .filter(Boolean);
     
+    console.log('[CTX] _resolveMunicipalities - Extracted municipality IDs:', {
+      userId: userId?.toString(),
+      coverageAreasCount: user.coverageAreas.length,
+      municipalityIdsCount: municipalityIds.length,
+      municipalityIds: municipalityIds.map(id => id.toString())
+    });
+    
     if (municipalityIds.length === 0) {
+      console.log('[CTX] _resolveMunicipalities - No municipality IDs found in coverage areas');
       return [];
     }
     
-    return await Location.find({
+    const municipalities = await Location.find({
       _id: { $in: municipalityIds },
       type: 'municipality',
       isActive: true
@@ -183,6 +238,14 @@ class CoordinatorContextService {
       .populate('parent')
       .populate('province')
       .sort({ name: 1 });
+    
+    console.log('[CTX] _resolveMunicipalities - Found municipalities:', {
+      requested: municipalityIds.length,
+      found: municipalities.length,
+      municipalityNames: municipalities.map(m => m.name)
+    });
+    
+    return municipalities;
   }
   
   /**

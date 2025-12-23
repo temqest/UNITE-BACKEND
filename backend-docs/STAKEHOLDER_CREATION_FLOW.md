@@ -2,9 +2,9 @@
 
 ## Overview
 
-This document describes how stakeholders are created in the UNITE system, including the authority-based permission checks, organization/location assignment rules, and role filtering logic.
+This document describes how stakeholders are created and viewed in the UNITE system, including the authority-based permission checks, organization/location assignment rules, role filtering logic, and viewing restrictions.
 
-**Last Updated:** December 23, 2025 (Fixed undefined variable bug)
+**Last Updated:** January 2025 (Updated for new user model with dynamic roles, organizations, and coverage areas)
 
 ---
 
@@ -17,7 +17,92 @@ This document describes how stakeholders are created in the UNITE system, includ
 | **Coordinator** | 60-79 | All stakeholder roles | Limited to assigned organizations and district municipalities |
 | **Stakeholder** | <60 | Cannot create users | End users who cannot create staff |
 
+### Role Authority Mapping
+
+The system uses explicit authority values stored in the `Role` model. The authority field is the source of truth for user authority levels.
+
+| Role Code | Role Name | Authority Value |
+|-----------|-----------|----------------|
+| `system-admin` | System Administrator | 100 |
+| `coordinator` | Coordinator | 60 |
+| `stakeholder` | Stakeholder | 30 |
+
+**Important Notes:**
+- Role authority is set during role seeding and should not be changed manually
+- User authority is calculated from the maximum authority of their assigned roles
+- If role authorities are incorrect in the database, run the migration script (see below)
+
+### Fixing Incorrect Role Authorities
+
+If roles have incorrect authority values (e.g., all roles showing authority 20), run the migration script:
+
+```bash
+# Dry run first to see what will be changed
+node src/utils/migrations/fixRoleAuthorities.js --dry-run
+
+# Apply the changes
+node src/utils/migrations/fixRoleAuthorities.js
+```
+
+This script will:
+1. Update role authorities to correct values based on role code
+2. Recalculate and update user authorities based on their assigned roles
+
+**Reseeding Roles:**
+To update role authorities during seeding (for new installations or updates):
+
+```bash
+# Dry run first
+node src/utils/seedRoles.js --dry-run
+
+# Apply changes
+node src/utils/seedRoles.js
+```
+
+The seed script will automatically update existing roles' authority if it doesn't match the expected value.
+
 ---
+
+## Stakeholder Viewing Rules
+
+### Viewing Stakeholders
+
+**System Admin / Authority ≥ 80:**
+- Can view all stakeholders across all coverage areas and organizations
+- No jurisdiction restrictions
+
+**Coordinator / Authority = 60:**
+- Can only view stakeholders:
+  - Under the same organization(s) the coordinator belongs to
+  - Within the coordinator's assigned coverage area (district → municipalities → optional barangays)
+- Backend enforces this via `filterUsersByJurisdiction()` method
+
+**Stakeholders:**
+- Cannot view other stakeholders or coordinators
+- Page access is restricted via `/api/pages/check/stakeholder-management` endpoint
+
+**Implementation:**
+```javascript
+// Backend filtering in listUsersByCapability
+// 1. Authority filtering: Only users with authority < viewer's authority
+filteredUserIds = await authorityService.filterUsersByAuthority(
+  requesterId,
+  filteredUserIds,
+  context,
+  false // Don't allow equal authority for stakeholder viewing
+);
+
+// 2. Jurisdiction filtering: Only users within creator's jurisdiction
+filteredUserIds = await jurisdictionService.filterUsersByJurisdiction(
+  requesterId,
+  filteredUserIds
+);
+
+// 3. Role type filtering: Only stakeholder roles (authority < 60)
+if (capabilities.includes('request.review')) {
+  // Filter to only stakeholder roles
+}
+```
 
 ## Stakeholder Creation Rules
 
@@ -27,6 +112,7 @@ This document describes how stakeholders are created in the UNITE system, includ
 - Only roles with `authority < creatorAuthority AND authority < 60 (COORDINATOR)` can be assigned
 - Coordinators cannot create coordinator-level or higher roles
 - System admins can create any stakeholder-level role
+- **No hard-coded roles**: All roles are dynamically loaded based on creator's authority
 
 **Implementation:**
 ```javascript
@@ -37,14 +123,18 @@ async getCreatableRolesForStakeholders(creatorId) {
   const roles = await Role.find({
     isActive: true,
     authority: { 
-      $lt: creatorAuthority, 
-      $lt: AUTHORITY_TIERS.COORDINATOR // Must be below coordinator level
+      $lt: Math.min(creatorAuthority, AUTHORITY_TIERS.COORDINATOR) // Must be below both
     }
   }).sort({ authority: -1, name: 1 });
   
   return roles;
 }
 ```
+
+**Frontend:**
+- Role selection dropdown shows all available roles (if multiple)
+- Auto-selects first role if only one option available
+- Sends role ID (not hard-coded string) to backend
 
 ### 2. Organization Assignment
 
@@ -97,27 +187,41 @@ async getAllowedOrganizationsForStakeholderCreation(creatorId) {
 }
 ```
 
-### 3. Location Assignment
+### 3. Coverage Area Assignment (Location)
 
 **Location Hierarchy:**
 ```
 Province
   └── District
-       └── Municipality
-            └── Barangay (optional)
+       └── Municipality (Required for stakeholders)
+            └── Barangay (Optional for stakeholders)
 ```
 
 **Stakeholder Location Rules:**
-- **Required:** Municipality
-- **Optional:** Barangay
-- **Inherited from Coordinator:** Province and District
+- **Required:** Municipality (must be within creator's coverage areas)
+- **Optional:** Barangay (must belong to selected municipality)
+- **Tree Structure Display:** "Municipality Name → Barangay Name" (or just "Municipality Name" if no barangay)
 
 **System Admin:**
-- Can select any municipality
+- Can select any municipality and barangay
 
 **Coordinator:**
-- Can select municipalities only from their assigned districts
-- Districts come from `UserLocation` assignments
+- Can select municipalities only from their assigned coverage areas
+- Coverage areas come from `User.coverageAreas[]` embedded array
+- Municipalities are derived from coverage areas and stored in `User.coverageAreas[].municipalityIds[]`
+
+**Data Structure:**
+```javascript
+// Stakeholder location (embedded in User document)
+User {
+  locations: {
+    municipalityId: ObjectId,      // Required
+    municipalityName: String,        // Denormalized
+    barangayId: ObjectId,            // Optional
+    barangayName: String             // Denormalized, optional
+  }
+}
+```
 
 **Implementation:**
 ```javascript
@@ -290,7 +394,7 @@ const data = {
   email,
   phoneNumber,
   password,
-  roles: ['stakeholder'],         // Always stakeholder
+  roles: [selectedRole],         // Dynamic role ID (not hard-coded)
   municipalityId: selectedMunicipality,  // Required
   barangayId: selectedBarangay,   // Optional
   organizationId: selectedOrganization,  // Required
@@ -299,6 +403,12 @@ const data = {
 
 await createStakeholder(data);
 ```
+
+**Role Selection:**
+- If multiple role options available, user selects from dropdown
+- If only one role option, it's auto-selected (hidden field)
+- Role ID is sent to backend (not role code string)
+- Backend validates role authority < creator's authority
 
 ---
 
@@ -408,34 +518,115 @@ const isSystemAdmin = user.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS
 
 **Controller:** `users_controller/user.controller.js → createUser()`
 
-1. **Authority Check:**
+1. **Role Validation:**
    ```javascript
-   const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
-   const targetAuthority = await authorityService.calculateRoleAuthority(roles);
+   // Validate that roles are provided (for stakeholder-management page)
+   if (pageContext === 'stakeholder-management' && (!roles || roles.length === 0)) {
+     return res.status(400).json({
+       success: false,
+       message: 'At least one role is required for stakeholder creation',
+       code: 'MISSING_ROLE'
+     });
+   }
    
-   if (targetAuthority >= requesterAuthority) {
-     throw new Error('Cannot create users with equal or higher authority');
+   // Validate each role (supports both role IDs and role codes)
+   for (const roleIdentifier of roles) {
+     let role;
+     if (mongoose.Types.ObjectId.isValid(roleIdentifier)) {
+       role = await Role.findById(roleIdentifier);
+     } else {
+       role = await Role.findOne({ code: roleIdentifier });
+     }
+     
+     if (!role) {
+       return res.status(400).json({
+         success: false,
+         message: `Invalid role: ${roleIdentifier}`,
+         code: 'INVALID_ROLE'
+       });
+     }
+     
+     const roleAuthority = role.authority || await authorityService.calculateRoleAuthority(role._id);
+     
+     // Ensure role is stakeholder-level (authority < 60)
+     if (roleAuthority >= AUTHORITY_TIERS.COORDINATOR) {
+       return res.status(403).json({
+         success: false,
+         message: `Cannot assign coordinator-level or higher role to stakeholder`,
+         code: 'INVALID_ROLE_AUTHORITY'
+       });
+     }
+     
+     // Ensure creator has higher authority than role
+     if (requesterAuthority <= roleAuthority) {
+       return res.status(403).json({
+         success: false,
+         message: `Cannot create staff with role '${role.code}': Your authority level is insufficient`,
+         code: 'INSUFFICIENT_AUTHORITY'
+       });
+     }
    }
    ```
 
 2. **Organization Check:**
    ```javascript
    if (organizationId) {
-     const canAssignOrg = await jurisdictionService.canAssignOrganization(requesterId, organizationId);
-     if (!canAssignOrg) {
-       throw new Error('Organization is outside your jurisdiction');
+     const allowedOrganizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(requesterId);
+     const allowedOrgIds = allowedOrganizations.map(o => o._id.toString());
+     
+     if (!allowedOrgIds.includes(organizationId.toString())) {
+       return res.status(403).json({
+         success: false,
+         message: 'Cannot assign organization outside your jurisdiction',
+         code: 'ORGANIZATION_OUTSIDE_JURISDICTION'
+       });
      }
    }
    ```
 
-3. **Location Check:**
+3. **Municipality Check:**
    ```javascript
-   if (municipalityId) {
-     const allowedMunicipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(requesterId);
-     const municipalityIds = allowedMunicipalities.map(m => m._id.toString());
+   if (!municipalityId) {
+     return res.status(400).json({
+       success: false,
+       message: 'Municipality is required for stakeholder creation',
+       code: 'MUNICIPALITY_REQUIRED'
+     });
+   }
+   
+   const allowedMunicipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(requesterId);
+   const allowedIds = allowedMunicipalities.map(m => m._id.toString());
+   
+   if (!allowedIds.includes(municipalityId.toString())) {
+     return res.status(403).json({
+       success: false,
+       message: 'Cannot create stakeholder in municipality outside your jurisdiction',
+       code: 'MUNICIPALITY_OUTSIDE_JURISDICTION'
+     });
+   }
+   ```
+
+4. **Barangay Check (if provided):**
+   ```javascript
+   if (barangayId) {
+     const { Location } = require('../../models');
+     const barangay = await Location.findById(barangayId);
      
-     if (!municipalityIds.includes(municipalityId)) {
-       throw new Error('Municipality is outside your jurisdiction');
+     if (!barangay || barangay.type !== 'barangay') {
+       return res.status(400).json({
+         success: false,
+         message: 'Invalid barangay specified',
+         code: 'INVALID_BARANGAY'
+       });
+     }
+     
+     // Ensure barangay belongs to selected municipality
+     if (barangay.parent?.toString() !== municipalityId.toString()) {
+       return res.status(400).json({
+         success: false,
+         message: 'Barangay does not belong to the selected municipality',
+         code: 'BARANGAY_MISMATCH'
+       });
      }
    }
    ```
@@ -444,7 +635,15 @@ const isSystemAdmin = user.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS
 
 **Modal:** `add-stakeholder-modal.tsx`
 
-1. **Password Match:**
+1. **Role Required:**
+   ```typescript
+   if (!selectedRole) {
+     alert('Please select a role.');
+     return;
+   }
+   ```
+
+2. **Password Match:**
    ```typescript
    if (password !== retypePassword) {
      alert('Passwords do not match!');
@@ -452,7 +651,7 @@ const isSystemAdmin = user.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS
    }
    ```
 
-2. **Municipality Required:**
+3. **Municipality Required:**
    ```typescript
    if (!selectedMunicipality) {
      alert('Please select a municipality.');
@@ -460,7 +659,7 @@ const isSystemAdmin = user.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS
    }
    ```
 
-3. **Organization Jurisdiction:**
+4. **Organization Jurisdiction:**
    ```typescript
    if (selectedOrganization && !canSelectOrganization(selectedOrganization)) {
      alert('Selected organization is outside your jurisdiction.');
@@ -555,21 +754,91 @@ const isSystemAdmin = user.isSystemAdmin || creatorAuthority === AUTHORITY_TIERS
 
 ---
 
-## Files Modified (Dec 23, 2025)
+## Coverage Area Tree Structure
+
+### Display Format
+
+**In Table:**
+- Format: `"Municipality Name → Barangay Name"` (if barangay exists)
+- Format: `"Municipality Name"` (if no barangay)
+
+**Example:**
+- `"Naga City → Barangay 1"`
+- `"Naga City"` (no barangay)
+
+### Data Structure
+
+**User Model (Embedded):**
+```javascript
+User {
+  locations: {
+    municipalityId: ObjectId,      // Required
+    municipalityName: String,        // Denormalized
+    barangayId: ObjectId,            // Optional
+    barangayName: String             // Denormalized, optional
+  }
+}
+```
+
+**Location Model (Hierarchical):**
+```javascript
+Location {
+  _id: ObjectId,
+  name: String,
+  type: 'municipality' | 'barangay',
+  parent: ObjectId,  // For barangay, parent is municipality
+  level: Number
+}
+```
+
+## Files Modified (January 2025)
 
 1. **Backend Controller:**
+   - `src/controller/users_controller/user.controller.js`
+   - Removed hard-coded role assignment for stakeholders
+   - Added dynamic role validation (supports both role IDs and codes)
+   - Enhanced stakeholder listing to include coverage area and organization data
+   - Updated `listUsersByCapability` to properly filter by authority and jurisdiction
+
+2. **Backend Controller:**
    - `src/controller/stakeholder_controller/stakeholder.controller.js`
-   - Fixed undefined `creatorAuthority` and `isSystemAdmin` variables
-   - Added `roleOptions` to API response
+   - Already returns dynamic `roleOptions` from `getCreatableRolesForStakeholders()`
+   - Returns municipalities from creator's coverage areas
 
-2. **Backend Service:**
-   - `src/services/users_services/jurisdiction.service.js`
-   - Added `getCreatableRolesForStakeholders()` method
+3. **Frontend Components:**
+   - `UNITE/components/stakeholder-management/add-stakeholder-modal.tsx`
+   - Added dynamic role selection dropdown
+   - Removed hard-coded `roles: ['stakeholder']`
+   - Uses `roleOptions` from `useStakeholderManagement` hook
+   - Municipality/Barangay tree structure selection
 
-3. **Frontend Hook:**
+4. **Frontend Components:**
+   - `UNITE/components/stakeholder-management/stakeholder-edit-modal.tsx`
+   - Added dynamic role selection (if multiple options)
+   - Added municipality/barangay selection (if user has permission)
+   - Removed hard-coded role display
+
+5. **Frontend Components:**
+   - `UNITE/components/stakeholder-management/stakeholder-management-table.tsx`
+   - Updated to display coverage area in "Municipality → Barangay" format
+   - Removed hard-coded role-based filtering (backend handles this)
+   - Updated organization display to use embedded data
+
+6. **Frontend Page:**
+   - `UNITE/app/dashboard/stakeholder-management/page.tsx`
+   - Updated `fetchStakeholders` to format coverage area properly
+   - Updated organization display to use embedded `User.organizations[]` array
+   - Removed client-side hard-coded filtering
+
+7. **Frontend Service:**
+   - `UNITE/services/stakeholderService.ts`
+   - Updated `createStakeholder` to accept role IDs (not hard-coded strings)
+   - Added support for `municipalityId` and `barangayId` parameters
+
+8. **Frontend Hook:**
    - `UNITE/hooks/useStakeholderManagement.ts`
-   - Added `roleOptions` state and Role interface
-   - Updated `canAssignRole()` logic
+   - Already exposes `roleOptions` from backend
+   - Provides `fetchBarangays` for dynamic barangay loading
 
 ---
 
