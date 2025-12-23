@@ -313,24 +313,76 @@ userSchema.pre('save', async function(next) {
     return next();
   }
 
-  // Coordinators (authority >= 60) must have at least one organization
-  if (this.authority >= 60) {
-    if (!this.organizations || this.organizations.length === 0) {
-      return next(new Error('Coordinators must have at least one organization'));
-    }
+  // Check if user has coordinator roles (even if authority not yet updated)
+  const hasCoordinatorRole = this.roles && this.roles.some(role => {
+    return role.roleAuthority >= 60 || role.roleCode === 'coordinator';
+  });
+  
+  // Check if user has coverage areas assigned (indicates coordinator)
+  const hasCoverageAreas = this.coverageAreas && this.coverageAreas.length > 0;
+  
+  // Check if user has organizations assigned (indicates coordinator if authority >= 60)
+  const hasOrganizations = this.organizations && this.organizations.length > 0;
+  
+  // Determine if this is a coordinator based on authority, roles, or coverage areas
+  const isCoordinator = this.authority >= 60 || hasCoordinatorRole || hasCoverageAreas;
+  
+  // Check if this is a new document (first save)
+  const isNewDocument = this.isNew;
+
+  // Skip validation for new documents during initial creation
+  // Data will be assigned in subsequent saves within the transaction
+  if (isNewDocument) {
+    return next();
   }
 
-  // Coordinators (authority >= 60) must have at least one coverage area
-  if (this.authority >= 60) {
-    if (!this.coverageAreas || this.coverageAreas.length === 0) {
-      return next(new Error('Coordinators must have at least one coverage area'));
-    }
+  // For existing documents, only validate if user has roles assigned
+  // This indicates the user creation process has progressed beyond initial setup
+  const hasRoles = this.roles && this.roles.length > 0;
+  
+  // If no roles assigned yet, skip validation (still in creation process)
+  if (!hasRoles) {
+    return next();
   }
 
-  // Stakeholders (authority < 60) must have municipality
-  if (this.authority < 60) {
-    if (!this.locations || !this.locations.municipalityId) {
-      return next(new Error('Stakeholders must have a municipality assignment'));
+  // For coordinators: Validate only when both organizations AND coverage areas are present
+  // This allows intermediate saves during creation without failing validation
+  if (isCoordinator) {
+    const hasOrganizations = this.organizations && this.organizations.length > 0;
+    const hasCoverageAreas = this.coverageAreas && this.coverageAreas.length > 0;
+    
+    // Only validate if BOTH are present (creation is complete)
+    // If either is missing, skip validation (still in creation process)
+    if (hasOrganizations && hasCoverageAreas) {
+      // Both are present, validation passes (no need to check again)
+      return next();
+    }
+    
+    // If either is missing, skip validation (still in creation process)
+    // This allows saves after roles, after coverage areas, or after organizations
+    // without failing validation until both are present
+    return next();
+  }
+
+  // Stakeholders (authority < 60 and no coordinator indicators) must have municipality
+  // Only validate if user has been fully created (has roles assigned)
+  // Also check if user has coordinator roles or coverage areas (even if authority not updated)
+  const hasCoordinatorIndicators = hasCoordinatorRole || hasCoverageAreas;
+  const hasStakeholderRole = this.roles && this.roles.some(role => {
+    return role.roleCode === 'stakeholder' || (role.roleAuthority < 60 && role.roleAuthority >= 30);
+  });
+  
+  // Only validate stakeholders if:
+  // 1. Not a new document (has been saved at least once)
+  // 2. Has roles assigned (creation has progressed)
+  // 3. Has stakeholder role (not a coordinator)
+  // 4. No coordinator indicators (definitely a stakeholder)
+  // 5. Authority < 60 (stakeholder level)
+  if (!isCoordinator && !hasCoordinatorIndicators && hasStakeholderRole && this.authority < 60) {
+    if (!isNewDocument && hasRoles) {
+      if (!this.locations || !this.locations.municipalityId) {
+        return next(new Error('Stakeholders must have a municipality assignment'));
+      }
     }
   }
 

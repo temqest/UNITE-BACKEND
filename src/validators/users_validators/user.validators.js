@@ -156,12 +156,26 @@ const createUserSchema = Joi.object({
       'string.empty': 'Organization ID cannot be empty'
     }),
 
+  organizationIds: Joi.array()
+    .items(Joi.string().trim())
+    .default([])
+    .messages({
+      'array.base': 'Organization IDs must be an array'
+    }),
+
   // Location assignments (for stakeholders)
   municipalityId: Joi.string()
     .trim()
     .allow(null, '')
     .messages({
       'string.empty': 'Municipality ID cannot be empty'
+    }),
+
+  municipalityIds: Joi.array()
+    .items(Joi.string().trim())
+    .default([])
+    .messages({
+      'array.base': 'Municipality IDs must be an array'
     }),
 
   barangayId: Joi.string()
