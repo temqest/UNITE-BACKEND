@@ -132,6 +132,41 @@ class UserController {
           roleAuthorityChecks,
           result: 'PASSED'
         });
+        // Fail loudly if requesterAuthority is missing or cannot be determined
+        if (requesterAuthority === null || requesterAuthority === undefined) {
+          console.error('[DIAG] createUser - ERROR: requesterAuthority undefined for requester:', requesterId);
+          return res.status(500).json({ success: false, message: 'Unable to determine creator authority' });
+        }
+
+        // Server-side jurisdiction enforcement (do not rely solely on middleware)
+        const jurisdictionService = require('../../services/users_services/jurisdiction.service');
+
+        if (pageContext === 'stakeholder-management') {
+          // Municipality is required for stakeholder creation (defensive check)
+          if (!municipalityId) {
+            console.log('[DIAG] createUser - REJECTED: municipality required for stakeholder creation');
+            return res.status(400).json({ success: false, message: 'Municipality is required for stakeholder creation', code: 'MUNICIPALITY_REQUIRED' });
+          }
+
+          // Ensure municipality is within creator's jurisdiction
+          const allowedMunicipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(requesterId);
+          const allowedIds = allowedMunicipalities.map(m => m._id.toString());
+          if (!allowedIds.includes(municipalityId.toString())) {
+            console.log('[DIAG] createUser - REJECTED: municipality outside jurisdiction', { requesterId: requesterId.toString(), municipalityId });
+            return res.status(403).json({ success: false, message: 'Cannot create stakeholder in municipality outside your jurisdiction', code: 'MUNICIPALITY_OUTSIDE_JURISDICTION' });
+          }
+        } else {
+          // For staff/coordinator creation: validate coverage areas
+          if (coverageAreaIds && coverageAreaIds.length > 0) {
+            for (const caId of coverageAreaIds) {
+              const ok = await jurisdictionService.canCreateUserInCoverageArea(requesterId, caId);
+              if (!ok) {
+                console.log('[DIAG] createUser - REJECTED: coverage area outside jurisdiction', { requesterId: requesterId.toString(), coverageAreaId: caId });
+                return res.status(403).json({ success: false, message: 'Cannot create user in coverage area outside your jurisdiction', code: 'COVERAGE_AREA_OUTSIDE_JURISDICTION' });
+              }
+            }
+          }
+        }
       }
 
       // Hash password
@@ -1049,19 +1084,15 @@ class UserController {
       if (requesterId && filteredUserIds.length > 0) {
         const authorityService = require('../../services/users_services/authority.service');
         
-        // Allow equal authority for staff management (operational capabilities indicate staff listing)
-        // This allows coordinators to see other coordinators in the Coordinator Management page
-        const isStaffManagementContext = capabilities.some(cap => 
-          cap.startsWith('staff.') || 
-          cap.startsWith('request.') || 
-          cap.startsWith('event.')
-        );
-        
+        // Allow equal authority ONLY for explicit staff management context (staff.*)
+        // Do NOT allow equal authority for request/event review contexts — coordinators must not see other coordinators there
+        const isStaffManagementContext = capabilities.some(cap => cap.startsWith('staff.'));
+
         filteredUserIds = await authorityService.filterUsersByAuthority(
           requesterId,
           filteredUserIds,
           context,
-          isStaffManagementContext // Allow coordinators to see other coordinators
+          isStaffManagementContext // Allow equal authority only for staff management
         );
         
         console.log('[listUsersByCapability] Authority filtering:', {
@@ -1073,6 +1104,23 @@ class UserController {
 
       // Build query
       const query = {};
+
+      // Server-side jurisdiction filtering: ensure users are within requester's jurisdiction
+      if (requesterId && filteredUserIds.length > 0) {
+        try {
+          const jurisdictionService = require('../../services/users_services/jurisdiction.service');
+          const jurisdictionFiltered = await jurisdictionService.filterUsersByJurisdiction(requesterId, filteredUserIds);
+          console.log('[listUsersByCapability] Jurisdiction filtering:', {
+            before: filteredUserIds.length,
+            after: jurisdictionFiltered.length
+          });
+          filteredUserIds = jurisdictionFiltered;
+        } catch (err) {
+          console.error('[listUsersByCapability] Jurisdiction filtering error:', err);
+          // On error, fail safe: return empty list
+          filteredUserIds = [];
+        }
+      }
       
       if (filteredUserIds.length > 0) {
         query._id = { $in: filteredUserIds };

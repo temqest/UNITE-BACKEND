@@ -522,3 +522,14 @@ module.exports = authorityServiceInstance;
 module.exports.AuthorityService = AuthorityService;
 module.exports.AUTHORITY_TIERS = AuthorityService.AUTHORITY_TIERS;
 
+// Convenience wrappers (backwards-friendly)
+// `getAuthority` returns numeric authority for a user
+authorityServiceInstance.getAuthority = async function(userId, context = {}) {
+  return await authorityServiceInstance.calculateUserAuthority(userId, context);
+};
+
+// `filterByLowerAuthority` filters an array of userIds to those strictly lower than viewer
+authorityServiceInstance.filterByLowerAuthority = async function(viewerId, userIds, context = {}) {
+  return await authorityServiceInstance.filterUsersByAuthority(viewerId, userIds, context, false);
+};
+

@@ -546,6 +546,105 @@ class JurisdictionService {
       return [];
     }
   }
+
+  /**
+   * Check if a target user is within the creator's jurisdiction
+   * @param {string|ObjectId} creatorId
+   * @param {string|ObjectId} targetUserId
+   * @returns {Promise<boolean>} True if target user is within creator's jurisdiction
+   */
+  async isUserInCreatorJurisdiction(creatorId, targetUserId) {
+    try {
+      if (!creatorId || !targetUserId) return false;
+
+      const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = await require('./authority.service').calculateUserAuthority(creatorId);
+      // System admins bypass jurisdiction checks
+      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) return true;
+
+      // Get creator effective coverage (locations)
+      const creatorLocations = await userCoverageAssignmentService.getUserCoverageAreas(creatorId, { includeInactive: false });
+      // Transform to set of location ids (geographicUnits)
+      const creatorLocationIds = new Set();
+      for (const a of creatorLocations) {
+        const ca = a.coverageAreaId;
+        if (!ca) continue;
+        const units = Array.isArray(ca.geographicUnits) ? ca.geographicUnits : (ca.geographicUnits ? [ca.geographicUnits] : []);
+        for (const u of units) creatorLocationIds.add(u.toString());
+      }
+
+      // If creator has no explicit coverage areas, fall back to user locations
+      if (creatorLocationIds.size === 0) {
+        const locationService = require('../utility_services/location.service');
+        const locs = await locationService.getUserLocations(creatorId);
+        locs.forEach(l => creatorLocationIds.add(l._id.toString()));
+      }
+
+      if (creatorLocationIds.size === 0) {
+        // No jurisdiction defined - deny by default
+        console.log('[DIAG] isUserInCreatorJurisdiction - Creator has no jurisdiction:', { creatorId: creatorId.toString() });
+        return false;
+      }
+
+      // Collect target user's location ids (from UserLocation assignments)
+      const locationService = require('../utility_services/location.service');
+      const targetLocs = await locationService.getUserLocations(targetUserId);
+      const targetLocationIds = new Set(targetLocs.map(l => l._id.toString()));
+
+      // Also consider target's coverage areas (for non-stakeholders)
+      const targetCoverageAssignments = await userCoverageAssignmentService.getUserCoverageAreas(targetUserId, { includeInactive: false });
+      for (const ta of targetCoverageAssignments) {
+        const ca = ta.coverageAreaId;
+        if (!ca) continue;
+        const units = Array.isArray(ca.geographicUnits) ? ca.geographicUnits : (ca.geographicUnits ? [ca.geographicUnits] : []);
+        for (const u of units) targetLocationIds.add(u.toString());
+      }
+
+      // Check intersection between creatorLocationIds and targetLocationIds
+      for (const id of targetLocationIds) {
+        if (creatorLocationIds.has(id)) return true;
+      }
+
+      // No intersection found
+      return false;
+    } catch (error) {
+      console.error('[DIAG] isUserInCreatorJurisdiction - ERROR:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Filter an array of userIds to only those within creator's jurisdiction
+   * @param {string|ObjectId} creatorId
+   * @param {Array<string|ObjectId>} userIds
+   * @returns {Promise<Array<string|ObjectId>>} Filtered array
+   */
+  async filterUsersByJurisdiction(creatorId, userIds) {
+    try {
+      if (!creatorId || !userIds || userIds.length === 0) return [];
+
+      const { AUTHORITY_TIERS } = require('./authority.service');
+      const creatorAuthority = await require('./authority.service').calculateUserAuthority(creatorId);
+      if (creatorAuthority === AUTHORITY_TIERS.SYSTEM_ADMIN) return userIds;
+
+      const results = [];
+      for (const uid of userIds) {
+        const ok = await this.isUserInCreatorJurisdiction(creatorId, uid);
+        if (ok) results.push(uid);
+      }
+
+      console.log('[DIAG] filterUsersByJurisdiction:', {
+        creatorId: creatorId.toString(),
+        requested: userIds.length,
+        returned: results.length
+      });
+
+      return results;
+    } catch (error) {
+      console.error('[DIAG] filterUsersByJurisdiction - ERROR:', error);
+      return [];
+    }
+  }
 }
 
 module.exports = new JurisdictionService();
