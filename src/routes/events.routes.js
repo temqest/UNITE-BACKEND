@@ -338,5 +338,42 @@ router.get('/events/statistics/dashboard', async (req, res, next) => {
   }
 });
 
+// ==================== PHASE 2: UNIFIED EVENT ENDPOINTS ====================
+
+/**
+ * @route   POST /api/events
+ * @desc    UNIFIED event creation endpoint (decoupled from request workflow)
+ * @desc    Direct event creation for admin/coordinator; authority-based field locking
+ * @access  Private (requires event.create permission)
+ * @body    { title, location, startDate, endDate?, category, coordinatorId?, stakeholderId? }
+ * @note    Non-admins: coordinatorId forced to req.user.id, stakeholder scoped to jurisdiction
+ */
+router.post('/events', authenticate, requirePermission('event', 'create'), async (req, res, next) => {
+  try {
+    // Import controller here to avoid circular dependency
+    const { eventRequestController } = require('../controller/request_controller');
+    await eventRequestController.createEvent(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/events/:eventId/publish
+ * @desc    Publish/complete an event that has been approved
+ * @desc    Sets event Status to 'Completed' and linked request to 'APPROVED'
+ * @access  Private (requires event.publish OR request.approve permission)
+ * @body    {} (no body required)
+ */
+router.post('/events/:eventId/publish', authenticate, requirePermission('event', 'publish'), async (req, res, next) => {
+  try {
+    // Import controller here to avoid circular dependency
+    const { eventRequestController } = require('../controller/request_controller');
+    await eventRequestController.publishEvent(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
 

@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 const actorSchema = new mongoose.Schema({
   id: { type: String, trim: true },
   role: { type: String, trim: true },
-  name: { type: String, trim: true }
+  name: { type: String, trim: true },
+  authority: { type: Number, default: null } // NEW: Authority level for permission-based access control
 }, { _id: false });
 
 const eventRequestHistorySchema = new mongoose.Schema({
@@ -56,6 +57,23 @@ const eventRequestHistorySchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  // NEW: Permission-based audit trail fields
+  PermissionUsed: {
+    type: String,
+    trim: true,
+    default: null,
+    description: 'Permission code used for this action (e.g., request.review, request.approve, event.publish)'
+  },
+  ReviewerAuthority: {
+    type: Number,
+    default: null,
+    description: 'Authority level of the reviewer/actor performing the action'
+  },
+  RequesterAuthority: {
+    type: Number,
+    default: null,
+    description: 'Authority level of the request creator for authority hierarchy comparison'
+  },
   ActionDate: {
     type: Date,
     required: true,
@@ -76,7 +94,7 @@ eventRequestHistorySchema.statics._create = function(payload) {
   });
 };
 
-eventRequestHistorySchema.statics.logCreation = function({ requestId, eventId, actor, note }) {
+eventRequestHistorySchema.statics.logCreation = function({ requestId, eventId, actor, note, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -84,11 +102,14 @@ eventRequestHistorySchema.statics.logCreation = function({ requestId, eventId, a
     Actor: actor || null,
     Note: note || 'Event request created',
     PreviousStatus: null,
-    NewStatus: 'pending-review'
+    NewStatus: 'pending-review',
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 
-eventRequestHistorySchema.statics.logStatusChange = function({ requestId, eventId, previousStatus, newStatus, actor, note, metadata }) {
+eventRequestHistorySchema.statics.logStatusChange = function({ requestId, eventId, previousStatus, newStatus, actor, note, metadata, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -97,11 +118,14 @@ eventRequestHistorySchema.statics.logStatusChange = function({ requestId, eventI
     PreviousStatus: previousStatus || null,
     NewStatus: newStatus || null,
     Note: note || null,
-    Metadata: metadata || {}
+    Metadata: metadata || {},
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 
-eventRequestHistorySchema.statics.logReviewDecision = function({ requestId, eventId, decisionType, actor, notes, previousStatus, newStatus, metadata }) {
+eventRequestHistorySchema.statics.logReviewDecision = function({ requestId, eventId, decisionType, actor, notes, previousStatus, newStatus, metadata, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -110,11 +134,14 @@ eventRequestHistorySchema.statics.logReviewDecision = function({ requestId, even
     PreviousStatus: previousStatus || null,
     NewStatus: newStatus || null,
     Note: notes || null,
-    Metadata: Object.assign({ decisionType }, metadata)
+    Metadata: Object.assign({ decisionType }, metadata),
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 
-eventRequestHistorySchema.statics.logCreatorResponse = function({ requestId, eventId, actor, action, previousStatus, newStatus, notes }) {
+eventRequestHistorySchema.statics.logCreatorResponse = function({ requestId, eventId, actor, action, previousStatus, newStatus, notes, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -123,11 +150,14 @@ eventRequestHistorySchema.statics.logCreatorResponse = function({ requestId, eve
     PreviousStatus: previousStatus || null,
     NewStatus: newStatus || null,
     Note: notes || null,
-    Metadata: { action }
+    Metadata: { action },
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 
-eventRequestHistorySchema.statics.logFinalization = function({ requestId, eventId, actor, outcome, notes }) {
+eventRequestHistorySchema.statics.logFinalization = function({ requestId, eventId, actor, outcome, notes, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -136,11 +166,14 @@ eventRequestHistorySchema.statics.logFinalization = function({ requestId, eventI
     PreviousStatus: null,
     NewStatus: outcome || null,
     Note: notes || null,
-    Metadata: { outcome }
+    Metadata: { outcome },
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 
-eventRequestHistorySchema.statics.logRevision = function({ requestId, eventId, actor, revisionNumber, note }) {
+eventRequestHistorySchema.statics.logRevision = function({ requestId, eventId, actor, revisionNumber, note, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -149,11 +182,14 @@ eventRequestHistorySchema.statics.logRevision = function({ requestId, eventId, a
     PreviousStatus: null,
     NewStatus: null,
     Note: note || null,
-    Metadata: { revisionNumber }
+    Metadata: { revisionNumber },
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 
-eventRequestHistorySchema.statics.logExpiry = function({ requestId, eventId, previousStatus, note }) {
+eventRequestHistorySchema.statics.logExpiry = function({ requestId, eventId, previousStatus, note, permissionUsed, reviewerAuthority, requesterAuthority }) {
   return this._create({
     Request_ID: requestId,
     Event_ID: eventId,
@@ -162,7 +198,10 @@ eventRequestHistorySchema.statics.logExpiry = function({ requestId, eventId, pre
     PreviousStatus: previousStatus || null,
     NewStatus: 'expired-review',
     Note: note || 'Request expired',
-    Metadata: {}
+    Metadata: {},
+    PermissionUsed: permissionUsed || null,
+    ReviewerAuthority: reviewerAuthority !== undefined ? reviewerAuthority : null,
+    RequesterAuthority: requesterAuthority !== undefined ? requesterAuthority : null
   });
 };
 

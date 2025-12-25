@@ -22,6 +22,7 @@ const defaultPermissions = [
   { code: 'event.update', name: 'Update Event', resource: 'event', action: 'update', description: 'Update existing events' },
   { code: 'event.delete', name: 'Delete Event', resource: 'event', action: 'delete', description: 'Delete events' },
   { code: 'event.approve', name: 'Approve Event', resource: 'event', action: 'approve', description: 'Approve events' },
+  { code: 'event.publish', name: 'Publish Event', resource: 'event', action: 'publish', description: 'Publish and finalize events for public visibility' },
   
   // Request permissions
   { code: 'request.create', name: 'Create Request', resource: 'request', action: 'create', description: 'Create new requests' },
@@ -124,7 +125,7 @@ const defaultRoles = [
     isSystemRole: true,
     authority: 60,
     permissions: [
-      { resource: 'event', actions: ['create', 'read', 'update'] },
+      { resource: 'event', actions: ['create', 'read', 'update', 'approve', 'publish'] },
       { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule'] },
       { resource: 'user', actions: ['read'] },
       { resource: 'location', actions: ['read'] },

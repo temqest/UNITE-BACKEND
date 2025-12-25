@@ -369,8 +369,19 @@ class RequestStateMachine {
     return stateConfig.transitions[action] || null;
   }
 
+  /**
+   * Validate if a state transition is allowed
+   * Combines permission checking, authority validation, and state machine rules
+   * 
+   * @param {string} currentState - Current request state
+   * @param {string} action - Action to perform
+   * @param {string|null} userRole - User role (deprecated, kept for backward compatibility)
+   * @param {string|ObjectId} userId - User ID performing the action
+   * @param {Object} request - Request document
+   * @returns {Promise<boolean>} True if transition is valid, false otherwise
+   */
   async isValidTransition(currentState, action, userRole, userId, request = {}) {
-    // Use permission-based check
+    // Use permission-based check with authority validation
     if (userId) {
       const canPerform = await this.canPerformAction(currentState, userId, action, request);
       if (canPerform !== null) {
@@ -384,15 +395,141 @@ class RequestStateMachine {
   }
 
   /**
+   * Validate request creation - check REQUEST_CREATE permission
+   * Called before a new request is created to ensure user has capability
+   * 
+   * @param {string|ObjectId} userId - User creating the request
+   * @param {Object} context - Context { locationId, coordinatorId, stakeholderId, eventDetails, etc. }
+   * @returns {Promise<{allowed: boolean, reason?: string}>} Validation result with optional error reason
+   */
+  async validateRequestCreation(userId, context = {}) {
+    const permissionService = require('../users_services/permission.service');
+    const User = require('../../models/index').User;
+
+    try {
+      // Get location context
+      const locationId = context.locationId || context.district;
+
+      // ========== 1. CHECK REQUEST_CREATE PERMISSION ==========
+      const hasCreatePermission = await permissionService.checkPermission(
+        userId,
+        'request',
+        'create',
+        { locationId }
+      );
+
+      if (!hasCreatePermission) {
+        console.warn(`[REQUEST_CREATE DENIED] User ${userId} lacks request:create permission`);
+        return {
+          allowed: false,
+          reason: 'User does not have permission to create requests'
+        };
+      }
+
+      // ========== 2. AUTHORITY HIERARCHY CHECK (Optional) ==========
+      // If creating on behalf of someone else, requester authority should be >= the person they're creating for
+      // This prevents lower-authority users from creating requests for higher-authority users
+      
+      // For now, we allow any user with REQUEST_CREATE to create
+      // Future: add hierarchical checks for delegation scenarios
+
+      return {
+        allowed: true
+      };
+    } catch (error) {
+      console.error(`Error validating request creation: ${error.message}`);
+      return {
+        allowed: false,
+        reason: 'Error during permission validation'
+      };
+    }
+  }
+
+  /**
+   * Validate request approval - check REQUEST_APPROVE permission
+   * Called when approving/confirming a request to ensure user has capability
+   * Includes authority hierarchy validation
+   * 
+   * @param {string|ObjectId} userId - User approving the request
+   * @param {Object} request - Request document (with made_by_id, Status, etc.)
+   * @returns {Promise<{allowed: boolean, reason?: string}>} Validation result with optional error reason
+   */
+  async validateRequestApproval(userId, request = {}) {
+    const permissionService = require('../users_services/permission.service');
+    const User = require('../../models/index').User;
+
+    try {
+      // Get location context
+      const locationId = request.location?.district || request.district;
+
+      // ========== 1. CHECK REQUEST_APPROVE PERMISSION ==========
+      const hasApprovePermission = await permissionService.checkPermission(
+        userId,
+        'request',
+        'approve',
+        { locationId }
+      );
+
+      if (!hasApprovePermission) {
+        console.warn(`[REQUEST_APPROVE DENIED] User ${userId} lacks request:approve permission`);
+        return {
+          allowed: false,
+          reason: 'User does not have permission to approve requests'
+        };
+      }
+
+      // ========== 2. AUTHORITY HIERARCHY CHECK ==========
+      // Approver authority must be >= requester authority (unless system admin)
+      const actor = await User.findById(userId).populate('roles');
+      const requesterIdToCheck = request.made_by_id || request.requester?.id || request.requester?.userId;
+      const requester = requesterIdToCheck ? await User.findById(requesterIdToCheck).populate('roles') : null;
+
+      const actorAuthority = actor?.authority ?? 20;
+      const requesterAuthority = requester?.authority ?? 20;
+      const isSystemAdmin = actorAuthority >= 100;
+
+      if (!isSystemAdmin && requesterAuthority > actorAuthority) {
+        console.warn(`[AUTHORITY DENIED] User ${userId} (authority ${actorAuthority}) cannot approve request from user with authority ${requesterAuthority}`);
+        return {
+          allowed: false,
+          reason: `Your authority level (${actorAuthority}) is insufficient to approve requests from users with authority ${requesterAuthority}`
+        };
+      }
+
+      // Log if admin is overriding authority (audit trail)
+      if (isSystemAdmin && requesterAuthority > actorAuthority) {
+        console.log(`[ADMIN OVERRIDE] System admin ${userId} (authority ${actorAuthority}) approving request from user with authority ${requesterAuthority}`);
+      }
+
+      return {
+        allowed: true
+      };
+    } catch (error) {
+      console.error(`Error validating request approval: ${error.message}`);
+      return {
+        allowed: false,
+        reason: 'Error during permission validation'
+      };
+    }
+  }
+
+  /**
    * Check if user can perform action using RBAC permissions
+   * Now includes: Permission validation + Authority hierarchy validation
+   * 
+   * Permission checks ensure user has the capability (e.g., REQUEST_REVIEW)
+   * Authority checks ensure reviewer is not lower authority than requester (unless admin)
+   * System admin can override authority checks (logged for audit)
+   * 
    * @param {string} state - Current request state
    * @param {string|ObjectId} userId - User ID
    * @param {string} action - Action to check
-   * @param {Object} request - Request object
+   * @param {Object} request - Request object with requester/reviewer/made_by_id
    * @returns {Promise<boolean>} True if user can perform action, false otherwise
    */
   async canPerformAction(state, userId, action, request = {}) {
     const permissionService = require('../users_services/permission.service');
+    const User = require('../../models/index').User;
     
     const requiredPerm = ACTION_PERMISSIONS[action];
     if (!requiredPerm) {
@@ -402,7 +539,8 @@ class RequestStateMachine {
     // Get location context
     const locationId = request.location?.district || request.district || request.locationId;
 
-    // Check permission
+    // ========== 1. CHECK PERMISSION ==========
+    // User must have the required permission to perform the action
     const hasPermission = await permissionService.checkPermission(
       userId,
       requiredPerm.resource,
@@ -411,7 +549,36 @@ class RequestStateMachine {
     );
 
     if (!hasPermission) {
+      console.warn(`[PERMISSION DENIED] User ${userId} lacks ${requiredPerm.resource}:${requiredPerm.action} for action ${action}`);
       return false;
+    }
+
+    // ========== 2. CHECK AUTHORITY HIERARCHY ==========
+    // For review/approve actions: reviewer authority must be >= requester authority
+    // Exception: System admin (authority >= 100) can always act
+    const reviewActions = [ACTIONS.ACCEPT, ACTIONS.REJECT, ACTIONS.RESCHEDULE];
+    const approveActions = [ACTIONS.CONFIRM]; // Confirmation is approver action
+    
+    if (reviewActions.includes(action) || approveActions.includes(action)) {
+      // Get actor and requester user documents
+      const actor = await User.findById(userId).populate('roles');
+      const requesterIdToCheck = request.made_by_id || request.requester?.id || request.requester?.userId;
+      const requester = requesterIdToCheck ? await User.findById(requesterIdToCheck).populate('roles') : null;
+
+      const actorAuthority = actor?.authority ?? 20;
+      const requesterAuthority = requester?.authority ?? 20;
+      const isSystemAdmin = actorAuthority >= 100;
+
+      // Authority validation: reviewer must not be lower authority than requester
+      if (!isSystemAdmin && requesterAuthority > actorAuthority) {
+        console.warn(`[AUTHORITY DENIED] User ${userId} (authority ${actorAuthority}) cannot ${action} request from user with authority ${requesterAuthority}`);
+        return false;
+      }
+
+      // Log if admin is overriding authority (audit trail)
+      if (isSystemAdmin && requesterAuthority > actorAuthority) {
+        console.warn(`[ADMIN OVERRIDE] System admin ${userId} (authority ${actorAuthority}) overriding authority check on requester (authority ${requesterAuthority}) for action ${action}`);
+      }
     }
 
     // Additional checks: requester can always cancel/confirm/decline their own requests

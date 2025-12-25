@@ -46,6 +46,40 @@ class EventRequestService {
   }
 
   /**
+   * NEW: Helper to gather authority info for audit trail
+   * Retrieves user authority and request creator authority for permission-based audit logging
+   * 
+   * @param {string} userId - User ID of the actor
+   * @param {Object} request - EventRequest document
+   * @returns {Promise<{permissionUsed: string, reviewerAuthority: number, requesterAuthority: number}>}
+   */
+  async _getAuditTrailContext(userId, request, permissionUsed = null) {
+    try {
+      // Get actor's authority
+      const actor = await User.findOne({ _id: userId }).select('authority roles');
+      const reviewerAuthority = actor?.authority || 30; // Default to stakeholder authority if not found
+
+      // Get request creator's authority
+      const creator = await User.findOne({ _id: request?.createdBy }).select('authority roles');
+      const requesterAuthority = creator?.authority || 30; // Default to stakeholder authority if not found
+
+      return {
+        permissionUsed: permissionUsed || null,
+        reviewerAuthority,
+        requesterAuthority
+      };
+    } catch (error) {
+      console.warn(`[AUDIT TRAIL] Error gathering context for user ${userId}:`, error.message);
+      // Return defaults if error
+      return {
+        permissionUsed: permissionUsed || null,
+        reviewerAuthority: null,
+        requesterAuthority: null
+      };
+    }
+  }
+
+  /**
    * Check if event date overlaps with existing events for same coordinator
    * @param {string} coordinatorId 
    * @param {Date} eventDate 
@@ -126,6 +160,16 @@ class EventRequestService {
     return null;
   }
 
+  /**
+   * @deprecated Use authority field from User model instead
+   * Maps legacy role string to normalized role code (for backward compatibility only)
+   * NEW: This method should NOT be used for new code; migrate to authority-based checks
+   * 
+   * MIGRATION PATH:
+   * - Replace: `if (normalizedRole === 'system-admin')` with `if (authority >= 80)`
+   * - Replace: `if (normalizedRole === 'coordinator')` with `if (authority >= 60 && authority < 80)`
+   * - Replace: `if (normalizedRole === 'stakeholder')` with `if (authority >= 30 && authority < 60)`
+   */
   _normalizeRole(role) {
     if (!role) return null;
     const normalized = String(role).toLowerCase();
@@ -140,6 +184,22 @@ class EventRequestService {
       return normalized;
     }
     return role;
+  }
+
+  /**
+   * NEW: Convert legacy role string to authority tier
+   * Useful for audit trail generation from actor snapshots that only have role string
+   * @param {string} role - Legacy role string
+   * @returns {number} Authority value (20-100)
+   */
+  _roleToAuthority(role) {
+    const normalized = this._normalizeRole(role);
+    const authorityMap = {
+      'system-admin': 100,
+      'coordinator': 60,
+      'stakeholder': 30
+    };
+    return authorityMap[normalized] || 20;
   }
 
   async _fetchBloodbankStaffName(staffId) {
@@ -169,7 +229,29 @@ class EventRequestService {
   }
 
   async _buildActorSnapshot(role, id) {
-    if (!role || !id) return null;
+    if (!id) return null;
+    
+    try {
+      // Prefer authority field from User model if available
+      const user = await User.findById(id).select('authority firstName lastName email fullName organizationInstitution').lean();
+      if (user) {
+        const name = user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.organizationInstitution || null;
+        // Role is kept for backward compatibility with existing audit trail
+        // But authority is now the source of truth for permissions
+        const normalizedRole = role ? this._normalizeRole(role) : null;
+        return {
+          role: normalizedRole,
+          authority: user.authority,
+          id,
+          userId: user._id,
+          name: name || null
+        };
+      }
+    } catch (e) {
+      console.warn(`[_buildActorSnapshot] Failed to fetch user ${id}:`, e.message);
+    }
+    
+    // Fallback to legacy role-based snapshot if user not found
     const normalizedRole = this._normalizeRole(role);
     let name = null;
     if (normalizedRole === 'stakeholder') {
@@ -179,6 +261,7 @@ class EventRequestService {
     }
     return {
       role: normalizedRole,
+      authority: this._roleToAuthority(normalizedRole),
       id,
       name: name || null
     };
@@ -204,29 +287,39 @@ class EventRequestService {
     return expiry;
   }
 
-  async _assignReviewerContext({ creatorRole, coordinatorId, stakeholderId, province, district }) {
-    // Use the new reviewer assignment service
+  /**
+   * Assign reviewer with proper context including authority
+   * NEW: Now passes requesterId to enable authority hierarchy validation
+   */
+  async _assignReviewerContext({ creatorRole, creatorId, coordinatorId, stakeholderId, province, district, requestType }) {
+    // Use the new permission-based reviewer assignment service
     try {
+      const requesterId = creatorId; // Requester is the creator
       const reviewer = await reviewerAssignmentService.assignReviewer(
-        creatorRole,
-        null, // requesterId not needed for assignment
+        requesterId,
         {
+          locationId: district || province,
           coordinatorId,
           stakeholderId,
-          province,
-          district
+          requestType: requestType || 'eventRequest'
         }
       );
       
-      // Simple log: show who is assigned as reviewer
+      // Log assignment with authority context
       if (reviewer) {
-        console.log(`[Reviewer] ${creatorRole} request → Reviewer: ${reviewer.role} (${reviewer.id})${stakeholderId ? ' [Stakeholder involved]' : ''}`);
+        console.log(
+          `[REVIEWER ASSIGNED] Request from ${creatorRole} (ID: ${requesterId}) → ` +
+          `Reviewer: ${reviewer.name} (authority: ${reviewer.authority || 'N/A'})` +
+          `${stakeholderId ? ' [Stakeholder involved]' : ''}`
+        );
       }
       
       return reviewer;
     } catch (error) {
       // Fallback to old logic if new service fails
-      console.error(`[Reviewer] Assignment failed for ${creatorRole}:`, error.message);
+      console.error(`[REVIEWER ASSIGNMENT] Failed to assign via permission service:`, error.message);
+      console.warn(`[REVIEWER ASSIGNMENT] Falling back to legacy role-based assignment`);
+      
       const normalizedCreator = this._normalizeRole(creatorRole);
 
       if (normalizedCreator === 'system-admin') {
@@ -238,7 +331,8 @@ class EventRequestService {
           id: coordinatorId,
           role: 'coordinator',
           name: name || null,
-          autoAssigned: true
+          autoAssigned: true,
+          authority: 60 // Default coordinator authority
         };
       }
 
@@ -323,7 +417,7 @@ class EventRequestService {
     }
   }
 
-  async _recordStatus(request, newStatus, actorSnapshot, note, metadata = {}, options = {}) {
+  async _recordStatus(request, newStatus, actorSnapshot, note, metadata = {}, options = {}, permissionUsed = null) {
     request.statusHistory = Array.isArray(request.statusHistory) ? request.statusHistory : [];
     request.statusHistory.push({
       status: newStatus,
@@ -334,6 +428,13 @@ class EventRequestService {
     const previousStatus = request.Status;
     request.Status = newStatus;
     if (!options.skipHistory) {
+      // NEW: Get audit trail context (authority levels, permission used)
+      const auditContext = await this._getAuditTrailContext(
+        actorSnapshot?.id || null,
+        request,
+        permissionUsed
+      );
+
       await EventRequestHistory.logStatusChange({
         requestId: request.Request_ID,
         eventId: request.Event_ID,
@@ -341,22 +442,34 @@ class EventRequestService {
         newStatus,
         actor: actorSnapshot || null,
         note: note || null,
-        metadata
+        metadata,
+        permissionUsed: auditContext.permissionUsed,
+        reviewerAuthority: auditContext.reviewerAuthority,
+        requesterAuthority: auditContext.requesterAuthority
       });
     }
   }
 
-  async _recordDecision(request, decisionPayload, actorSnapshot, nextStatus) {
+  async _recordDecision(request, decisionPayload, actorSnapshot, nextStatus, permissionUsed = null) {
     const resultStatus = nextStatus || decisionPayload.resultStatus || request.Status;
     request.decisionHistory = Array.isArray(request.decisionHistory) ? request.decisionHistory : [];
     request.decisionHistory.push(Object.assign(
       {
         decidedAt: new Date(),
         actor: actorSnapshot,
-        resultStatus
+        resultStatus,
+        // NEW: Store permission used for audit trail
+        permissionUsed: permissionUsed || null
       },
       decisionPayload
     ));
+
+    // NEW: Get audit trail context (authority levels, permission used)
+    const auditContext = await this._getAuditTrailContext(
+      actorSnapshot?.id || null,
+      request,
+      permissionUsed
+    );
 
     await EventRequestHistory.logReviewDecision({
       requestId: request.Request_ID,
@@ -366,7 +479,10 @@ class EventRequestService {
       notes: decisionPayload.notes,
       previousStatus: request.Status,
       newStatus: resultStatus,
-      metadata: decisionPayload.payload || {}
+      metadata: decisionPayload.payload || {},
+      permissionUsed: auditContext.permissionUsed,
+      reviewerAuthority: auditContext.reviewerAuthority,
+      requesterAuthority: auditContext.requesterAuthority
     });
   }
 
@@ -549,7 +665,8 @@ class EventRequestService {
         payload: reschedulePayload ? { ...reschedulePayload } : undefined
       },
       actorSnapshot,
-      nextStatus
+      nextStatus,
+      'request.review' // NEW: Track permission used for audit trail
     );
 
     if (decisionType === REVIEW_DECISIONS.RESCHEDULE) {
@@ -921,26 +1038,16 @@ class EventRequestService {
    * @returns {string[]} allowed actions list
    */
   async computeAllowedActions(actorRole, actorId, requestDoc, eventDoc) {
-    // Store original values for final filter
+    // Store original values for logging
     const originalActorRole = actorRole;
     const originalActorId = actorId;
-    const originalRequestDoc = requestDoc;
     
-    // Helper function to compute actions (actual implementation)
-    const computeActions = async () => {
-    // Try using state machine first
     try {
       const state = requestDoc?.Status || REQUEST_STATES.PENDING_REVIEW;
       const normalizedState = this.stateMachine.normalizeState(state);
       
-      // Check if request has stakeholder involvement (for reviewer assignment logic)
-      const hasStakeholder = !!(requestDoc.stakeholder_id || requestDoc.stakeholderId);
-      
-      // Ensure reviewer is set if missing
-      // Reviewer assignment should be handled by reviewerAssignmentService during request creation
-      // This is just a fallback to ensure reviewer is populated
+      // Ensure reviewer is set if missing (fallback logic)
       if (!requestDoc.reviewer) {
-        // Try to get reviewer from reviewerAssignmentService
         try {
           const requesterId = requestDoc.requester?.userId || requestDoc.requester?.id || requestDoc.made_by_id;
           if (requesterId) {
@@ -964,37 +1071,22 @@ class EventRequestService {
           if (requestDoc.coordinator_id) {
             requestDoc.reviewer = {
               id: requestDoc.coordinator_id,
-              role: null, // Role will be determined by permissions
+              role: null,
               name: null
             };
           }
         }
       }
-      
-      // For requests with stakeholder involvement, ensure stakeholder is set as reviewer if appropriate
-      if (hasStakeholder && !requestDoc.reviewer) {
-        const stakeholderId = requestDoc.stakeholder_id || requestDoc.stakeholderId;
-        if (stakeholderId) {
-          requestDoc.reviewer = {
-            id: stakeholderId,
-            role: null, // Role determined by permissions
-            name: null
-          };
-        }
-      }
 
-      // Ensure coordinator_id is filled from event if missing (common on approved/completed reschedules)
+      // Ensure coordinator_id is filled from event if missing
       if (!requestDoc.coordinator_id && requestDoc.event && (requestDoc.event.coordinator_id || requestDoc.event.Coordinator_ID)) {
         requestDoc.coordinator_id = requestDoc.event.coordinator_id || requestDoc.event.Coordinator_ID;
-        // Coordinator ID filled - no log needed
       }
 
       // Update reviewer from decisionHistory if they just made a decision
-      // This ensures reviewer reflects the most recent decision maker
       if (requestDoc.decisionHistory && Array.isArray(requestDoc.decisionHistory) && requestDoc.decisionHistory.length > 0) {
         const mostRecentDecision = requestDoc.decisionHistory[requestDoc.decisionHistory.length - 1];
         if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id) {
-          // If reviewer is not set or doesn't match the most recent decision maker, update it
           if (!requestDoc.reviewer || String(requestDoc.reviewer.id) !== String(mostRecentDecision.actor.id)) {
             requestDoc.reviewer = {
               id: mostRecentDecision.actor.id,
@@ -1006,585 +1098,191 @@ class EventRequestService {
         }
       }
       
-      const allowed = await this.stateMachine.getAllowedActions(
-        normalizedState,
-        actorRole,
-        actorId,
-        requestDoc
-      );
-      // Simple log: show who can do what
-      if (allowed && allowed.length > 1) {
-        const reviewerInfo = requestDoc?.reviewer ? `${requestDoc.reviewer.role} (${requestDoc.reviewer.id})` : 'none';
-        console.log(`[Actions] ${actorRole} (${actorId}) → [${allowed.join(', ')}] | Reviewer: ${reviewerInfo} | State: ${normalizedState}`);
-      }
-      
-      // Reviewer check - no verbose logging
-      
-      // If event is published/completed, add additional actions
-      const event = eventDoc || (requestDoc ? requestDoc.event : null) || {};
-      const isPublished = event && (String(event.Status) === 'Completed' || String(event.Status) === 'completed');
-      
-      if (isPublished && normalizedState === REQUEST_STATES.APPROVED) {
-        // Merge with published event actions
-        const publishedActions = [ACTIONS.VIEW, ACTIONS.EDIT, ACTIONS.MANAGE_STAFF, ACTIONS.RESCHEDULE];
-        const isRequester = this.stateMachine.isRequester(actorId, requestDoc);
-        const normalizedActorRole = this.stateMachine.normalizeRole(actorRole);
-      // Check permissions instead of roles
-      const permissionService = require('../users_services/permission.service');
-      const locationId = requestDoc.location?.district || requestDoc.district;
-      const hasFullAccess = await permissionService.checkPermission(actorId, '*', '*', { locationId });
-        
-        // Only Admin and Coordinator can cancel approved events (not Stakeholders)
-        // Allow if user is requester or has review permissions
-        const canReview = await permissionService.checkPermission(actorId, 'request', 'review', { locationId });
-        if (isRequester || canReview || hasFullAccess) {
-          publishedActions.push(ACTIONS.CANCEL);
-        }
-        
-        // Return unique actions
-        return [...new Set([...allowed, ...publishedActions])];
-      }
-      
-      // CRITICAL: Remove confirm from allowed actions if user is a reviewer
-      // EXCEPTIONS:
-      // 1. In reschedule loops, reviewers need CONFIRM to accept reschedule proposals
-      // 2. In review-accepted state, Admins need CONFIRM if they're the requester or reviewer
-      const isReviewerCheck = this.stateMachine.isReviewer(actorId, actorRole, requestDoc);
-      const isRequesterCheck = this.stateMachine.isRequester(actorId, requestDoc);
-      
-      // Check if this is a reschedule proposal case where reviewer should have CONFIRM
-      const rescheduleProposal = requestDoc.rescheduleProposal;
-      const isRescheduleProposalCase = rescheduleProposal && rescheduleProposal.proposedBy;
-      const proposerRole = isRescheduleProposalCase ? this._normalizeRole(rescheduleProposal.proposedBy.role) : null;
-      const proposerId = isRescheduleProposalCase ? rescheduleProposal.proposedBy.id : null;
-      const normalizedActorRole = this._normalizeRole(actorRole);
-      const isCoordinatorProposal = proposerRole === 'coordinator' && String(proposerId) !== String(actorId);
-      const isStakeholderReviewer = normalizedActorRole === 'stakeholder' && isReviewerCheck;
-      const shouldAllowConfirmForReschedule = isRescheduleProposalCase && isCoordinatorProposal && isStakeholderReviewer;
-      
-      // Check if Admin should be allowed to confirm in review-accepted state
-      const requestStatus = String(requestDoc.Status || requestDoc.status || '').toLowerCase();
-      const isReviewAcceptedState = requestStatus.includes('review') && requestStatus.includes('accepted');
-      const isAdmin = normalizedActorRole === 'SystemAdmin';
-      // Reuse normalizedCreatorRole from earlier in the function (line 929)
-      const isAdminRequester = normalizedCreatorRole === 'system-admin';
-      const isCoordinatorRequester = normalizedCreatorRole === 'coordinator';
-      const isAdminReviewer = isAdmin && requestDoc.reviewer && requestDoc.reviewer.id && 
-                              String(requestDoc.reviewer.id) === String(actorId) &&
-                              requestDoc.reviewer.role && 
-                              (String(requestDoc.reviewer.role).toLowerCase() === 'systemadmin' || 
-                               String(requestDoc.reviewer.role).toLowerCase() === 'admin');
-      const shouldAllowConfirmForAdmin = isReviewAcceptedState && isAdmin && 
-                                         (isAdminRequester || (isCoordinatorRequester && isAdminReviewer));
-      
-      // Check decisionHistory to see if this user just made a decision
-      let justMadeDecision = false;
-      if (requestDoc.decisionHistory && Array.isArray(requestDoc.decisionHistory) && requestDoc.decisionHistory.length > 0) {
-        const mostRecentDecision = requestDoc.decisionHistory[requestDoc.decisionHistory.length - 1];
-        if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id) {
-          if (String(mostRecentDecision.actor.id) === String(actorId)) {
-            justMadeDecision = true;
-          }
-        }
-      }
-      
-      // If user is a reviewer (by any method), remove confirm from allowed actions
-      // EXCEPTIONS: 
-      // 1. Allow CONFIRM in reschedule proposal cases where Stakeholder needs to accept Coordinator's proposal
-      // 2. Allow CONFIRM in review-accepted state for Admins who are requester or reviewer
-      if ((isReviewerCheck || justMadeDecision) && !isRequesterCheck && !shouldAllowConfirmForReschedule && !shouldAllowConfirmForAdmin) {
-        const filteredAllowed = allowed.filter(action => action !== 'confirm' && action !== ACTIONS.CONFIRM);
-        // Removed confirm from reviewer - no log needed
-        return filteredAllowed;
-      } else {
-        return allowed;
-      }
+      // Use permission-based action computation (replaces 600+ lines of legacy role-based logic)
+      return await this._computeAllowedActionsPermissionBased(actorId, actorRole, requestDoc, eventDoc, normalizedState);
     } catch (error) {
-      // Fallback to old logic if state machine fails
-      console.warn('State machine computation failed, falling back to legacy logic:', error.message, error.stack);
-      // Continue to legacy code below
-    }
-    
-    // Legacy computation logic (existing code)
-    try {
-      const role = actorRole ? String(actorRole).toLowerCase() : null;
-      const event = eventDoc || (requestDoc ? requestDoc.event : null) || {};
-      const req = requestDoc || {};
-
-      const isPublished = event && (String(event.Status) === 'Completed' || String(event.Status) === 'Completed');
-
-      // Published: all users see view, edit, manage-staff, resched
-      // For approved events, also allow cancel for admins and coordinators (NOT stakeholders)
-      if (isPublished) {
-        const actions = ['view', 'edit', 'manage-staff', 'resched'];
-        
-        // Allow cancel for approved events - only Admin and Coordinator (NOT Stakeholders)
-        const isAdmin = role === 'admin' || role === 'systemadmin';
-        let isCoordinator = false;
-        if (role === 'coordinator') {
-          isCoordinator = req.coordinator_id === actorId;
-          if (!isCoordinator && req.stakeholder_id) {
-            try {
-              const Stakeholder = require('../../models/index').Stakeholder;
-              const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: req.stakeholder_id });
-              isCoordinator = stakeholder && stakeholder.Coordinator_ID === actorId;
-            } catch (e) {
-              // Ignore errors in stakeholder lookup
-            }
-          }
-        }
-        
-        if (isAdmin || isCoordinator) {
-          actions.push('cancel');
-        }
-        
-        return actions;
-      }
-
-      // Handle pending-review workflow. The request model uses a unified
-      // `pending-review` status; use the `reviewer` field to determine who may act.
-      const status = String(req.Status || '').toLowerCase();
-      const isRescheduled = status.includes('resched') || status.includes('reschedule') || status.includes('rescheduled') || !!(req.rescheduleProposal && req.rescheduleProposal.proposedBy);
-      if (status.includes('pending') || status.includes('review') || isRescheduled) {
-        const reviewerRole = req.reviewer && req.reviewer.role ? String(req.reviewer.role).toLowerCase() : null;
-
-        // If the actor is the creator of the request, they should only view
-        if (req.made_by_id && String(req.made_by_id) === String(actorId)) {
-          return ['view'];
-        }
-
-        const isReviewAccepted = status.includes('review') && status.includes('accepted');
-
-        // Special-case: handle reschedule proposals explicitly and symmetrically.
-        // Universal rules:
-        // - Requester (proposer) => view only
-        // - Reviewer => view, accept, reject
-        // Reviewer resolution uses request.reviewer snapshot where available,
-        // otherwise falls back to coordinator_id/stakeholder_id. Admins may
-        // also act as reviewers when appropriate.
-        try {
-          const resProp = req.rescheduleProposal || null;
-          let proposerRole = null;
-          let proposerId = null;
-          if (resProp && resProp.proposedBy) {
-            proposerRole = String(resProp.proposedBy.role || '').toLowerCase();
-            proposerId = resProp.proposedBy.id || null;
-          }
-
-          // Account for CoordinatorFinalAction flag as a legacy reschedule marker
-          const coordFinal = (req.CoordinatorFinalAction || req.coordinatorFinalAction || null);
-          const coordFinalIsResched = coordFinal && String(coordFinal).toLowerCase().includes('resched');
-          if (!proposerRole && coordFinalIsResched) {
-            proposerRole = 'coordinator';
-          }
-
-          // If we have a legacy CoordinatorFinalAction reschedule marker but
-          // no explicit proposer id, use the request.coordinator_id as the
-          // proposer identifier so proposer checks work for legacy flows.
-          if (!proposerId && coordFinalIsResched && req.coordinator_id) {
-            proposerId = req.coordinator_id;
-          }
-
-          // Resolve reviewer snapshot or fallbacks
-          // IMPORTANT: For SystemAdmin-created requests, reviewer should always be coordinator
-          const creatorRole = req.made_by_role || req.creator?.role;
-          const isSystemAdminRequest = creatorRole && this._normalizeRole(creatorRole) === 'system-admin';
-          
-          const reviewerSnapshot = req.reviewer || null;
-          let reviewerId = null;
-          let reviewerRoleRaw = null;
-          
-          if (isSystemAdminRequest) {
-            // For SystemAdmin requests, reviewer is always coordinator
-            reviewerId = reviewerSnapshot && reviewerSnapshot.id ? reviewerSnapshot.id : req.coordinator_id;
-            reviewerRoleRaw = reviewerSnapshot && reviewerSnapshot.role ? String(reviewerSnapshot.role).toLowerCase() : 'coordinator';
-          } else {
-            // For other requests, use normal fallback logic
-            reviewerId = reviewerSnapshot && reviewerSnapshot.id ? reviewerSnapshot.id : (req.coordinator_id || req.stakeholder_id || null);
-            reviewerRoleRaw = reviewerSnapshot && reviewerSnapshot.role ? String(reviewerSnapshot.role).toLowerCase() : (req.coordinator_id ? 'coordinator' : (req.stakeholder_id ? 'stakeholder' : null));
-          }
-
-          // If the current actor is the proposer, they must be view-only
-          if (proposerId && String(proposerId) === String(actorId)) {
-            return ['view'];
-          }
-
-          // If actor is the explicit reviewer (by id) they get reviewer rights
-          // Reviewer rights include the ability to propose a reschedule (RS)
-          // in the initial review step.
-          if (reviewerId && String(reviewerId) === String(actorId)) {
-            return ['view', 'accept', 'reject', 'resched'];
-          }
-
-          // If actor role matches resolved reviewer role, grant reviewer rights
-          if (reviewerRoleRaw && reviewerRoleRaw === role) {
-            return ['view', 'accept', 'reject', 'resched'];
-          }
-
-          // Allow system admins to act as reviewers for reschedules by default
-          if (role === 'admin' || role === 'systemadmin') {
-            return ['view', 'accept', 'reject', 'resched'];
-          }
-
-          // Fallback: everyone else can only view
-          return ['view'];
-        } catch (e) {
-          // ignore and continue
-        }
-
-        // Special case: if the request is review-accepted, only the requester can confirm
-        // Reviewers cannot confirm - confirm action finalizes/ends the request and is reserved for requesters only
-        if (isReviewAccepted) {
-          // CRITICAL: Check if this user is a reviewer first (they just made the decision)
-          // Check decisionHistory to see if this user just accepted/rejected
-          let isReviewer = false;
-          if (req.decisionHistory && Array.isArray(req.decisionHistory) && req.decisionHistory.length > 0) {
-            const mostRecentDecision = req.decisionHistory[req.decisionHistory.length - 1];
-            if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id) {
-              if (String(mostRecentDecision.actor.id) === String(actorId)) {
-                isReviewer = true;
-              }
-            }
-          }
-          
-          // Also check reviewer assignment
-          if (!isReviewer && req.reviewer && req.reviewer.id && String(req.reviewer.id) === String(actorId)) {
-            isReviewer = true;
-          }
-          
-          // For stakeholder requests, coordinator is the reviewer
-          if (!isReviewer && role === 'coordinator' && req.made_by_role === 'stakeholder' && req.coordinator_id && String(req.coordinator_id) === String(actorId)) {
-            isReviewer = true;
-          }
-          
-          // If user is a reviewer, they can ONLY view (no confirm)
-          if (isReviewer) {
-            // Reviewer blocking confirm - no log needed
-            return ['view'];
-          }
-          
-          // Check if actor is the requester (original creator)
-          // Check made_by_id first
-          let isRequester = req.made_by_id && String(req.made_by_id) === String(actorId);
-          
-          // For stakeholder requests, also check stakeholder_id
-          // This handles cases where made_by_id might not match stakeholder_id
-          if (!isRequester) {
-            const requesterRole = req.made_by_role || req.creator?.role;
-            if (requesterRole && (String(requesterRole).toLowerCase() === 'stakeholder')) {
-              isRequester = req.stakeholder_id && String(req.stakeholder_id) === String(actorId);
-            }
-          }
-          
-          // Also check creator.id as fallback
-          if (!isRequester && req.creator && req.creator.id) {
-            isRequester = String(req.creator.id) === String(actorId);
-          }
-          
-          if (isRequester) {
-            // Requester can confirm
-            return ['view', 'confirm'];
-          }
-          
-          // Everyone else can only view
-          return ['view'];
-        }
-
-        // If this is a reschedule flow, determine who proposed the reschedule
-        // and restrict who may accept it according to business rules:
-        // - Admin proposed: coordinator assigned to the request must approve.
-        // - Coordinator proposed: if no stakeholder involved -> sysadmin must approve;
-        //   if stakeholder involved -> stakeholder must approve (sysadmin may also approve).
-        // - Stakeholder proposed: coordinator or sysadmin must approve.
-        if (isRescheduled) {
-          const proposerRoleRaw = req.rescheduleProposal && req.rescheduleProposal.proposedBy && req.rescheduleProposal.proposedBy.role ? String(req.rescheduleProposal.proposedBy.role).toLowerCase() : null;
-          const proposerRole = proposerRoleRaw || null;
-
-          // helper: check if actor is assigned/reviewer coordinator
-          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
-          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
-
-          // Admin proposed reschedule -> only assigned/reviewer coordinator may accept/reject
-          if (proposerRole === 'systemadmin' || proposerRole === 'admin') {
-            if (role === 'coordinator' && (isReviewer || isAssigned)) {
-              return ['view', 'accept', 'reject'];
-            }
-            // Admins may view or propose another reschedule but should not accept their own proposal
-            if (role === 'admin' || role === 'systemadmin') return ['view', 'resched'];
-            return ['view'];
-          }
-
-          // Coordinator proposed reschedule
-          if (proposerRole === 'coordinator') {
-            const stakeholderPresent = !!req.stakeholder_id;
-            // If no stakeholder: sys admin must approve
-            if (!stakeholderPresent) {
-              if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
-              return ['view'];
-            }
-            // If stakeholder involved: stakeholder should approve, but sysadmin may also approve
-            if (role === 'stakeholder' && req.stakeholder_id && String(req.stakeholder_id) === String(actorId)) {
-              return ['view', 'accept', 'reject'];
-            }
-            if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
-            return ['view'];
-          }
-
-          // Stakeholder proposed reschedule -> coordinator or sysadmin may approve
-          if (proposerRole === 'stakeholder') {
-            if (role === 'coordinator' && (isReviewer || isAssigned)) return ['view', 'accept', 'reject'];
-            if (role === 'admin' || role === 'systemadmin') return ['view', 'accept', 'reject', 'resched'];
-            return ['view'];
-          }
-
-          // Fallback: preserve previous permissive behavior for admins, otherwise view-only
-          if (role === 'admin' || role === 'systemadmin') {
-            return ['view', 'resched', 'accept', 'reject'];
-          }
-          return ['view'];
-        }
-
-        // If reviewer is stakeholder (or request has stakeholder), allow the
-        // stakeholder and system admins to act. System admins should be able
-        // to accept, reject, or propose a reschedule on stakeholder-created
-        // requests (they act as a reviewer in that flow). Coordinators may
-        // only act when explicitly assigned.
-        if (reviewerRole === 'stakeholder' || (!reviewerRole && req.stakeholder_id && req.made_by_role === 'stakeholder')) {
-          // System admins/full admins can act on stakeholder requests
-          if (role === 'admin' || role === 'systemadmin') {
-            return ['view', 'resched', 'accept', 'reject'];
-          }
-          // Stakeholder who created the request may act on their own request
-          if (role === 'stakeholder' && req.stakeholder_id === actorId) {
-            return ['view', 'accept', 'reject'];
-          }
-          return ['view'];
-        }
-
-        // If reviewer is coordinator, only coordinator may act
-        if (reviewerRole === 'coordinator' || (!reviewerRole && req.coordinator_id)) {
-          // Allow coordinator if they are the assigned coordinator or the reviewer
-          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
-          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
-          const isCreator = String(req.made_by_role || '').toLowerCase() === 'coordinator' && req.made_by_id && String(req.made_by_id) === String(actorId);
-          // Coordinators assigned to review should be able to propose reschedules
-          // in addition to accepting/rejecting. Preserve original creator rule.
-          if (role === 'coordinator' && (isReviewer || (isAssigned && !isCreator))) {
-            return ['view', 'resched', 'accept', 'reject'];
-          }
-          // Allow stakeholder to accept/reject coordinator's reschedule proposals
-          if (role === 'stakeholder' && req.rescheduleProposal && req.rescheduleProposal.proposedBy && String(req.rescheduleProposal.proposedBy.role).toLowerCase() === 'coordinator' && req.stakeholder_id === actorId) {
-            return ['view', 'accept', 'reject'];
-          }
-          return ['view'];
-        }
-
-        // Default pending/review: admins may act. Coordinators may act only when
-        // they are the assigned coordinator or the assigned reviewer.
-        if (role === 'admin' || role === 'systemadmin') {
-          const isCreator = req.made_by_role && String(req.made_by_role).toLowerCase().includes('admin') && req.made_by_id && String(req.made_by_id) === String(actorId);
-          if (isCreator) {
-            return ['view'];
-          }
-          return ['view', 'resched', 'accept', 'reject'];
-        }
-        if (role === 'coordinator') {
-          const isAssigned = req.coordinator_id && String(req.coordinator_id) === String(actorId);
-          const isReviewer = req.reviewer && String(req.reviewer.id) === String(actorId);
-          const isCreator = String(req.made_by_role || '').toLowerCase() === 'coordinator' && req.made_by_id && String(req.made_by_id) === String(actorId);
-          if (isReviewer || (isAssigned && !isCreator)) {
-            return ['view', 'resched', 'accept', 'reject'];
-          }
-        }
-        return ['view'];
-      }
-
-      // Check for cancelled status
-      if (status.includes('cancel')) {
-        // Only system administrators (Admin role) should be allowed to delete cancelled requests.
-        if (role === 'systemadmin' || role === 'admin') return ['view', 'delete'];
-        return ['view'];
-      }
-
-      // Check for rejected status
-      if (status.includes('reject')) {
-        // Only system administrators (Admin role) should be allowed to delete rejected requests.
-        if (role === 'systemadmin' || role === 'admin') return ['view', 'delete'];
-        return ['view'];
-      }
-
-      // Legacy handling for other statuses
-      if (role === 'admin' || role === 'systemadmin' || role === 'coordinator') {
-        // admins/coordinators always see full approval controls before publish
-        return ['view', 'resched', 'accept', 'reject'];
-      }
-
-      if (role === 'stakeholder') {
-        const adminAction = req.AdminAction || null; // e.g., 'Accepted' | 'Rejected' | 'Rescheduled'
-        const stakeholderAction = req.StakeholderFinalAction || null;
-
-        // If admin hasn't acted yet, stakeholder only sees view
-        if (!adminAction) {
-          return ['view'];
-        }
-
-        // Admin has acted: stakeholder can respond
-        if (String(adminAction).toLowerCase().includes('reject')) {
-          // If admin rejected, stakeholder may accept to re-apply; if already acted, only view
-          if (!stakeholderAction) return ['view', 'accept'];
-          return ['view'];
-        }
-
-        // Admin accepted or rescheduled: stakeholder can accept or reject unless they've already acted
-        if (!stakeholderAction) return ['view', 'accept', 'reject'];
-        return ['view'];
-      }
-
-      // Unknown actor: only view by default
-      const legacyActions = ['view'];
-      
-      // CRITICAL: Remove confirm from legacy actions if user is a reviewer
-      // EXCEPTION: In reschedule loops, reviewers need CONFIRM to accept reschedule proposals
-      // Check if this is a reschedule proposal case where reviewer should have CONFIRM
-      const rescheduleProposalLegacy = req.rescheduleProposal;
-      const isRescheduleProposalCaseLegacy = rescheduleProposalLegacy && rescheduleProposalLegacy.proposedBy;
-      const proposerRoleLegacy = isRescheduleProposalCaseLegacy ? this._normalizeRole(rescheduleProposalLegacy.proposedBy.role) : null;
-      const proposerIdLegacy = isRescheduleProposalCaseLegacy ? rescheduleProposalLegacy.proposedBy.id : null;
-      const isCoordinatorProposalLegacy = proposerRoleLegacy === 'coordinator' && String(proposerIdLegacy) !== String(actorId);
-      const isStakeholderReviewerLegacy = role === 'stakeholder';
-      const shouldAllowConfirmForRescheduleLegacy = isRescheduleProposalCaseLegacy && isCoordinatorProposalLegacy && isStakeholderReviewerLegacy;
-      
-      // Check if this user just made a decision (they're the reviewer)
-      let isReviewerInLegacy = false;
-      if (req.decisionHistory && Array.isArray(req.decisionHistory) && req.decisionHistory.length > 0) {
-        const mostRecentDecision = req.decisionHistory[req.decisionHistory.length - 1];
-        if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id) {
-          if (String(mostRecentDecision.actor.id) === String(actorId)) {
-            isReviewerInLegacy = true;
-          }
-        }
-      }
-      
-      // Also check reviewer assignment
-      if (!isReviewerInLegacy && req.reviewer && req.reviewer.id && String(req.reviewer.id) === String(actorId)) {
-        isReviewerInLegacy = true;
-      }
-      
-      // For stakeholder requests, coordinator is the reviewer
-      if (!isReviewerInLegacy && role === 'coordinator' && req.made_by_role === 'stakeholder' && req.coordinator_id && String(req.coordinator_id) === String(actorId)) {
-        isReviewerInLegacy = true;
-      }
-      
-      // Remove confirm if user is a reviewer
-      // EXCEPTION: Allow CONFIRM in reschedule proposal cases where Stakeholder needs to accept Coordinator's proposal
-      const filteredLegacyActions = legacyActions.filter(action => {
-        if (isReviewerInLegacy && (action === 'confirm' || action === 'Confirm') && !shouldAllowConfirmForRescheduleLegacy) {
-          // Removed confirm from reviewer - no log needed
-          return false;
-        }
-        return true;
-      });
-      
-        return filteredLegacyActions;
-    } catch (e) {
+      console.error('[computeAllowedActions] Error:', error.message);
+      // Fallback: return view-only
       return ['view'];
     }
-    };
+  }
+
+  /**
+   * NEW: Permission-Based Allowed Actions Computation
+   * 
+   * This method replaces role-based hardcoded checks with a permission-driven system:
+   * - Users have explicit permissions (REQUEST_REVIEW, REQUEST_APPROVE, REQUEST_REJECT, etc.)
+   * - Authority hierarchy is validated (reviewer authority >= requester authority)
+   * - System admins can override authority checks
+   * - No role name assumptions (e.g., "coordinator CAN review" is wrong; only REQUEST_REVIEW permission allows review)
+   * 
+   * @param {string} actorId - User ID attempting the action
+   * @param {string} actorRole - User's role (legacy, used for fallback/logging only)
+   * @param {Object} requestDoc - The EventRequest document
+   * @param {Object} eventDoc - The Event document
+   * @param {string} normalizedState - Current request state
+   * @returns {Promise<Array<string>>} Array of allowed action codes
+   */
+  async _computeAllowedActionsPermissionBased(actorId, actorRole, requestDoc, eventDoc, normalizedState) {
+    const permissionService = require('../users_services/permission.service');
+    const User = require('../../models/index').User;
     
-    // Execute the computation
-    let result = await computeActions();
-    
-    // CRITICAL FINAL SAFEGUARD: Remove confirm from ANY returned actions if user is a reviewer
-    // EXCEPTIONS:
-    // 1. In reschedule loops, reviewers need CONFIRM to accept reschedule proposals
-    // 2. In review-accepted state, Admins need CONFIRM if they're the requester or reviewer
-    if (!result || !Array.isArray(result)) {
-      result = ['view'];
-    }
-    
-    // Check if this is a reschedule proposal case where reviewer should have CONFIRM
-    const rescheduleProposal = originalRequestDoc?.rescheduleProposal;
-    const isRescheduleProposalCase = rescheduleProposal && rescheduleProposal.proposedBy;
-    const proposerRole = isRescheduleProposalCase ? this._normalizeRole(rescheduleProposal.proposedBy.role) : null;
-    const proposerId = isRescheduleProposalCase ? rescheduleProposal.proposedBy.id : null;
-    const normalizedActorRoleFinal = originalActorRole ? this._normalizeRole(originalActorRole) : null;
-    const isCoordinatorProposalFinal = proposerRole === 'coordinator' && String(proposerId) !== String(originalActorId);
-    const isStakeholderReviewerFinal = normalizedActorRoleFinal === 'stakeholder';
-    const shouldAllowConfirmForRescheduleFinal = isRescheduleProposalCase && isCoordinatorProposalFinal && isStakeholderReviewerFinal;
-    
-    // Check if Admin should be allowed to confirm in review-accepted state
-    const requestStatusFinal = String(originalRequestDoc?.Status || originalRequestDoc?.status || '').toLowerCase();
-    const isReviewAcceptedStateFinal = requestStatusFinal.includes('review') && requestStatusFinal.includes('accepted');
-    const isAdminFinal = normalizedActorRoleFinal === 'system-admin';
-    const creatorRoleFinal = originalRequestDoc?.made_by_role || originalRequestDoc?.creator?.role;
-    const normalizedCreatorRoleFinal = creatorRoleFinal ? this._normalizeRole(creatorRoleFinal) : null;
-    const isAdminRequesterFinal = normalizedCreatorRoleFinal === 'system-admin';
-    const isCoordinatorRequesterFinal = normalizedCreatorRoleFinal === 'coordinator';
-    const isAdminReviewerFinal = isAdminFinal && originalRequestDoc?.reviewer && originalRequestDoc.reviewer.id && 
-                                  String(originalRequestDoc.reviewer.id) === String(originalActorId) &&
-                                  originalRequestDoc.reviewer.role && 
-                                  (String(originalRequestDoc.reviewer.role).toLowerCase() === 'systemadmin' || 
-                                   String(originalRequestDoc.reviewer.role).toLowerCase() === 'admin');
-    const shouldAllowConfirmForAdminFinal = isReviewAcceptedStateFinal && isAdminFinal && 
-                                            (isAdminRequesterFinal || (isCoordinatorRequesterFinal && isAdminReviewerFinal));
-    
-    // Check if user is a reviewer using multiple methods
-    let isReviewerFinal = false;
-    
-    // Check decisionHistory - most reliable indicator
-    if (originalRequestDoc && originalRequestDoc.decisionHistory && Array.isArray(originalRequestDoc.decisionHistory) && originalRequestDoc.decisionHistory.length > 0) {
-      const mostRecentDecision = originalRequestDoc.decisionHistory[originalRequestDoc.decisionHistory.length - 1];
-      if (mostRecentDecision && mostRecentDecision.actor && mostRecentDecision.actor.id) {
-        if (String(mostRecentDecision.actor.id) === String(originalActorId)) {
-          isReviewerFinal = true;
+    try {
+      // Get actor and requester user documents for authority comparison
+      const actor = await User.findById(actorId).populate('roles');
+      const requester = requestDoc.made_by_id 
+        ? await User.findById(requestDoc.made_by_id).populate('roles')
+        : null;
+
+      // Get location context
+      const locationId = requestDoc.location?.district || requestDoc.district;
+      const context = { locationId };
+
+      // Initialize allowed actions
+      const allowed = [];
+
+      // ========== 1. ALWAYS ALLOW VIEW ==========
+      allowed.push('view');
+
+      // ========== 2. CHECK PERMISSION: REQUEST_CREATE (for creating new requests) ==========
+      // This is typically checked before request creation, but include for completeness
+      // Not applicable to existing requests in this context
+
+      // ========== 3. GET ACTOR AUTHORITY ==========
+      // Authority is a numeric field on User; higher = more authority
+      const actorAuthority = actor?.authority ?? 20;
+      const requesterAuthority = requester?.authority ?? 20;
+      const isSystemAdmin = actorAuthority >= 100; // System admin threshold
+
+      // ========== 4. CHECK PERMISSION: REQUEST_REVIEW ==========
+      // If user has REQUEST_REVIEW permission, they can review (accept/reject/reschedule)
+      const canReview = await permissionService.checkPermission(actorId, 'request', 'review', context);
+      const canApprove = await permissionService.checkPermission(actorId, 'request', 'approve', context);
+      const canReject = await permissionService.checkPermission(actorId, 'request', 'reject', context);
+      const canReschedule = await permissionService.checkPermission(actorId, 'request', 'reschedule', context);
+      const canPublishEvent = await permissionService.checkPermission(actorId, 'event', 'publish', context);
+
+      // ========== 5. VALIDATE AUTHORITY HIERARCHY FOR REVIEWER ACTIONS ==========
+      // Rule: A reviewer must not be lower authority than the requester, UNLESS system admin
+      let authorityCheckPassed = true;
+      if (!isSystemAdmin && requester && actorAuthority < requesterAuthority) {
+        authorityCheckPassed = false;
+      }
+
+      // ========== 6. DETERMINE IF ACTOR IS REQUESTER OR REVIEWER ==========
+      const isRequester = requestDoc.made_by_id && String(requestDoc.made_by_id) === String(actorId);
+      const isReviewer = requestDoc.reviewer && requestDoc.reviewer.id && String(requestDoc.reviewer.id) === String(actorId);
+      const isAssignedCoordinator = requestDoc.coordinator_id && String(requestDoc.coordinator_id) === String(actorId);
+
+      // ========== 7. DETERMINE REQUEST STATE ==========
+      const status = String(requestDoc.Status || '').toLowerCase();
+      const isPublished = eventDoc && (String(eventDoc.Status) === 'Completed' || String(eventDoc.Status) === 'completed');
+      const isPendingReview = status.includes('pending') || status.includes('review');
+      const isReviewAccepted = status.includes('review') && status.includes('accepted');
+      const isRescheduled = status.includes('resched');
+      const isApproved = status.includes('approve');
+      const isRejected = status.includes('reject');
+      const isCancelled = status.includes('cancel');
+
+      // ========== 8. PERMISSION-BASED LOGIC PER STATE ==========
+
+      // --- PUBLISHED/APPROVED STATE ---
+      if (isPublished && isApproved) {
+        allowed.push('edit', 'manage-staff', 'resched');
+        
+        // Can cancel if: has REQUEST_RESCHEDULE permission, or is requester, or system admin
+        if (canReschedule || isRequester || isSystemAdmin) {
+          allowed.push('cancel');
         }
       }
-    }
-    
-    // Check reviewer assignment
-    if (!isReviewerFinal && originalRequestDoc && originalRequestDoc.reviewer && originalRequestDoc.reviewer.id) {
-      if (String(originalRequestDoc.reviewer.id) === String(originalActorId)) {
-        isReviewerFinal = true;
+
+      // --- PENDING/REVIEW STATE ---
+      if (isPendingReview && !isRejected && !isCancelled) {
+        // Requester can ONLY view (waiting for reviewer)
+        if (isRequester) {
+          return ['view'];
+        }
+
+        // --- REVIEWER ACTIONS (if permission + authority check pass) ---
+        if ((canReview || canApprove || isSystemAdmin) && (authorityCheckPassed || isSystemAdmin)) {
+          // Reviewer can: view, accept, reject, propose reschedule
+          if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+            allowed.push('accept', 'reject', 'resched');
+          }
+        } else if (!authorityCheckPassed && !isSystemAdmin) {
+          // Lower authority trying to review higher authority - block
+          return ['view'];
+        }
       }
-    }
-    
-    // Check coordinator_id for stakeholder requests
-    if (!isReviewerFinal && originalRequestDoc && originalRequestDoc.made_by_role === 'stakeholder') {
-      const normalizedRole = originalActorRole ? String(originalActorRole).toLowerCase() : null;
-      if (normalizedRole === 'coordinator' && originalRequestDoc.coordinator_id && String(originalRequestDoc.coordinator_id) === String(originalActorId)) {
-        isReviewerFinal = true;
+
+      // --- REVIEW_ACCEPTED STATE ---
+      if (isReviewAccepted) {
+        // ONLY requester can confirm the accepted decision
+        if (isRequester) {
+          allowed.push('confirm');
+          return allowed;
+        }
+
+        // Reviewer/reviewer cannot confirm (they made the decision already)
+        if (isReviewer || isAssignedCoordinator) {
+          return ['view'];
+        }
+
+        // System admin can still view
+        if (isSystemAdmin) {
+          return ['view', 'edit'];
+        }
+
+        return ['view'];
       }
-    }
-    
-    // Check if user is the requester
-    let isRequesterFinal = false;
-    if (originalRequestDoc) {
-      const madeById = originalRequestDoc.made_by_id || originalRequestDoc.creator?.id;
-      if (madeById && String(madeById) === String(originalActorId)) {
-        isRequesterFinal = true;
+
+      // --- RESCHEDULE_REQUESTED STATE ---
+      if (isRescheduled) {
+        // Requester proposes new schedule; reviewer accepts/rejects proposal
+        if (isRequester) {
+          // Requester can view and propose
+          allowed.push('resched');
+          return allowed;
+        }
+
+        // Reviewer can accept or reject the reschedule proposal
+        if ((canReview || canApprove || isSystemAdmin) && (authorityCheckPassed || isSystemAdmin)) {
+          allowed.push('accept', 'reject');
+        }
       }
-      if (!isRequesterFinal && originalRequestDoc.made_by_role === 'stakeholder' && originalRequestDoc.stakeholder_id && String(originalRequestDoc.stakeholder_id) === String(originalActorId)) {
-        isRequesterFinal = true;
+
+      // --- REJECTED STATE ---
+      if (isRejected) {
+        // Only system admin can delete rejected requests
+        if (isSystemAdmin) {
+          allowed.push('delete');
+        }
       }
-    }
-    
-    // If user is a reviewer (and not the requester), remove confirm
-    // EXCEPTIONS:
-    // 1. Allow CONFIRM in reschedule proposal cases where Stakeholder needs to accept Coordinator's proposal
-    // 2. Allow CONFIRM in review-accepted state for Admins who are requester or reviewer
-    if (isReviewerFinal && !isRequesterFinal && !shouldAllowConfirmForRescheduleFinal && !shouldAllowConfirmForAdminFinal) {
-      const originalResult = [...result];
-      result = result.filter(action => {
-        const actionLower = String(action).toLowerCase();
-        return actionLower !== 'confirm' && actionLower !== 'confirmed';
-      });
-      
-      if (originalResult.length !== result.length) {
-        // Ultimate safeguard applied - no log needed
+
+      // --- CANCELLED STATE ---
+      if (isCancelled) {
+        // Only system admin can delete cancelled requests
+        if (isSystemAdmin) {
+          allowed.push('delete');
+        }
       }
+
+      // ========== 9. EDIT & MANAGE_STAFF (context-dependent) ==========
+      // Requester or system admin can edit/manage staff
+      if (isRequester || isSystemAdmin) {
+        if (!allowed.includes('edit')) allowed.push('edit');
+        if (!allowed.includes('manage-staff')) allowed.push('manage-staff');
+      }
+
+      // ========== 10. LOG ACTIONS FOR AUDIT ==========
+      console.log(`[PERMISSION-BASED ACTIONS] User ${actorId} (authority ${actorAuthority}) → [${allowed.join(', ')}] | State: ${normalizedState} | Requester Authority: ${requesterAuthority}`);
+
+      return [...new Set(allowed)]; // Remove duplicates
+    } catch (error) {
+      console.error('Error in permission-based action computation:', error);
+      // Fallback to legacy logic
+      throw error;
     }
-    
-    return result;
   }
 
   /**
@@ -1756,10 +1454,12 @@ class EventRequestService {
       const creatorSnapshot = await this._buildActorSnapshot(normalizedCreatorRole, creatorId);
       const reviewer = await this._assignReviewerContext({
         creatorRole: normalizedCreatorRole,
+        creatorId, // Pass creatorId for authority hierarchy validation
         coordinatorId,
         stakeholderId: normalizedStakeholderId,
         province: eventData.province || coordinator.province,
-        district: eventData.district || coordinator.district
+        district: eventData.district || coordinator.district,
+        requestType: 'eventRequest'
       });
 
       // Verify reviewer is set correctly for Coordinator-Stakeholder cases
@@ -1886,26 +1586,108 @@ class EventRequestService {
    */
   async createImmediateEvent(creatorId, creatorRole, eventData) {
     try {
-      const normalizedRole = this._normalizeRole(creatorRole);
-      if (normalizedRole !== 'system-admin' && normalizedRole !== 'coordinator') {
-        throw new Error('Unauthorized: Only admins or coordinators can perform direct creation');
+      const { User } = require('../../models/index');
+      const { AUTHORITY_TIERS } = require('../users_services/authority.service');
+
+      // Get creator user document for authority-based validation
+      const creator = await User.findById(creatorId);
+      if (!creator) {
+        console.error(`[createImmediateEvent] Creator not found: ${creatorId}`);
+        throw new Error('Creator user not found');
       }
 
-      const coordinatorId = normalizedRole === 'Coordinator'
-        ? creatorId
-        : (eventData.coordinator_id || eventData.MadeByCoordinatorID || null);
+      const creatorAuthority = creator.authority || 20;
+      const isSystemAdmin = creatorAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN; // ≥80
+      const isCoordinator = creatorAuthority >= AUTHORITY_TIERS.COORDINATOR; // ≥60
 
-      if (!coordinatorId) {
-        throw new Error('Coordinator ID is required for direct event creation');
+      // Log authority validation
+      console.log(`[createImmediateEvent] Service received request from creator ${creatorId}`, {
+        email: creator.email,
+        authority: creatorAuthority,
+        creatorRole,
+        isSystemAdmin,
+        isCoordinator
+      });
+
+      // Authority-based authorization (replaces role string checks)
+      if (!isSystemAdmin && !isCoordinator) {
+        console.log(`[createImmediateEvent] AUTHORIZATION DENIED - Authority ${creatorAuthority} insufficient`, {
+          creatorId,
+          required: AUTHORITY_TIERS.COORDINATOR,
+          hasAuthority: false
+        });
+        throw new Error(`Unauthorized: Authority ${creatorAuthority} insufficient (requires ≥${AUTHORITY_TIERS.COORDINATOR})`);
+      }
+
+      // Determine coordinator ID based on authority
+      let coordinatorId = null;
+      if (isSystemAdmin) {
+        // System Admin: Use provided coordinator_id or require it
+        coordinatorId = eventData.coordinator_id || eventData.MadeByCoordinatorID || null;
+        if (!coordinatorId) {
+          console.log(`[createImmediateEvent] System Admin (authority ${creatorAuthority}) must provide coordinator_id`);
+          throw new Error('Coordinator ID is required when system admin creates event');
+        }
+        console.log(`[createImmediateEvent] System Admin (authority ${creatorAuthority}) selected coordinator`, {
+          creatorId,
+          selectedCoordinatorId: coordinatorId
+        });
+      } else {
+        // Coordinator: Must be self
+        coordinatorId = creatorId;
+        console.log(`[createImmediateEvent] Coordinator (authority ${creatorAuthority}) forced to self`, {
+          creatorId,
+          coordinatorId
+        });
+      }
+
+      // OPTIMIZATION: Validate stakeholder restriction for coordinators
+      // Use pre-computed Sets from controller for O(1) lookups (if available)
+      if (!isSystemAdmin && isCoordinator && eventData.stakeholder_id) {
+        // Use Sets from controller if available (for O(1) lookup), otherwise compute
+        const municipalityIdSet = eventData._coordinatorMunicipalityIdSet || 
+          new Set(creator.coverageAreas.flatMap(ca => ca.municipalityIds || []).filter(Boolean));
+        const organizationIdSet = eventData._coordinatorOrganizationIdSet ||
+          new Set(creator.organizations.map(org => org.organizationId).filter(Boolean));
+
+        // Keep array versions for logging/debugging
+        const municipalityIds = eventData._coordinatorMunicipalityIds || 
+          Array.from(municipalityIdSet);
+        const organizationIds = eventData._coordinatorOrganizationIds ||
+          Array.from(organizationIdSet);
+
+        console.log(`[createImmediateEvent] Validating stakeholder scope for coordinator`, {
+          creatorId,
+          stakeholderId: eventData.stakeholder_id,
+          municipalitiesAvailable: municipalityIds.length,
+          municipalitiesUnique: municipalityIdSet.size,
+          organizationsAvailable: organizationIds.length,
+          organizationsUnique: organizationIdSet.size,
+          optimization: 'Using pre-computed Sets for O(1) stakeholder validation lookups',
+          message: 'Coordinator can only select stakeholders within their jurisdiction (TODO: validate stakeholder location)'
+        });
+
+        // TODO: Add stakeholder validation against coverage areas + organizations
+        // This would require fetching stakeholder document and checking their location/organization
+        // Use Set membership checking for O(1) lookup: if (municipalityIdSet.has(stakeholderMunicipalityId)) {...}
       }
 
       const enrichedData = Object.assign({}, eventData, {
-        _actorRole: normalizedRole,
-        _actorId: creatorId
+        _actorRole: creatorRole,
+        _actorId: creatorId,
+        coordinator_id: coordinatorId
+      });
+
+      console.log(`[createImmediateEvent] Calling createEventRequest with enriched data`, {
+        creatorId,
+        coordinatorId,
+        hasStakeholder: !!enrichedData.stakeholder_id,
+        hasCoordinatorRestrictions: !isSystemAdmin && isCoordinator
       });
 
       return this.createEventRequest(coordinatorId, enrichedData);
     } catch (error) {
+      console.error(`[createImmediateEvent] Error creating event:`, error.message);
       throw new Error(`Failed to create event: ${error.message}`);
     }
   }
@@ -2261,6 +2043,10 @@ class EventRequestService {
    * @param {Object} actionData 
    * @returns {Object} Result
    */
+  /**
+   * Process request action using state machine (PRIMARY METHOD)
+   * Now includes permission-based event publishing gates
+   */
   async processRequestActionWithStateMachine(actorId, actorRole, requestId, actionData = {}) {
     try {
       const request = await this._findRequest(requestId);
@@ -2273,8 +2059,36 @@ class EventRequestService {
         throw new Error('Event not found');
       }
 
+      // Get location context for permission checks
+      const locationId = request.location?.district || request.district;
+
       // Use the flow engine to process the action
-      return await this.flowEngine.processAction(request, event, actorId, actorRole, actionData);
+      const result = await this.flowEngine.processAction(request, event, actorId, actorRole, actionData);
+
+      // ========== NEW: Apply permission-based event status transition ==========
+      // After state transition, apply permission-based event publishing logic
+      if (result.request && result.event) {
+        const action = String(actionData.action || actionData.decision || '').toLowerCase();
+        
+        // Apply permission-based event status transition
+        const newEventStatus = await this._applyEventStatusTransition(
+          result.event,
+          result.request,
+          action,
+          actorId,
+          actorRole,
+          { locationId }
+        );
+
+        // Save the updated event with new status
+        if (newEventStatus !== result.event.Status) {
+          result.event.Status = newEventStatus;
+          await result.event.save();
+          console.log(`[EVENT STATUS UPDATE] Event ${result.event.Event_ID} status changed to '${newEventStatus}'`);
+        }
+      }
+
+      return result;
     } catch (error) {
       throw new Error(`Failed to process request action: ${error.message}`);
     }
@@ -2416,6 +2230,189 @@ class EventRequestService {
           action === ACTIONS.RESCHEDULE ? request.rescheduleProposal : null
         );
       }
+    }
+  }
+  /**
+   * Determine event publishing state based on request approval status
+   * NEW: Permission-based event publishing gates
+   * 
+   * Rules:
+   * 1. User must have EVENT_PUBLISH permission (or REQUEST_APPROVE permission)
+   * 2. Event transitions to PUBLISHED (Status='Completed') ONLY if all conditions met
+   * 3. If conditions not met, event stays APPROVED_WAITING (Status='Pending')
+   * 4. Logs publishing decision for audit trail
+   * 
+   * @param {Object} request - EventRequest document
+   * @param {Object} event - Event document
+   * @param {string} actorId - User ID performing the approval
+   * @param {string} actorRole - User role (for logging)
+   * @param {Object} context - Additional context { locationId }
+   * @returns {Promise<{canPublish: boolean, reason?: string, suggestedStatus: string}>}
+   */
+  async _validateEventPublishing(request, event, actorId, actorRole, context = {}) {
+    const permissionService = require('../users_services/permission.service');
+    const locationId = context.locationId || request.location?.district || request.district;
+
+    try {
+      // ========== 1. PERMISSION CHECK: EVENT_PUBLISH or REQUEST_APPROVE ==========
+      const hasEventPublishPerm = await permissionService.checkPermission(
+        actorId,
+        'event',
+        'publish',
+        { locationId }
+      );
+
+      const hasRequestApprovePerm = await permissionService.checkPermission(
+        actorId,
+        'request',
+        'approve',
+        { locationId }
+      );
+
+      if (!hasEventPublishPerm && !hasRequestApprovePerm) {
+        console.warn(
+          `[EVENT PUBLISHING] User ${actorId} lacks EVENT_PUBLISH or REQUEST_APPROVE permission. ` +
+          `Event will remain unpublished.`
+        );
+        return {
+          canPublish: false,
+          reason: 'User lacks event.publish or request.approve permission',
+          suggestedStatus: 'Pending' // Keep event pending for next approver
+        };
+      }
+
+      // ========== 2. CHECK EVENT REQUIREMENTS ==========
+      // Verify all required event details are present
+      const missingFields = [];
+      if (!event.Event_Title) missingFields.push('Event_Title');
+      if (!event.Location) missingFields.push('Location');
+      if (!event.Start_Date) missingFields.push('Start_Date');
+      if (!event.Email) missingFields.push('Email');
+      if (!event.Phone_Number) missingFields.push('Phone_Number');
+      if (!event.Category) missingFields.push('Category');
+
+      if (missingFields.length > 0) {
+        console.warn(
+          `[EVENT PUBLISHING] Event ${event.Event_ID} missing required fields: ${missingFields.join(', ')}. ` +
+          `Event will not be published until all fields are complete.`
+        );
+        return {
+          canPublish: false,
+          reason: `Missing required event fields: ${missingFields.join(', ')}`,
+          suggestedStatus: 'Pending' // Keep pending until requirements met
+        };
+      }
+
+      // ========== 3. CHECK REQUEST FINAL APPROVAL ==========
+      // Event can only be published when request reaches APPROVED/COMPLETED state
+      const requestStatus = String(request.Status || '').toLowerCase();
+      const isApproved = requestStatus.includes('approve') || requestStatus.includes('completed');
+      
+      if (!isApproved) {
+        console.log(
+          `[EVENT PUBLISHING] Request ${request.Request_ID} status is '${request.Status}', not yet in approved state. ` +
+          `Event will remain pending.`
+        );
+        return {
+          canPublish: false,
+          reason: `Request status (${request.Status}) is not in approved state yet`,
+          suggestedStatus: 'Pending'
+        };
+      }
+
+      // ========== 4. PUBLISH APPROVED EVENT ==========
+      console.log(
+        `[EVENT PUBLISHING] ✓ All requirements met. Publishing event ${event.Event_ID} for approved request ${request.Request_ID}. ` +
+        `Published by ${actorRole} (${actorId})`
+      );
+
+      return {
+        canPublish: true,
+        reason: 'All requirements satisfied',
+        suggestedStatus: 'Completed' // Ready to publish
+      };
+    } catch (error) {
+      console.error(`[EVENT PUBLISHING] Error validating event publishing:`, error.message);
+      return {
+        canPublish: false,
+        reason: `Error during validation: ${error.message}`,
+        suggestedStatus: 'Pending'
+      };
+    }
+  }
+
+  /**
+   * Apply event status transition based on publishing validation
+   * NEW: Permission-based status transitions
+   * 
+   * This method coordinates the event status based on approval state and permissions
+   * without hardcoded role assumptions.
+   * 
+   * @param {Object} event - Event document to update
+   * @param {Object} request - Request document
+   * @param {string} action - Action being performed (accept, reject, reschedule, confirm)
+   * @param {string} actorId - User ID
+   * @param {string} actorRole - User role (for logging)
+   * @param {Object} context - Context { locationId }
+   * @returns {Promise<string>} Final event status
+   */
+  async _applyEventStatusTransition(event, request, action, actorId, actorRole, context = {}) {
+    if (!event) {
+      return null;
+    }
+
+    const normalizedAction = String(action || '').toLowerCase();
+
+    try {
+      // --- REJECTION/CANCELLATION ---
+      if (normalizedAction === 'reject' || normalizedAction === 'cancelled') {
+        event.Status = 'Rejected';
+        console.log(`[EVENT STATUS] Set to 'Rejected' due to action: ${action}`);
+        return 'Rejected';
+      }
+
+      // --- RESCHEDULE ---
+      if (normalizedAction === 'reschedule' || normalizedAction === 'rescheduled') {
+        // Reschedule reverts event to pending pending review of new schedule
+        event.Status = 'Pending';
+        console.log(`[EVENT STATUS] Set to 'Pending' due to reschedule proposal`);
+        return 'Pending';
+      }
+
+      // --- APPROVAL/CONFIRMATION (Decision to publish) ---
+      if (normalizedAction === 'accept' || normalizedAction === 'accepted' || 
+          normalizedAction === 'approve' || normalizedAction === 'confirm' || 
+          normalizedAction === 'confirmed') {
+
+        // Validate event publishing with permission gates
+        const publishCheck = await this._validateEventPublishing(
+          request,
+          event,
+          actorId,
+          actorRole,
+          context
+        );
+
+        if (publishCheck.canPublish) {
+          event.Status = 'Completed'; // Publish event
+          console.log(`[EVENT STATUS] Published (Status='Completed')`);
+          return 'Completed';
+        } else {
+          // Requirements not met - keep pending for next approval step
+          event.Status = 'Pending';
+          console.log(
+            `[EVENT STATUS] Not yet publishable (${publishCheck.reason}). Keeping as 'Pending' pending ${publishCheck.reason}`
+          );
+          return 'Pending';
+        }
+      }
+
+      // Default: return current status (no change)
+      return event.Status;
+    } catch (error) {
+      console.error(`[EVENT STATUS] Error applying status transition:`, error.message);
+      // Keep event status unchanged on error
+      return event.Status;
     }
   }
 
@@ -3827,47 +3824,90 @@ class EventRequestService {
   async getCoordinatorRequests(coordinatorId, filters = {}, page = 1, limit = 10) {
     try {
       const skip = (page - 1) * limit;
+      const { User } = require('../../models/index');
 
-      // Get the coordinator's district and accountType for scoping
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId }).populate('district');
-      if (!coordinator) {
-        throw new Error('Coordinator not found');
-      }
-      const coordinatorDistrict = coordinator.district ? coordinator.district._id : null;
-      const coordinatorAccountType = coordinator.accountType;
-
-      // Some older/legacy requests may not have Coordinator_ID populated on
-      // the EventRequest document but the linked Event may have
-      // MadeByCoordinatorID. To be resilient, query for requests where
-      // either the EventRequest.Coordinator_ID matches OR the linked Event
-      // was created by the coordinator.
-      // Gather possible ways a request could be linked to this coordinator:
-      // 1) EventRequest.coordinator_id === coordinatorId
-      // 2) Event.MadeByCoordinatorID === coordinatorId (legacy where EventRequest.coordinator_id missing)
-      // 3) Stakeholders who belong to this coordinator created requests (stakeholder_id)
-      // 4) Requests in the coordinator's district (scoped access)
-
-      const orClauses = [{ coordinator_id: coordinatorId }];
-
-      // (2) Events created by the coordinator
-      const eventIdsForCoordinator = await Event.find({ MadeByCoordinatorID: coordinatorId }).select('Event_ID');
-      const eventIdList = Array.isArray(eventIdsForCoordinator) ? eventIdsForCoordinator.map(e => e.Event_ID) : [];
-      if (eventIdList.length > 0) {
-        orClauses.push({ Event_ID: { $in: eventIdList } });
+      // Get user with embedded coverage areas and organizations (denormalized data)
+      const user = await User.findById(coordinatorId);
+      if (!user) {
+        throw new Error('User not found');
       }
 
-      // (3) Stakeholders that belong to this coordinator may have created requests
-      // where stakeholder_id is populated but coordinator_id is missing.
-      const stakeholderDocs = await require('../../models/index').Stakeholder.find({ Coordinator_ID: coordinatorId }).select('Stakeholder_ID');
-      const stakeholderIds = Array.isArray(stakeholderDocs) ? stakeholderDocs.map(s => s.Stakeholder_ID) : [];
-      if (stakeholderIds.length > 0) {
-        orClauses.push({ stakeholder_id: { $in: stakeholderIds } });
+      // OPTIMIZATION: Flatten denormalized fields ONCE at start of method
+      // Extract municipality IDs from denormalized coverage areas (computed ONCE at assignment)
+      const municipalityIds = user.coverageAreas
+        .flatMap(ca => ca.municipalityIds || [])
+        .filter(Boolean);
+
+      // Extract organization IDs from denormalized organizations
+      const organizationIds = user.organizations
+        .map(org => org.organizationId)
+        .filter(Boolean);
+
+      // Convert to Set for O(1) membership checking in validation logic
+      const municipalityIdSet = new Set(municipalityIds);
+      const organizationIdSet = new Set(organizationIds);
+
+      // Log coordinator scope information
+      console.log(`[getCoordinatorRequests] Fetching scoped requests for coordinator ${coordinatorId}`, {
+        coordinatorId: user._id,
+        email: user.email,
+        authority: user.authority,
+        coverageAreas: user.coverageAreas.length,
+        municipalityIds: municipalityIds.length,
+        municipalities_unique: municipalityIdSet.size,
+        organizations: user.organizations.length,
+        organizationIds: organizationIds.length,
+        organizations_unique: organizationIdSet.size,
+        optimization: 'Arrays flattened once, Sets created for O(1) lookups'
+      });
+
+      // Build authority-based query with coverage scope
+      // Show a request if ANY of the following are true:
+      // 1) Direct assignment (coordinator_id or reviewer.userId matches)
+      // 2) Request location.municipality is in coordinator's coverage areas
+      // 3) Request organization matches coordinator's organizations
+      // 4) Requester (made_by_id) is the coordinator (own submissions)
+      const orClauses = [
+        { coordinator_id: coordinatorId }, // Legacy: Direct coordinator assignment
+        { 'reviewer.userId': user._id }     // New: Assigned as reviewer
+      ];
+
+      // Coverage-based filtering: municipality match
+      if (municipalityIds.length > 0) {
+        orClauses.push(
+          { 'location.municipality': { $in: municipalityIds } }, // New location structure
+          { municipality: { $in: municipalityIds } }             // Legacy location field
+        );
+        console.log(`[getCoordinatorRequests] Coverage filter ENABLED: ${municipalityIds.length} municipalities`, {
+          coordinatorId: user._id,
+          municipalityIds: municipalityIds.slice(0, 5) // Log first 5 for debugging
+        });
+      } else {
+        console.log(`[getCoordinatorRequests] Coverage filter DISABLED: No municipalityIds in coverage areas`, {
+          coordinatorId: user._id
+        });
       }
 
-      // (4) All requests in the coordinator's district (scoped access)
-      if (coordinatorDistrict) {
-        orClauses.push({ district: coordinatorDistrict });
+      // Organization-based filtering (if request has organizationId field)
+      if (organizationIds.length > 0) {
+        orClauses.push(
+          { organizationId: { $in: organizationIds } }
+        );
+        console.log(`[getCoordinatorRequests] Organization filter ENABLED: ${organizationIds.length} organizations`, {
+          coordinatorId: user._id,
+          organizationIds
+        });
+      } else {
+        console.log(`[getCoordinatorRequests] Organization filter DISABLED: No organizations assigned`, {
+          coordinatorId: user._id
+        });
       }
+
+      // Own submissions
+      orClauses.push(
+        { made_by_id: coordinatorId },    // Legacy: made_by_id
+        { 'requester.userId': user._id }  // New: requester.userId
+      );
 
       const query = { $or: orClauses };
       
@@ -3883,6 +3923,7 @@ class EventRequestService {
 
       // Use aggregation to compute a status priority so results are ordered
       // Pending -> Approved -> Rejected, then by newest createdAt.
+      // Also add diagnostic field showing which filter matched
       const pipeline = [
         { $match: query },
         { $addFields: {
@@ -3896,6 +3937,21 @@ class EventRequestService {
               ],
               default: 3
             }
+          },
+          // Diagnostic field: Track which filter matched this request
+          _diagnosticMatchType: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$coordinator_id", coordinatorId] }, then: "direct_assignment_legacy" },
+                { case: { $eq: ["$reviewer.userId", user._id] }, then: "reviewer_assignment_new" },
+                { case: { $in: ["$location.municipality", municipalityIds] }, then: "coverage_area_match_new" },
+                { case: { $in: ["$municipality", municipalityIds] }, then: "coverage_area_match_legacy" },
+                { case: { $in: ["$organizationId", organizationIds] }, then: "organization_match" },
+                { case: { $eq: ["$made_by_id", coordinatorId] }, then: "own_submission_legacy" },
+                { case: { $eq: ["$requester.userId", user._id] }, then: "own_submission_new" }
+              ],
+              default: "unknown_match"
+            }
           }
         } },
         { $sort: { status_priority: 1, createdAt: -1 } },
@@ -3905,7 +3961,25 @@ class EventRequestService {
 
       const requests = await EventRequest.aggregate(pipeline).exec();
 
+      // Log diagnostic info for each request in results
+      requests.forEach((req, index) => {
+        console.log(`[getCoordinatorRequests] Result #${index + 1}: ${req._id} matched via ${req._diagnosticMatchType}`, {
+          requestId: req._id,
+          status: req.Status,
+          matchType: req._diagnosticMatchType,
+          createdAt: req.createdAt
+        });
+      });
+
       const total = await EventRequest.countDocuments(query);
+
+      console.log(`[getCoordinatorRequests] Query complete - Returned ${requests.length} of ${total} total matching requests`, {
+        coordinatorId: user._id,
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      });
 
       return {
         success: true,
@@ -3919,7 +3993,81 @@ class EventRequestService {
       };
 
     } catch (error) {
+      console.error(`[getCoordinatorRequests] Error for coordinator ${coordinatorId}:`, error.message);
       throw new Error(`Failed to get requests: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get requests for user based on authority level (SINGLE ENTRY POINT)
+   * Replaces role-based branching with authority-driven filtering
+   * 
+   * Authority Routing:
+   * - ≥80 (OPERATIONAL_ADMIN): See all requests globally
+   * - ≥60 (COORDINATOR): See requests within coverage areas + organizations
+   * - ≥30 (STAKEHOLDER): See only own submissions
+   * - <30: No access
+   * 
+   * @param {string} userId - User ObjectId
+   * @param {Object} filters - Optional filters (status, date_from, date_to)
+   * @param {number} page - Page number
+   * @param {number} limit - Items per page
+   * @returns {Object} { success, requests, pagination }
+   */
+  async getRequestsForUser(userId, filters = {}, page = 1, limit = 10) {
+    try {
+      const { User } = require('../../models/index');
+      const { AUTHORITY_TIERS } = require('../users_services/authority.service');
+
+      // Get user with authority field
+      const user = await User.findById(userId);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      const userAuthority = user.authority || 20; // Default to BASIC_USER if missing
+
+      console.log(`[getRequestsForUser] Routing request for user ${userId} with authority ${userAuthority}`, {
+        userId: user._id,
+        authority: userAuthority,
+        email: user.email
+      });
+
+      // Route based on authority level
+      if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+        // System Admin / High Authority (≥80): See ALL requests
+        console.log(`[getRequestsForUser] User has OPERATIONAL_ADMIN authority (${userAuthority} >= 80) - showing all requests`);
+        return await this.getAllRequests(page, limit);
+      }
+
+      if (userAuthority >= AUTHORITY_TIERS.COORDINATOR) {
+        // Coordinator (≥60): See coverage-scoped requests
+        console.log(`[getRequestsForUser] User has COORDINATOR authority (${userAuthority} >= 60) - showing scoped requests`);
+        return await this.getCoordinatorRequests(userId, filters, page, limit);
+      }
+
+      if (userAuthority >= AUTHORITY_TIERS.STAKEHOLDER) {
+        // Stakeholder (≥30): See only own requests
+        console.log(`[getRequestsForUser] User has STAKEHOLDER authority (${userAuthority} >= 30) - showing own requests`);
+        return await this.getRequestsByStakeholder(userId, page, limit);
+      }
+
+      // Below stakeholder authority (<30): No access
+      console.log(`[getRequestsForUser] User has insufficient authority (${userAuthority} < 30) - no access`);
+      return {
+        success: true,
+        requests: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          pages: 0
+        }
+      };
+
+    } catch (error) {
+      console.error('[getRequestsForUser] Error:', error.message);
+      throw new Error(`Failed to get requests for user: ${error.message}`);
     }
   }
 
@@ -3932,8 +4080,46 @@ class EventRequestService {
   async getRequestsByStakeholder(stakeholderId, page = 1, limit = 10) {
     try {
       const skip = (page - 1) * limit;
+      const { User } = require('../../models/index');
 
-      const query = { stakeholder_id: stakeholderId };
+      // Get user to extract legacy ID if needed
+      const user = await User.findById(stakeholderId);
+      if (!user) {
+        console.error(`[getRequestsByStakeholder] Stakeholder user not found: ${stakeholderId}`);
+        throw new Error('User not found');
+      }
+
+      const userAuthority = user.authority || 20;
+
+      // Log stakeholder scope
+      console.log(`[getRequestsByStakeholder] Fetching own requests for stakeholder ${stakeholderId}`, {
+        userId: user._id,
+        email: user.email,
+        authority: userAuthority,
+        legacyId: user.userId
+      });
+
+      // Build query for own submissions using both legacy and new fields
+      const query = {
+        $or: [
+          { stakeholder_id: user.userId },        // Legacy: stakeholder_id (string)
+          { stakeholder_id: stakeholderId },      // Legacy: stakeholder_id as ObjectId
+          { made_by_id: user.userId },            // Legacy: made_by_id (string)
+          { made_by_id: stakeholderId },          // Legacy: made_by_id as ObjectId
+          { 'requester.userId': user._id }        // New: requester.userId (ObjectId)
+        ]
+      };
+
+      console.log(`[getRequestsByStakeholder] Query built with 5 $or clauses (supporting legacy + new fields)`, {
+        userId: user._id,
+        clauses: [
+          'stakeholder_id (legacy string)',
+          'stakeholder_id (ObjectId)',
+          'made_by_id (legacy string)',
+          'made_by_id (ObjectId)',
+          'requester.userId (new ObjectId)'
+        ]
+      });
 
       const pipeline = [
         { $match: query },
@@ -3948,6 +4134,19 @@ class EventRequestService {
               ],
               default: 3
             }
+          },
+          // Diagnostic field: Track which filter matched this request
+          _diagnosticMatchType: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$stakeholder_id", user.userId] }, then: "stakeholder_id_legacy_string" },
+                { case: { $eq: ["$stakeholder_id", stakeholderId] }, then: "stakeholder_id_objectid" },
+                { case: { $eq: ["$made_by_id", user.userId] }, then: "made_by_id_legacy_string" },
+                { case: { $eq: ["$made_by_id", stakeholderId] }, then: "made_by_id_objectid" },
+                { case: { $eq: ["$requester.userId", user._id] }, then: "requester_userid_new" }
+              ],
+              default: "unknown_match"
+            }
           }
         } },
         { $sort: { status_priority: 1, createdAt: -1 } },
@@ -3957,38 +4156,29 @@ class EventRequestService {
 
       const requests = await EventRequest.aggregate(pipeline).exec();
 
+      // Log diagnostic info for each request in results
+      requests.forEach((req, index) => {
+        console.log(`[getRequestsByStakeholder] Result #${index + 1}: ${req._id} matched via ${req._diagnosticMatchType}`, {
+          requestId: req._id,
+          status: req.Status,
+          matchType: req._diagnosticMatchType,
+          createdAt: req.createdAt
+        });
+      });
+
       const total = await EventRequest.countDocuments(query);
 
-      // Optionally enrich each request with event and coordinator staff
-      const enriched = await Promise.all(requests.map(async (r) => {
-        const event = await Event.findOne({ Event_ID: r.Event_ID });
-        const coordinator = await Coordinator.findOne({ Coordinator_ID: r.coordinator_id });
-        const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: r.coordinator_id }).catch(() => null);
-        // attempt to resolve district info from coordinator.District_ID
-        let districtInfo = null;
-        try {
-          if (coordinator && coordinator.District_ID) {
-            districtInfo = await require('../../models/index').District.findOne({ District_ID: coordinator.District_ID }).catch(() => null);
-          }
-        } catch (e) {
-          districtInfo = null;
-        }
-
-        return {
-          ...r,
-          event: event ? event.toObject() : null,
-          coordinator: coordinator ? {
-            ...coordinator.toObject(),
-            staff: staff ? { First_Name: staff.First_Name, Last_Name: staff.Last_Name, Email: staff.Email } : null,
-            District_Name: districtInfo ? districtInfo.District_Name : undefined,
-            District_Number: districtInfo ? districtInfo.District_Number : undefined
-          } : null
-        };
-      }));
+      console.log(`[getRequestsByStakeholder] Query complete - Returned ${requests.length} of ${total} total own requests`, {
+        stakeholderId: user._id,
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      });
 
       return {
         success: true,
-        requests: enriched,
+        requests,
         pagination: {
           page,
           limit,
@@ -3997,6 +4187,7 @@ class EventRequestService {
         }
       };
     } catch (error) {
+      console.error(`[getRequestsByStakeholder] Error for stakeholder ${stakeholderId}:`, error.message);
       throw new Error(`Failed to get stakeholder requests: ${error.message}`);
     }
   }

@@ -360,7 +360,11 @@ class RequestFlowEngine {
         eventId: request.Event_ID,
         actor: actorSnapshot,
         outcome: outcome,
-        notes: note || null
+        notes: note || null,
+        // NEW: Audit trail fields (TODO: pass from service layer for full context)
+        permissionUsed: action === ACTIONS.CONFIRM ? 'request.confirm' : null,
+        reviewerAuthority: null, // TODO: Get from service layer
+        requesterAuthority: null  // TODO: Get from service layer
       });
     }
 
@@ -425,7 +429,11 @@ class RequestFlowEngine {
       newStatus,
       actor: actorSnapshot || null,
       note: note || null,
-      metadata: {}
+      metadata: {},
+      // NEW: Audit trail fields (TODO: pass from service layer for full context)
+      permissionUsed: null, // TODO: Get from service layer
+      reviewerAuthority: null, // TODO: Get from service layer
+      requesterAuthority: null  // TODO: Get from service layer
     });
   }
 
@@ -446,7 +454,11 @@ class RequestFlowEngine {
       notes: decisionPayload.notes,
       previousStatus: request.Status,
       newStatus: nextStatus,
-      metadata: decisionPayload.payload || {}
+      metadata: decisionPayload.payload || {},
+      // NEW: Audit trail fields
+      permissionUsed: 'request.review', // Review decision uses request.review permission
+      reviewerAuthority: null, // TODO: Get from service layer
+      requesterAuthority: null  // TODO: Get from service layer
     });
   }
 

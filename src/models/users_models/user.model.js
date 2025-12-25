@@ -101,6 +101,18 @@ const userSchema = new mongoose.Schema({
     min: 20,
     max: 100
   },
+
+  // AUTHORITY AUDIT TRAIL
+  authority_changed_at: {
+    type: Date,
+    required: false
+  },
+
+  authority_changed_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false
+  },
   
   // ROLES: Embedded array of role references with authority
   roles: [{
@@ -302,6 +314,16 @@ userSchema.statics.findByLegacyId = function(userId) {
 userSchema.pre('save', function(next) {
   if (this.isModified('email')) {
     this.email = this.email.toLowerCase();
+  }
+  next();
+});
+
+// Pre-save hook to track authority changes
+userSchema.pre('save', function(next) {
+  if (this.isModified('authority')) {
+    this.authority_changed_at = new Date();
+    // authority_changed_by should be set by the controller/service calling save()
+    // If not set, leave as is (allows tracking of system-level updates)
   }
   next();
 });

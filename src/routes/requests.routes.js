@@ -158,7 +158,52 @@ router.post('/requests/:requestId/stakeholder-action', authenticate, requireAnyP
   }
 });
 
+// ==================== PHASE 2: UNIFIED ENDPOINTS ====================
 
+/**
+ * @route   POST /api/requests/:requestId/review-decision
+ * @desc    UNIFIED review endpoint (consolidates coordinator/stakeholder accept/reject/reschedule)
+ * @desc    Validates authority hierarchy and permissions
+ * @access  Private (requires request.review permission)
+ * @body    { action: 'accept'|'reject'|'reschedule', notes?, proposedDate?, proposedStartTime? }
+ */
+router.post('/requests/:requestId/review-decision', authenticate, requirePermission('request', 'review'), async (req, res, next) => {
+  try {
+    await eventRequestController.reviewDecision(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/requests/:requestId/confirm
+ * @desc    UNIFIED confirmation endpoint (requester confirms reviewer's decision)
+ * @desc    Handles both REVIEW_ACCEPTED and REVIEW_RESCHEDULED states
+ * @access  Private (requires request.confirm permission or requester identity)
+ * @body    { action: 'confirm'|'decline'|'revise', notes? }
+ */
+router.post('/requests/:requestId/confirm', authenticate, requirePermission('request', 'confirm'), async (req, res, next) => {
+  try {
+    await eventRequestController.confirmDecision(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/requests/:requestId/assign-coordinator
+ * @desc    Admin endpoint to list/assign coordinators in same jurisdiction
+ * @desc    Auto-assigns if only one match, returns list if multiple
+ * @access  Private (admin only - requires authority >= 100)
+ * @body    { coordinatorId? } - optional to auto-select from list
+ */
+router.post('/requests/:requestId/assign-coordinator', authenticate, requirePermission('request', 'assign_coordinator'), async (req, res, next) => {
+  try {
+    await eventRequestController.assignCoordinator(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * @route   GET /api/requests/check-overlap
