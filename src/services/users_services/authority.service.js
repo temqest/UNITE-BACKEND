@@ -350,34 +350,12 @@ class AuthorityService {
       
       // Batch get authorities (use persisted fields for performance)
       const { User } = require('../../models/index');
-      const users = await User.find({ _id: { $in: userIds } }).select('_id authority isSystemAdmin email firstName lastName');
+      const users = await User.find({ _id: { $in: userIds } });
       const userAuthorityMap = new Map();
-      
-      // Diagnostic: log what we're getting from database
-      console.log('[DIAG] filterUsersByAuthority - Users fetched from DB:', users.map(u => ({
-        userId: u._id.toString(),
-        email: u.email,
-        name: `${u.firstName || ''} ${u.lastName || ''}`.trim(),
-        authority: u.authority,
-        isSystemAdmin: u.isSystemAdmin,
-        authorityType: typeof u.authority
-      })));
-      
       users.forEach(u => {
-        // Use persisted authority field if available, otherwise check isSystemAdmin, otherwise default to 20
-        let authority = u.authority;
-        if (authority === null || authority === undefined || authority === 20) {
-          // If authority is missing or default, check isSystemAdmin
-          if (u.isSystemAdmin) {
-            authority = 100;
-          } else {
-            authority = 20; // Default to BASIC_USER
-          }
-        }
-        userAuthorityMap.set(u._id.toString(), authority);
+        // FIXED: Correct operator precedence - use authority if present, otherwise check isSystemAdmin
+        userAuthorityMap.set(u._id.toString(), u.authority || (u.isSystemAdmin ? 100 : 20));
       });
-      
-      console.log('[DIAG] filterUsersByAuthority - Authority map:', Array.from(userAuthorityMap.entries()).map(([id, auth]) => ({ userId: id, authority: auth })));
       
       // Fill in missing users with calculated authority
       const authorities = await Promise.all(

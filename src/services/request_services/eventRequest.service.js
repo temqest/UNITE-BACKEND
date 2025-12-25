@@ -187,6 +187,28 @@ class EventRequestService {
   }
 
   /**
+   * Convert normalized role code to Event model enum format
+   * Event model expects: 'SystemAdmin', 'Coordinator', 'Stakeholder'
+   * @param {string} normalizedRole - Normalized role code (e.g., 'coordinator', 'system-admin', 'stakeholder')
+   * @returns {string} Event model enum value
+   */
+  _roleToEventEnum(normalizedRole) {
+    if (!normalizedRole) return 'Coordinator'; // Default fallback
+    const role = String(normalizedRole).toLowerCase();
+    if (role === 'system-admin' || role === 'systemadmin' || role === 'admin') {
+      return 'SystemAdmin';
+    }
+    if (role === 'coordinator') {
+      return 'Coordinator';
+    }
+    if (role === 'stakeholder') {
+      return 'Stakeholder';
+    }
+    // Fallback: try to capitalize first letter
+    return normalizedRole.charAt(0).toUpperCase() + normalizedRole.slice(1);
+  }
+
+  /**
    * NEW: Convert legacy role string to authority tier
    * Useful for audit trail generation from actor snapshots that only have role string
    * @param {string} role - Legacy role string
@@ -386,9 +408,14 @@ class EventRequestService {
       }
 
       if (!targetCoordinatorId && resolvedDistrict) {
-        const coordinator = await Coordinator.findOne({ district: resolvedDistrict }).lean().exec();
-        if (coordinator) {
-          targetCoordinatorId = coordinator.Coordinator_ID;
+        // Find coordinator by district in coverageAreas
+        const coordinators = await User.find({
+          authority: { $gte: 60 },
+          'coverageAreas.districtIds': resolvedDistrict,
+          isActive: true
+        }).limit(1).lean().exec();
+        if (coordinators && coordinators.length > 0) {
+          targetCoordinatorId = coordinators[0]._id.toString();
         }
       }
 
@@ -1363,13 +1390,22 @@ class EventRequestService {
    */
   async createEventRequest(coordinatorId, eventData) {
     try {
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId });
+      // Use User model instead of legacy Coordinator model
+      const coordinator = await User.findById(coordinatorId);
       if (!coordinator) {
         throw new Error('Coordinator not found');
+      }
+      
+      // Validate that the user is actually a coordinator (authority >= 60)
+      const { AUTHORITY_TIERS } = require('../users_services/authority.service');
+      const coordinatorAuthority = coordinator.authority || 20;
+      if (coordinatorAuthority < AUTHORITY_TIERS.COORDINATOR) {
+        throw new Error('User is not a coordinator');
       }
 
       const excludeRequestId = eventData && (eventData.excludeRequestId || eventData.exclude_request_id || null);
       const normalizedCreatorRole = this._normalizeRole(eventData?._actorRole || eventData?.made_by_role || 'coordinator');
+      const eventMadeByRole = this._roleToEventEnum(normalizedCreatorRole); // Convert to Event model enum format
       const creatorId = eventData?._actorId || eventData?.made_by_id || coordinatorId;
 
       const validation = await this.validateSchedulingRules(
@@ -1445,20 +1481,45 @@ class EventRequestService {
         coordinator_id: coordinatorId,
         stakeholder_id: normalizedStakeholderId || undefined,
         made_by_id: creatorId,
-        made_by_role: normalizedCreatorRole,
+        made_by_role: eventMadeByRole, // Use Event model enum format
         Category: categoryType,
         Status: 'Pending'
       });
       await event.save();
 
       const creatorSnapshot = await this._buildActorSnapshot(normalizedCreatorRole, creatorId);
+      
+      // Extract province/district from eventData or coordinator's coverageAreas if needed
+      let resolvedProvince = eventData.province || null;
+      let resolvedDistrict = eventData.district || null;
+      
+      // If not in eventData, try to extract from coordinator's primary coverage area
+      if (!resolvedProvince || !resolvedDistrict) {
+        const primaryCoverageArea = coordinator.coverageAreas?.find(ca => ca.isPrimary) || coordinator.coverageAreas?.[0];
+        if (primaryCoverageArea?.districtIds?.length > 0) {
+          // Get district location to find its province
+          const { Location } = require('../../models/index');
+          const district = await Location.findById(primaryCoverageArea.districtIds[0]).catch(() => null);
+          if (district) {
+            resolvedDistrict = district._id;
+            // Get province from district's parent
+            if (district.parent) {
+              const province = await Location.findById(district.parent).catch(() => null);
+              if (province) {
+                resolvedProvince = province._id;
+              }
+            }
+          }
+        }
+      }
+      
       const reviewer = await this._assignReviewerContext({
         creatorRole: normalizedCreatorRole,
         creatorId, // Pass creatorId for authority hierarchy validation
         coordinatorId,
         stakeholderId: normalizedStakeholderId,
-        province: eventData.province || coordinator.province,
-        district: eventData.district || coordinator.district,
+        province: resolvedProvince,
+        district: resolvedDistrict,
         requestType: 'eventRequest'
       });
 
@@ -1498,13 +1559,13 @@ class EventRequestService {
         coordinator_id: coordinatorId,
         stakeholder_id: normalizedStakeholderId || undefined,
         made_by_id: creatorId,
-        made_by_role: normalizedCreatorRole,
+        made_by_role: eventMadeByRole, // Use Event model enum format
         creator: creatorSnapshot,
         reviewer,
         stakeholderPresent,
-        province: eventData.province || coordinator.province || null,
-        district: eventData.district || coordinator.district || null,
-        municipality: eventData.municipality || coordinator.municipality || null,
+        province: resolvedProvince || null,
+        district: resolvedDistrict || null,
+        municipality: eventData.municipality || null,
         Category: categoryType,
         Status: REQUEST_STATUSES.PENDING_REVIEW,
         statusHistory: [{
@@ -1729,8 +1790,9 @@ class EventRequestService {
         }
       }
 
-      // Get coordinator info
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: request.coordinator_id });
+      // Get coordinator info (using User model)
+      const coordinator = await User.findById(request.coordinator_id) || 
+                          await User.findByLegacyId(request.coordinator_id);
       const staff = await require('../../models/index').BloodbankStaff.findOne({ ID: request.coordinator_id });
 
       // Get stakeholder info if the request was made by a stakeholder
@@ -3460,14 +3522,19 @@ class EventRequestService {
   async assignStaffToEvent(adminId, eventId, staffMembers) {
     try {
       // Verify admin or coordinator - both can assign staff
-      const SystemAdmin = require('../../models/index').SystemAdmin;
-      const Coordinator = require('../../models/index').Coordinator;
+      // Use User model to check authority
+      const user = await User.findById(adminId) || await User.findByLegacyId(adminId);
+      if (!user) {
+        throw new Error('User not found. Only admins and coordinators can assign staff.');
+      }
       
-      const admin = await SystemAdmin.findOne({ Admin_ID: adminId });
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: adminId });
+      const { AUTHORITY_TIERS } = require('../users_services/authority.service');
+      const userAuthority = user.authority || 20;
+      const isAdmin = userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN; // >= 80
+      const isCoordinator = userAuthority >= AUTHORITY_TIERS.COORDINATOR; // >= 60
       
-      if (!admin && !coordinator) {
-        throw new Error('Admin or Coordinator not found. Only admins and coordinators can assign staff.');
+      if (!isAdmin && !isCoordinator) {
+        throw new Error('User is not authorized. Only admins and coordinators can assign staff.');
       }
 
       // Verify event exists

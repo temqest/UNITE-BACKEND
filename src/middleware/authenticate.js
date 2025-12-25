@@ -27,6 +27,18 @@ function parseCookieString(cookieHeader = '') {
  */
 module.exports = function authenticate(req, res, next) {
   try {
+    // Log coordinator endpoint requests for diagnostics
+    const isCoordinatorEndpoint = req.path && req.path.includes('/coordinator');
+    if (isCoordinatorEndpoint) {
+      console.log('[DIAG] Authenticate middleware - Coordinator endpoint:', {
+        path: req.path,
+        method: req.method,
+        hasAuthHeader: !!req.headers.authorization,
+        hasCookie: !!req.headers.cookie,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.substring(7) : null;
 
@@ -42,6 +54,14 @@ module.exports = function authenticate(req, res, next) {
         role: decoded.role || null,
         isSystemAdmin: decoded.isSystemAdmin || false
       };
+      
+      if (isCoordinatorEndpoint) {
+        console.log('[DIAG] Authenticate middleware - Token validated:', {
+          userId: req.user.id,
+          userEmail: req.user.email,
+          path: req.path
+        });
+      }
       
       // Note: Role and permissions should be fetched from database when needed
       // via permissionService.getUserRoles() and permissionService.getUserPermissions()
@@ -68,14 +88,34 @@ module.exports = function authenticate(req, res, next) {
           };
           
           if (req.user.id && req.user.email) {
+            if (isCoordinatorEndpoint) {
+              console.log('[DIAG] Authenticate middleware - Cookie validated:', {
+                userId: req.user.id,
+                userEmail: req.user.email,
+                path: req.path
+              });
+            }
             return next();
           }
         } catch (e) {
           // malformed cookie; fall through to unauthorized
+          if (isCoordinatorEndpoint) {
+            console.log('[DIAG] Authenticate middleware - Cookie parse failed:', {
+              error: e.message,
+              path: req.path
+            });
+          }
         }
       }
     }
 
+    if (isCoordinatorEndpoint) {
+      console.log('[DIAG] Authenticate middleware - Unauthorized (no token/cookie):', {
+        path: req.path,
+        hasAuthHeader: !!req.headers.authorization,
+        hasCookie: !!req.headers.cookie
+      });
+    }
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Invalid or expired token' });

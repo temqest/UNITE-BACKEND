@@ -18,6 +18,20 @@ function requirePermission(resource, action) {
         });
       }
 
+      // Bypass permission check for SysAdmin (authority >= 80)
+      const authorityService = require('../services/users_services/authority.service');
+      const userAuthority = await authorityService.calculateUserAuthority(userId);
+      
+      if (userAuthority >= 80) {
+        console.log('[requirePermission] SysAdmin bypass:', {
+          userId: userId.toString(),
+          authority: userAuthority,
+          resource,
+          action
+        });
+        return next();
+      }
+
       // Extract locationId from request (body, params, or query)
       const locationId = req.body?.locationId || 
                         req.params?.locationId || 
@@ -35,6 +49,13 @@ function requirePermission(resource, action) {
       );
 
       if (!hasPermission) {
+        console.log('[requirePermission] Permission denied:', {
+          userId: userId.toString(),
+          authority: userAuthority,
+          resource,
+          action,
+          locationId: locationId?.toString() || null
+        });
         return res.status(403).json({ 
           success: false, 
           message: `Permission denied: ${resource}.${action}`,
@@ -44,7 +65,7 @@ function requirePermission(resource, action) {
 
       next();
     } catch (error) {
-      console.error('Permission check error:', error);
+      console.error('[requirePermission] Permission check error:', error);
       return res.status(500).json({ 
         success: false, 
         message: 'Error checking permissions' 
@@ -70,6 +91,19 @@ function requireAnyPermission(permissions) {
         });
       }
 
+      // Bypass permission check for SysAdmin (authority >= 80)
+      const authorityService = require('../services/users_services/authority.service');
+      const userAuthority = await authorityService.calculateUserAuthority(userId);
+      
+      if (userAuthority >= 80) {
+        console.log('[requireAnyPermission] SysAdmin bypass:', {
+          userId: userId.toString(),
+          authority: userAuthority,
+          permissions
+        });
+        return next();
+      }
+
       const locationId = req.body?.locationId || 
                         req.params?.locationId || 
                         req.query?.locationId ||
@@ -91,13 +125,18 @@ function requireAnyPermission(permissions) {
         }
       }
 
+      console.log('[requireAnyPermission] Permission denied:', {
+        userId: userId.toString(),
+        authority: userAuthority,
+        permissions
+      });
       return res.status(403).json({ 
         success: false, 
         message: 'Permission denied: requires one of the following permissions',
         required: permissions
       });
     } catch (error) {
-      console.error('Permission check error:', error);
+      console.error('[requireAnyPermission] Permission check error:', error);
       return res.status(500).json({ 
         success: false, 
         message: 'Error checking permissions' 
@@ -123,6 +162,19 @@ function requireAllPermissions(permissions) {
         });
       }
 
+      // Bypass permission check for SysAdmin (authority >= 80)
+      const authorityService = require('../services/users_services/authority.service');
+      const userAuthority = await authorityService.calculateUserAuthority(userId);
+      
+      if (userAuthority >= 80) {
+        console.log('[requireAllPermissions] SysAdmin bypass:', {
+          userId: userId.toString(),
+          authority: userAuthority,
+          permissions
+        });
+        return next();
+      }
+
       const locationId = req.body?.locationId || 
                         req.params?.locationId || 
                         req.query?.locationId ||
@@ -140,6 +192,11 @@ function requireAllPermissions(permissions) {
         );
         
         if (!hasPermission) {
+          console.log('[requireAllPermissions] Permission denied:', {
+            userId: userId.toString(),
+            authority: userAuthority,
+            missing: { resource: perm.resource, action: perm.action }
+          });
           return res.status(403).json({ 
             success: false, 
             message: `Permission denied: requires ${perm.resource}.${perm.action}`,
@@ -151,7 +208,7 @@ function requireAllPermissions(permissions) {
 
       next();
     } catch (error) {
-      console.error('Permission check error:', error);
+      console.error('[requireAllPermissions] Permission check error:', error);
       return res.status(500).json({ 
         success: false, 
         message: 'Error checking permissions' 

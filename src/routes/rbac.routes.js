@@ -270,12 +270,43 @@ router.get('/permissions/user/:userId/staff-types/:action', authenticate, requir
 /**
  * @route   GET /api/rbac/authority/user/:userId
  * @desc    Get user's authority level
- * @access  Private (requires user.read permission)
+ * @access  Private (requires user.read permission, or self-read allowed)
  */
-router.get('/authority/user/:userId', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+router.get('/authority/user/:userId', authenticate, async (req, res, next) => {
   try {
-    await permissionController.getUserAuthority(req, res);
+    // Allow users to read their own authority without user.read permission
+    const requesterId = req.user?.id || req.user?._id;
+    const targetUserId = req.params.userId;
+    
+    // Normalize both IDs to strings for reliable comparison
+    const requesterIdStr = requesterId ? requesterId.toString() : null;
+    const targetUserIdStr = targetUserId ? targetUserId.toString() : null;
+    
+    if (requesterIdStr && targetUserIdStr && requesterIdStr === targetUserIdStr) {
+      // Self-read: bypass permission check
+      console.log('[getUserAuthority] Self-read bypass:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: true
+      });
+      return await permissionController.getUserAuthority(req, res);
+    }
+    
+    // Log when self-read bypass doesn't match (for debugging)
+    if (requesterIdStr && targetUserIdStr) {
+      console.log('[getUserAuthority] Self-read check failed - requiring permission:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: false,
+        requesterType: typeof requesterId,
+        targetType: typeof targetUserId
+      });
+    }
+    
+    // Otherwise require user.read permission
+    return requirePermission('user', 'read')(req, res, next);
   } catch (error) {
+    console.error('[getUserAuthority] Error in route handler:', error);
     next(error);
   }
 });

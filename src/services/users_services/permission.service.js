@@ -47,16 +47,30 @@ class PermissionService {
       const permissions = await this.aggregatePermissions(userRoles);
 
       // 6. Check if permission exists
-      return permissions.some(p => {
-        // Handle wildcard permissions
+      const hasPermission = permissions.some(p => {
+        // Handle wildcard permissions: *.* grants all permissions
         if (p.resource === '*' && (p.actions.includes('*') || p.actions.includes(action))) {
           return true;
         }
+        // Handle resource wildcard: resource.* grants all actions for that resource
         if (p.resource === resource && (p.actions.includes('*') || p.actions.includes(action))) {
           return true;
         }
         return false;
       });
+
+      // Log permission check for diagnostic purposes
+      if (!hasPermission) {
+        console.log('[checkPermission] Permission denied:', {
+          userId: userId.toString(),
+          resource,
+          action,
+          permissionsFound: permissions.length,
+          hasWildcard: permissions.some(p => p.resource === '*' && p.actions.includes('*'))
+        });
+      }
+
+      return hasPermission;
     } catch (error) {
       console.error('Error checking permission:', error);
       return false;

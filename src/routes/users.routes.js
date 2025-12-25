@@ -90,14 +90,163 @@ router.get('/users/by-capability', authenticate, requirePermission('user', 'read
 });
 
 /**
+ * @route   GET /api/users/:userId/coordinator
+ * @desc    Resolve coordinator(s) for a stakeholder (finds all coordinators who manage this stakeholder)
+ * @access  Private (requires user.read permission, or self-read allowed for stakeholders)
+ * 
+ * NOTE: This route MUST be defined BEFORE /users/:userId to avoid route conflicts.
+ * Express matches routes in order, so more specific routes must come first.
+ */
+// Add middleware to log ALL requests to this route, even before authentication
+// This catches requests even if they fail authentication or other middleware
+router.use('/users/:userId/coordinator', (req, res, next) => {
+  console.log('[DIAG] Coordinator endpoint request intercepted:', {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    path: req.path,
+    baseUrl: req.baseUrl,
+    url: req.url,
+    params: req.params,
+    query: req.query,
+    hasAuthHeader: !!req.headers.authorization,
+    authHeader: req.headers.authorization ? 'Bearer ***' : 'none',
+    userAgent: req.headers['user-agent'],
+    timestamp: new Date().toISOString()
+  });
+  next();
+});
+
+router.get('/users/:userId/coordinator', authenticate, async (req, res, next) => {
+  try {
+    // Log immediately to confirm route is being hit
+    console.log('[resolveCoordinatorForStakeholder] Route hit:', {
+      method: req.method,
+      path: req.path,
+      params: req.params,
+      userId: req.params.userId,
+      hasUser: !!req.user,
+      timestamp: new Date().toISOString()
+    });
+
+    // Allow stakeholders to read their own coordinator assignment without user.read permission
+    const requesterId = req.user?.id || req.user?._id;
+    const targetUserId = req.params.userId;
+    
+    // Normalize both IDs to strings for reliable comparison
+    // Handle both ObjectId and string formats
+    const requesterIdStr = requesterId ? (requesterId.toString ? requesterId.toString() : String(requesterId)) : null;
+    const targetUserIdStr = targetUserId ? (targetUserId.toString ? targetUserId.toString() : String(targetUserId)) : null;
+    
+    console.log('[resolveCoordinatorForStakeholder] Route authorization check:', {
+      requesterId: requesterIdStr,
+      targetUserId: targetUserIdStr,
+      requesterIdType: requesterId ? typeof requesterId : 'null',
+      targetUserIdType: targetUserId ? typeof targetUserId : 'null',
+      hasUser: !!req.user,
+      timestamp: new Date().toISOString()
+    });
+    
+    if (requesterIdStr && targetUserIdStr && requesterIdStr === targetUserIdStr) {
+      // Self-read: bypass permission check
+      console.log('[resolveCoordinatorForStakeholder] Self-read bypass granted:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: true,
+        bypassReason: 'Self-read allowed for stakeholders'
+      });
+      return await userController.resolveCoordinatorForStakeholder(req, res);
+    }
+    
+    // Log when self-read bypass doesn't match (for debugging)
+    if (requesterIdStr && targetUserIdStr) {
+      console.log('[resolveCoordinatorForStakeholder] Self-read check failed - requiring permission:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: false,
+        reason: 'IDs do not match - not a self-read request',
+        willRequirePermission: 'user.read'
+      });
+    } else {
+      console.log('[resolveCoordinatorForStakeholder] Self-read check skipped - missing IDs:', {
+        hasRequesterId: !!requesterIdStr,
+        hasTargetUserId: !!targetUserIdStr,
+        willRequirePermission: 'user.read'
+      });
+    }
+    
+    // Otherwise require user.read permission
+    return requirePermission('user', 'read')(req, res, next);
+  } catch (error) {
+    console.error('[resolveCoordinatorForStakeholder] Error in route handler:', {
+      error: error.message,
+      stack: error.stack,
+      targetUserId: req.params.userId,
+      hasUser: !!req.user
+    });
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/users/:userId/coordinator/diagnostic
+ * @desc    Diagnostic endpoint to check stakeholder data and coordinator resolution
+ * @access  Private (requires authentication)
+ */
+router.get('/users/:userId/coordinator/diagnostic', authenticate, async (req, res, next) => {
+  try {
+    console.log('[DIAG] Diagnostic endpoint called:', {
+      userId: req.params.userId,
+      requesterId: req.user?.id || req.user?._id,
+      timestamp: new Date().toISOString()
+    });
+    await userController.diagnoseCoordinatorResolution(req, res);
+  } catch (error) {
+    console.error('[DIAG] Diagnostic endpoint error:', error);
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/users/:userId
  * @desc    Get user by ID (unified model)
- * @access  Private (requires user.read permission)
+ * @access  Private (requires user.read permission, or self-read allowed)
+ * 
+ * NOTE: This route MUST be defined AFTER /users/:userId/coordinator to avoid route conflicts.
+ * Express matches routes in order, so more specific routes must come first.
  */
-router.get('/users/:userId', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+router.get('/users/:userId', authenticate, async (req, res, next) => {
   try {
-    await userController.getUserById(req, res);
+    // Allow users to read their own data without user.read permission
+    const requesterId = req.user?.id || req.user?._id;
+    const targetUserId = req.params.userId;
+    
+    // Normalize both IDs to strings for reliable comparison
+    const requesterIdStr = requesterId ? requesterId.toString() : null;
+    const targetUserIdStr = targetUserId ? targetUserId.toString() : null;
+    
+    if (requesterIdStr && targetUserIdStr && requesterIdStr === targetUserIdStr) {
+      // Self-read: bypass permission check
+      console.log('[getUserById] Self-read bypass:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: true
+      });
+      return await userController.getUserById(req, res);
+    }
+    
+    // Log when self-read bypass doesn't match (for debugging)
+    if (requesterIdStr && targetUserIdStr) {
+      console.log('[getUserById] Self-read check failed - requiring permission:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: false
+      });
+    }
+    
+    // Otherwise require user.read permission
+    return requirePermission('user', 'read')(req, res, next);
   } catch (error) {
+    console.error('[getUserById] Error in route handler:', error);
     next(error);
   }
 });

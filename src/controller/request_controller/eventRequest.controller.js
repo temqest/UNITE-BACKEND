@@ -40,15 +40,109 @@ class EventRequestController {
         if (role) eventData._actorRole = role;
         if (actorId) eventData._actorId = actorId;
 
-        // If coordinatorId is missing, use authenticated user's id
-        if (!coordinatorId && actorId) {
-          coordinatorId = actorId;
-        }
+        // Check if requester is a stakeholder (authority < 60)
+        const authorityService = require('../../services/users_services/authority.service');
+        const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+        const requesterAuthority = await authorityService.calculateUserAuthority(actorId);
+        const isStakeholder = requesterAuthority < AUTHORITY_TIERS.COORDINATOR;
 
-        // If stakeholder_id is provided in eventData, use it; otherwise check if user is associated with a stakeholder
-        // This is for data population, not permission logic
-        if (eventData.stakeholder_id || eventData.Stakeholder_ID || eventData.MadeByStakeholderID) {
-          eventData.stakeholder_id = eventData.stakeholder_id || eventData.Stakeholder_ID || eventData.MadeByStakeholderID;
+        if (isStakeholder) {
+          // Stakeholder creating request: auto-resolve coordinator and set stakeholder to self
+          console.log('[createEventRequest] Stakeholder creating request - auto-resolving coordinator');
+          
+          // Auto-set stakeholder to requester
+          eventData.stakeholder_id = actorId;
+          eventData.Stakeholder_ID = actorId;
+          eventData.MadeByStakeholderID = actorId;
+
+          // Auto-resolve coordinator if not provided
+          if (!coordinatorId) {
+            try {
+              const { User } = require('../../models/index');
+              const stakeholder = await User.findById(actorId) || await User.findByLegacyId(actorId);
+              
+              if (stakeholder && stakeholder.locations && stakeholder.locations.municipalityId) {
+                // Get stakeholder's organization and municipality
+                const stakeholderOrgIds = new Set();
+                if (stakeholder.organizations && stakeholder.organizations.length > 0) {
+                  stakeholder.organizations.forEach(org => {
+                    if (org.isActive !== false && org.organizationId) {
+                      stakeholderOrgIds.add(org.organizationId.toString());
+                    }
+                  });
+                }
+                
+                const stakeholderMunicipalityId = stakeholder.locations.municipalityId.toString();
+                
+                // Find matching coordinator
+                const coordinators = await User.find({
+                  authority: { $gte: AUTHORITY_TIERS.COORDINATOR },
+                  isActive: true
+                }).select('_id organizations coverageAreas');
+                
+                for (const coordinator of coordinators) {
+                  // Check organization match
+                  const coordinatorOrgIds = new Set();
+                  if (coordinator.organizations && coordinator.organizations.length > 0) {
+                    coordinator.organizations.forEach(org => {
+                      if (org.isActive !== false && org.organizationId) {
+                        coordinatorOrgIds.add(org.organizationId.toString());
+                      }
+                    });
+                  }
+                  
+                  let orgMatch = false;
+                  if (stakeholderOrgIds.size > 0 && coordinatorOrgIds.size > 0) {
+                    for (const stakeholderOrgId of stakeholderOrgIds) {
+                      if (coordinatorOrgIds.has(stakeholderOrgId)) {
+                        orgMatch = true;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  if (!orgMatch && stakeholderOrgIds.size > 0) {
+                    continue;
+                  }
+                  
+                  // Check municipality match
+                  const coordinatorMunicipalityIds = new Set();
+                  if (coordinator.coverageAreas && coordinator.coverageAreas.length > 0) {
+                    coordinator.coverageAreas.forEach(ca => {
+                      if (ca.municipalityIds && Array.isArray(ca.municipalityIds)) {
+                        ca.municipalityIds.forEach(muniId => {
+                          if (muniId) {
+                            coordinatorMunicipalityIds.add(muniId.toString());
+                          }
+                        });
+                      }
+                    });
+                  }
+                  
+                  if (coordinatorMunicipalityIds.has(stakeholderMunicipalityId)) {
+                    coordinatorId = coordinator._id.toString();
+                    console.log('[createEventRequest] Auto-resolved coordinator:', coordinatorId);
+                    break;
+                  }
+                }
+              }
+            } catch (error) {
+              console.error('[createEventRequest] Error auto-resolving coordinator:', error);
+              // Continue without coordinator - will fail validation later
+            }
+          }
+        } else {
+          // Coordinator or SysAdmin: use existing logic
+          // If coordinatorId is missing, use authenticated user's id
+          if (!coordinatorId && actorId) {
+            coordinatorId = actorId;
+          }
+
+          // If stakeholder_id is provided in eventData, use it; otherwise check if user is associated with a stakeholder
+          // This is for data population, not permission logic
+          if (eventData.stakeholder_id || eventData.Stakeholder_ID || eventData.MadeByStakeholderID) {
+            eventData.stakeholder_id = eventData.stakeholder_id || eventData.Stakeholder_ID || eventData.MadeByStakeholderID;
+          }
         }
       }
 
@@ -1605,7 +1699,7 @@ class EventRequestController {
         return res.status(401).json({ success: false, message: 'Authentication required' });
       }
 
-      const { title, location, startDate, endDate, category, coordinatorId, stakeholderId } = req.body;
+      const { title, location, startDate, endDate, category, coordinatorId, stakeholderId, email, phoneNumber, phone } = req.body;
       
       // Validate required fields
       if (!title || !location || !startDate || !category) {
@@ -1634,43 +1728,137 @@ class EventRequestController {
       }
 
       // Authority validation and field locking
-      const userDoc = await User.findById(user.id).select('authority organizations coverageAreas');
+      const userDoc = await User.findById(user.id).select('authority organizations coverageAreas email phoneNumber');
       const userAuthority = userDoc?.authority || 20;
       const isAdmin = userAuthority >= 80;
+      const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
+      const isStakeholder = userAuthority < AUTHORITY_TIERS.COORDINATOR;
 
       let finalCoordinatorId = coordinatorId;
       let finalStakeholderId = stakeholderId;
 
-      // LOCK: Non-admins cannot change coordinator field
-      if (!isAdmin) {
-        finalCoordinatorId = user.id;
-      }
-
-      // RESTRICT: Non-admins cannot select stakeholders outside their jurisdiction
-      if (!isAdmin && finalStakeholderId) {
-        const organizationIds = userDoc.organizations.map(org => org.organizationId);
-        const municipalityIds = userDoc.coverageAreas.flatMap(ca => ca.municipalityIds || []);
+      // Handle stakeholder case: auto-resolve coordinator and set stakeholder to self
+      if (isStakeholder) {
+        console.log('[createEvent] Stakeholder creating event - auto-resolving coordinator');
         
-        const stakeholder = await User.findById(finalStakeholderId).select('locations.municipalityId organizations');
-        if (stakeholder) {
-          const stakeholderOrgs = stakeholder.organizations.map(org => org.organizationId);
-          const stakeholderMunicipality = stakeholder.locations?.municipalityId;
+        // Auto-set stakeholder to requester
+        finalStakeholderId = user.id;
+        
+        // Auto-resolve coordinator if not provided
+        if (!finalCoordinatorId) {
+          try {
+            const stakeholder = await User.findById(user.id) || await User.findByLegacyId(user.id);
+            
+            if (stakeholder && stakeholder.locations && stakeholder.locations.municipalityId) {
+              // Get stakeholder's organization and municipality
+              const stakeholderOrgIds = new Set();
+              if (stakeholder.organizations && stakeholder.organizations.length > 0) {
+                stakeholder.organizations.forEach(org => {
+                  if (org.isActive !== false && org.organizationId) {
+                    stakeholderOrgIds.add(org.organizationId.toString());
+                  }
+                });
+              }
+              
+              const stakeholderMunicipalityId = stakeholder.locations.municipalityId.toString();
+              
+              // Find matching coordinator
+              const coordinators = await User.find({
+                authority: { $gte: AUTHORITY_TIERS.COORDINATOR },
+                isActive: true
+              }).select('_id organizations coverageAreas');
+              
+              for (const coordinator of coordinators) {
+                // Check organization match
+                const coordinatorOrgIds = new Set();
+                if (coordinator.organizations && coordinator.organizations.length > 0) {
+                  coordinator.organizations.forEach(org => {
+                    if (org.isActive !== false && org.organizationId) {
+                      coordinatorOrgIds.add(org.organizationId.toString());
+                    }
+                  });
+                }
+                
+                let orgMatch = false;
+                if (stakeholderOrgIds.size > 0 && coordinatorOrgIds.size > 0) {
+                  for (const stakeholderOrgId of stakeholderOrgIds) {
+                    if (coordinatorOrgIds.has(stakeholderOrgId)) {
+                      orgMatch = true;
+                      break;
+                    }
+                  }
+                }
+                
+                if (!orgMatch && stakeholderOrgIds.size > 0) {
+                  continue;
+                }
+                
+                // Check municipality match
+                const coordinatorMunicipalityIds = new Set();
+                if (coordinator.coverageAreas && coordinator.coverageAreas.length > 0) {
+                  coordinator.coverageAreas.forEach(ca => {
+                    if (ca.municipalityIds && Array.isArray(ca.municipalityIds)) {
+                      ca.municipalityIds.forEach(muniId => {
+                        if (muniId) {
+                          coordinatorMunicipalityIds.add(muniId.toString());
+                        }
+                      });
+                    }
+                  });
+                }
+                
+                if (coordinatorMunicipalityIds.has(stakeholderMunicipalityId)) {
+                  finalCoordinatorId = coordinator._id.toString();
+                  console.log('[createEvent] Auto-resolved coordinator:', finalCoordinatorId);
+                  break;
+                }
+              }
+            }
+          } catch (error) {
+            console.error('[createEvent] Error auto-resolving coordinator:', error);
+            // Continue without coordinator - will fail validation later
+          }
+        }
+      } else {
+        // Coordinator or SysAdmin: use existing logic
+        // LOCK: Non-admins cannot change coordinator field
+        if (!isAdmin) {
+          finalCoordinatorId = user.id;
+        }
+
+        // RESTRICT: Non-admins cannot select stakeholders outside their jurisdiction
+        if (!isAdmin && finalStakeholderId) {
+          const organizationIds = userDoc.organizations.map(org => org.organizationId);
+          const municipalityIds = userDoc.coverageAreas.flatMap(ca => ca.municipalityIds || []);
           
-          // Check if stakeholder is in coordinator's jurisdiction
-          const inOrg = stakeholderOrgs.some(id => organizationIds.includes(id));
-          const inMunicipality = stakeholderMunicipality && municipalityIds.includes(stakeholderMunicipality);
-          
-          if (!inOrg && !inMunicipality) {
-            return res.status(400).json({
-              success: false,
-              message: 'Stakeholder not in authorized scope',
-              reason: 'STAKEHOLDER_OUT_OF_SCOPE'
-            });
+          const stakeholder = await User.findById(finalStakeholderId).select('locations.municipalityId organizations');
+          if (stakeholder) {
+            const stakeholderOrgs = stakeholder.organizations.map(org => org.organizationId);
+            const stakeholderMunicipality = stakeholder.locations?.municipalityId;
+            
+            // Check if stakeholder is in coordinator's jurisdiction
+            const inOrg = stakeholderOrgs.some(id => organizationIds.includes(id));
+            const inMunicipality = stakeholderMunicipality && municipalityIds.includes(stakeholderMunicipality);
+            
+            if (!inOrg && !inMunicipality) {
+              return res.status(400).json({
+                success: false,
+                message: 'Stakeholder not in authorized scope',
+                reason: 'STAKEHOLDER_OUT_OF_SCOPE'
+              });
+            }
           }
         }
       }
 
-      // Create event
+      if (!finalCoordinatorId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator ID is required'
+        });
+      }
+
+      // Create event data with Email and Phone_Number
       const eventData = {
         Event_Title: title,
         Location: location,
@@ -1680,7 +1868,10 @@ class EventRequestController {
         coordinator_id: finalCoordinatorId,
         stakeholder_id: finalStakeholderId,
         made_by_id: user.id,
-        Status: 'Pending'
+        Status: 'Pending',
+        // Include Email and Phone_Number from request body or user data
+        Email: email || userDoc?.email || '',
+        Phone_Number: phoneNumber || phone || userDoc?.phoneNumber || ''
       };
 
       const result = await eventRequestService.createEventRequest(finalCoordinatorId, eventData);

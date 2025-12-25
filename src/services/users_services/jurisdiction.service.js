@@ -582,11 +582,14 @@ class JurisdictionService {
       }
 
       // STEP 1: Flatten creator's organizations into a Set (once, for efficient lookups)
+      // Access embedded array: creator.organizations[].organizationId
       const creatorOrgIds = new Set();
       if (creator.organizations && creator.organizations.length > 0) {
         creator.organizations.forEach(org => {
           if (org.isActive !== false && org.organizationId) {
-            creatorOrgIds.add(org.organizationId.toString());
+            // Ensure consistent ObjectId to string conversion for comparison
+            const orgId = org.organizationId.toString();
+            creatorOrgIds.add(orgId);
           }
         });
       }
@@ -762,18 +765,24 @@ class JurisdictionService {
         }
 
         // CHECK 2: Organization match - target's organization must be in creator's organizations
+        // Since coordinators can only create stakeholders with their own orgs, stakeholders MUST have matching org
         const targetOrgIds = new Set();
         if (targetUser.organizations && targetUser.organizations.length > 0) {
           targetUser.organizations.forEach(org => {
             if (org.isActive !== false && org.organizationId) {
-              targetOrgIds.add(org.organizationId.toString());
+              // Ensure consistent ObjectId to string conversion
+              const orgId = org.organizationId.toString();
+              targetOrgIds.add(orgId);
             }
           });
         }
 
+        // Stakeholders created by coordinators should always have organizations
+        // If no organizations found, this might indicate a data issue, but we'll be lenient for now
         let orgMatch = false;
         if (targetOrgIds.size > 0) {
           for (const targetOrgId of targetOrgIds) {
+            // Ensure both sides are strings for comparison
             if (creatorOrgIds.has(targetOrgId)) {
               orgMatch = true;
               break;
@@ -784,27 +793,31 @@ class JurisdictionService {
         diagnostic.checks.organization = {
           pass: orgMatch || targetOrgIds.size === 0,
           reason: targetOrgIds.size === 0
-            ? 'Target has no organizations (might be in creation)'
+            ? 'Target has no organizations (data issue - stakeholders should have orgs)'
             : orgMatch
               ? `Target organization (${Array.from(targetOrgIds).join(', ')}) matches creator organizations (${Array.from(creatorOrgIds).join(', ')})`
               : `Target organization (${Array.from(targetOrgIds).join(', ')}) NOT in creator organizations (${Array.from(creatorOrgIds).join(', ')})`,
           targetOrgIds: Array.from(targetOrgIds),
-          creatorOrgIds: Array.from(creatorOrgIds)
+          creatorOrgIds: Array.from(creatorOrgIds),
+          comparisonMethod: 'string_comparison_after_toString'
         };
 
         // If target has organizations but none match, exclude
+        // Since stakeholders are created with coordinator's orgs, this should never happen unless data is corrupted
         if (targetOrgIds.size > 0 && !orgMatch) {
           diagnostic.result = 'EXCLUDED';
-          diagnostic.reason = 'Organization mismatch';
+          diagnostic.reason = 'Organization mismatch - stakeholder org not in coordinator orgs';
           console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder EXCLUDED:', diagnostic);
           return false;
         }
 
         // CHECK 3: Municipality match - target's municipality must be in creator's municipalities
+        // Since coordinators can only create stakeholders with municipalities from their coverage areas,
+        // stakeholders MUST have a municipality that matches coordinator's coverage
         if (!targetUser.locations || !targetUser.locations.municipalityId) {
           diagnostic.checks.municipality = {
             pass: false,
-            reason: 'Target has no municipality assigned'
+            reason: 'Target has no municipality assigned (required for stakeholders)'
           };
           diagnostic.result = 'EXCLUDED';
           diagnostic.reason = 'Missing municipality';
@@ -812,6 +825,7 @@ class JurisdictionService {
           return false;
         }
 
+        // Ensure consistent ObjectId to string conversion
         const targetMunicipalityId = targetUser.locations.municipalityId.toString();
         const municipalityMatch = creatorMunicipalityIds.has(targetMunicipalityId);
 
@@ -821,12 +835,16 @@ class JurisdictionService {
             ? `Target municipality (${targetMunicipalityId}) in creator municipalities (${creatorMunicipalityIds.size} total)`
             : `Target municipality (${targetMunicipalityId}) NOT in creator municipalities (${Array.from(creatorMunicipalityIds).slice(0, 5).join(', ')}...)`,
           targetMunicipalityId,
-          creatorMunicipalityCount: creatorMunicipalityIds.size
+          creatorMunicipalityCount: creatorMunicipalityIds.size,
+          creatorMunicipalityIds: Array.from(creatorMunicipalityIds).slice(0, 10), // Log first 10 for debugging
+          comparisonMethod: 'string_comparison_after_toString'
         };
 
+        // Since stakeholders are created with coordinator's municipality, this should always match
+        // If it doesn't, there's a data integrity issue
         if (!municipalityMatch) {
           diagnostic.result = 'EXCLUDED';
-          diagnostic.reason = 'Municipality mismatch';
+          diagnostic.reason = 'Municipality mismatch - stakeholder municipality not in coordinator coverage areas';
           console.log('[DIAG] isUserInCreatorJurisdiction - Stakeholder EXCLUDED:', diagnostic);
           return false;
         }
@@ -929,7 +947,9 @@ class JurisdictionService {
           creatorAuthority,
           hasOrganizations,
           hasMunicipalities,
-          coverageAreasCount: creator.coverageAreas?.length || 0
+          coverageAreasCount: creator.coverageAreas?.length || 0,
+          organizationsCount: creator.organizations?.length || 0,
+          warning: 'Returning empty array - creator cannot see any users without jurisdiction data'
         });
         return [];
       }
