@@ -5,6 +5,7 @@
  */
 
 const eventRequestService = require('../../services/eventRequests_services/eventRequest.service');
+const actionValidatorService = require('../../services/eventRequests_services/actionValidator.service');
 const { STATUS_LABELS } = require('../../utils/eventRequests/requestConstants');
 
 class EventRequestController {
@@ -23,7 +24,7 @@ class EventRequestController {
         success: true,
         message: 'Event request created successfully',
         data: {
-          request: this._formatRequest(request)
+          request: await this._formatRequest(request, userId)
         }
       });
     } catch (error) {
@@ -53,10 +54,15 @@ class EventRequestController {
 
       const requests = await eventRequestService.getRequests(userId, filters);
 
+      // Compute allowedActions for each request in parallel
+      const formattedRequests = await Promise.all(
+        requests.map(r => this._formatRequest(r, userId))
+      );
+
       res.status(200).json({
         success: true,
         data: {
-          requests: requests.map(r => this._formatRequest(r)),
+          requests: formattedRequests,
           count: requests.length
         }
       });
@@ -83,7 +89,7 @@ class EventRequestController {
       res.status(200).json({
         success: true,
         data: {
-          request: this._formatRequest(request)
+          request: await this._formatRequest(request, userId)
         }
       });
     } catch (error) {
@@ -113,7 +119,7 @@ class EventRequestController {
         success: true,
         message: 'Event request updated successfully',
         data: {
-          request: this._formatRequest(request)
+          request: await this._formatRequest(request, userId)
         }
       });
     } catch (error) {
@@ -150,7 +156,7 @@ class EventRequestController {
         success: true,
         message: `Action '${action}' executed successfully`,
         data: {
-          request: this._formatRequest(request)
+          request: await this._formatRequest(request, userId)
         }
       });
     } catch (error) {
@@ -206,7 +212,7 @@ class EventRequestController {
         success: true,
         message: 'Request cancelled successfully',
         data: {
-          request: this._formatRequest(request)
+          request: await this._formatRequest(request, userId)
         }
       });
     } catch (error) {
@@ -249,8 +255,11 @@ class EventRequestController {
   /**
    * Format request for response
    * @private
+   * @param {Object} request - Request document
+   * @param {string|ObjectId} userId - User ID for computing allowedActions (optional)
+   * @returns {Promise<Object>} Formatted request object
    */
-  _formatRequest(request) {
+  async _formatRequest(request, userId = null) {
     if (!request) return null;
 
     const formatted = {
@@ -301,6 +310,23 @@ class EventRequestController {
       createdAt: request.createdAt,
       updatedAt: request.updatedAt
     };
+
+    // Compute allowedActions if userId provided
+    if (userId) {
+      try {
+        const locationId = request.district || request.municipalityId;
+        const allowedActions = await actionValidatorService.getAvailableActions(
+          userId,
+          request,
+          { locationId }
+        );
+        formatted.allowedActions = allowedActions;
+      } catch (error) {
+        console.error(`[EVENT REQUEST CONTROLLER] Error computing allowedActions: ${error.message}`);
+        // Don't fail the request if allowedActions computation fails
+        formatted.allowedActions = ['view']; // At minimum, allow view
+      }
+    }
 
     return formatted;
   }

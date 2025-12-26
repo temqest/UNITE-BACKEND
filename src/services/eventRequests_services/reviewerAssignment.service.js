@@ -29,6 +29,9 @@ class ReviewerAssignmentService {
       const requesterAuthority = requester.authority || AUTHORITY_TIERS.BASIC_USER;
       const locationId = context.locationId || context.district || context.municipalityId;
 
+      // Log initial assignment context
+      console.log(`[REVIEWER ASSIGNMENT] Starting assignment for requester ${requesterId} (authority: ${requesterAuthority}, locationId: ${locationId || 'null'})`);
+
       // 2. Determine target reviewer authority tier based on routing rules
       let targetAuthorityMin = AUTHORITY_TIERS.BASIC_USER;
       let targetAuthorityMax = AUTHORITY_TIERS.SYSTEM_ADMIN;
@@ -55,13 +58,18 @@ class ReviewerAssignmentService {
         assignmentRule = 'admin-to-coordinator';
       }
 
+      console.log(`[REVIEWER ASSIGNMENT] Target authority range: ${targetAuthorityMin}-${targetAuthorityMax}, rule: ${assignmentRule}, requiresOrgMatch: ${requiresOrgMatch}, requiresCoverageMatch: ${requiresCoverageMatch}`);
+
       // 3. Find users with request.review permission in location scope
       const candidateReviewers = await this._findUsersWithReviewPermission(locationId, requesterId);
 
       if (candidateReviewers.length === 0) {
         // Fallback to system admin
+        console.log(`[REVIEWER ASSIGNMENT] No candidates found, using fallback reviewer`);
         return await this._assignFallbackReviewer(requester, assignmentRule);
       }
+
+      console.log(`[REVIEWER ASSIGNMENT] Found ${candidateReviewers.length} candidate reviewers with request.review permission`);
 
       // 4. Filter by target authority tier
       let qualifiedReviewers = candidateReviewers.filter(candidate => {
@@ -69,8 +77,11 @@ class ReviewerAssignmentService {
         return candidateAuthority >= targetAuthorityMin && candidateAuthority <= targetAuthorityMax;
       });
 
+      console.log(`[REVIEWER ASSIGNMENT] After authority filtering (${targetAuthorityMin}-${targetAuthorityMax}): ${qualifiedReviewers.length} qualified reviewers`);
+
       // If no one meets target authority, find closest match
       if (qualifiedReviewers.length === 0) {
+        console.log(`[REVIEWER ASSIGNMENT] No reviewers in target authority range, looking for closest match (authority >= ${requesterAuthority})`);
         qualifiedReviewers = candidateReviewers.filter(candidate => {
           const candidateAuthority = candidate.authority || AUTHORITY_TIERS.BASIC_USER;
           return candidateAuthority >= requesterAuthority; // At least same or higher authority
@@ -78,26 +89,38 @@ class ReviewerAssignmentService {
 
         if (qualifiedReviewers.length === 0) {
           // Last resort: use highest authority candidate
+          console.log(`[REVIEWER ASSIGNMENT] No reviewers with authority >= requester, using highest authority candidate`);
           candidateReviewers.sort((a, b) => (b.authority || 0) - (a.authority || 0));
-          qualifiedReviewers = [candidateReviewers[0]];
+          qualifiedReviewers = candidateReviewers.length > 0 ? [candidateReviewers[0]] : [];
+        } else {
+          console.log(`[REVIEWER ASSIGNMENT] Found ${qualifiedReviewers.length} reviewers with authority >= requester`);
         }
       }
 
       // 5. Apply organization and coverage matching for stakeholder requests
       if (requiresOrgMatch || requiresCoverageMatch) {
+        const beforeFilterCount = qualifiedReviewers.length;
         qualifiedReviewers = await this._filterByOrganizationAndCoverage(
           qualifiedReviewers,
           requester,
           context
         );
+        console.log(`[REVIEWER ASSIGNMENT] After org/coverage filtering: ${qualifiedReviewers.length} reviewers (from ${beforeFilterCount})`);
 
         if (qualifiedReviewers.length === 0) {
           // Fallback to authority-filtered candidates if no org/coverage match
+          console.log(`[REVIEWER ASSIGNMENT] No org/coverage match found, falling back to authority-filtered candidates`);
           qualifiedReviewers = candidateReviewers.filter(candidate => {
             const candidateAuthority = candidate.authority || AUTHORITY_TIERS.BASIC_USER;
             return candidateAuthority >= targetAuthorityMin && candidateAuthority <= targetAuthorityMax;
           });
         }
+      }
+
+      // If still no reviewers, use fallback
+      if (qualifiedReviewers.length === 0) {
+        console.log(`[REVIEWER ASSIGNMENT] No qualified reviewers after all filtering, using fallback reviewer`);
+        return await this._assignFallbackReviewer(requester, assignmentRule);
       }
 
       // 6. Select best reviewer (prefer lower authority if multiple candidates)
@@ -106,10 +129,13 @@ class ReviewerAssignmentService {
       }
 
       const selectedReviewer = qualifiedReviewers[0];
+      console.log(`[REVIEWER ASSIGNMENT] Selected reviewer: ${selectedReviewer._id} (authority: ${selectedReviewer.authority || 'unknown'}, name: ${selectedReviewer.firstName || ''} ${selectedReviewer.lastName || ''})`);
+      
       return await this._formatReviewer(selectedReviewer, assignmentRule);
 
     } catch (error) {
       console.error(`[REVIEWER ASSIGNMENT] Error: ${error.message}`);
+      console.error(`[REVIEWER ASSIGNMENT] Stack: ${error.stack}`);
       throw new Error(`Failed to assign reviewer: ${error.message}`);
     }
   }
@@ -119,11 +145,29 @@ class ReviewerAssignmentService {
    * @private
    */
   async _findUsersWithReviewPermission(locationId, excludeUserId) {
-    const userIds = await permissionService.getUsersWithPermission('request.review', locationId);
+    // First try with locationId if provided
+    let userIds = await permissionService.getUsersWithPermission('request.review', locationId);
+    
+    // If no results and locationId was provided, try global search (null locationId)
+    if (userIds.length === 0 && locationId) {
+      console.log(`[REVIEWER ASSIGNMENT] No reviewers found with locationId ${locationId}, trying global search`);
+      userIds = await permissionService.getUsersWithPermission('request.review', null);
+    }
+    
+    // Log search results
+    if (locationId) {
+      console.log(`[REVIEWER ASSIGNMENT] Found ${userIds.length} users with request.review permission (locationId: ${locationId})`);
+    } else {
+      console.log(`[REVIEWER ASSIGNMENT] Found ${userIds.length} users with request.review permission (global search)`);
+    }
     
     // Exclude requester
     const excludeIdStr = excludeUserId?.toString();
     const filteredIds = userIds.filter(id => id.toString() !== excludeIdStr);
+    
+    if (filteredIds.length < userIds.length) {
+      console.log(`[REVIEWER ASSIGNMENT] Excluded requester ${excludeIdStr}, ${filteredIds.length} candidates remaining`);
+    }
 
     // Get user details with authority
     const mongoose = require('mongoose');
@@ -173,10 +217,20 @@ class ReviewerAssignmentService {
       });
     }
 
+    // Edge case: If requester has no org/coverage data, don't filter (return all candidates)
+    if (requesterOrgIds.size === 0 && requesterMunicipalityIds.size === 0) {
+      console.log(`[REVIEWER ASSIGNMENT] Requester has no org/coverage data, skipping org/coverage filtering`);
+      return candidateReviewers;
+    }
+
+    console.log(`[REVIEWER ASSIGNMENT] Filtering by org/coverage: requester has ${requesterOrgIds.size} orgs, ${requesterMunicipalityIds.size} municipalities`);
+
     // Check each candidate
     for (const candidate of candidateReviewers) {
-      let orgMatch = requesterOrgIds.size === 0; // If requester has no orgs, skip org matching
-      let coverageMatch = requesterMunicipalityIds.size === 0; // If requester has no location, skip coverage matching
+      // If requester has no orgs, skip org matching (orgMatch = true)
+      // If requester has no municipalities, skip coverage matching (coverageMatch = true)
+      let orgMatch = requesterOrgIds.size === 0;
+      let coverageMatch = requesterMunicipalityIds.size === 0;
 
       // Check organization match
       if (requesterOrgIds.size > 0) {
@@ -245,16 +299,57 @@ class ReviewerAssignmentService {
   }
 
   /**
-   * Assign fallback reviewer (system admin)
+   * Assign fallback reviewer (system admin or any user with request.review permission)
    * @private
    */
   async _assignFallbackReviewer(requester, assignmentRule) {
+    console.log(`[REVIEWER ASSIGNMENT] Attempting to assign fallback reviewer`);
+    
+    // First, try to find any user with request.review permission globally
+    const userIds = await permissionService.getUsersWithPermission('request.review', null);
+    const excludeIdStr = requester._id?.toString();
+    const filteredIds = userIds.filter(id => id.toString() !== excludeIdStr);
+    
+    if (filteredIds.length > 0) {
+      // Get the first user with request.review permission
+      const mongoose = require('mongoose');
+      const fallbackUser = await User.findOne({
+        _id: { $in: filteredIds.map(id => {
+          try {
+            return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
+          } catch (e) {
+            return id;
+          }
+        })},
+        isActive: true
+      }).select('_id firstName lastName email authority roles organizations coverageAreas locations').lean();
+      
+      if (fallbackUser) {
+        console.log(`[REVIEWER ASSIGNMENT] Using fallback reviewer with request.review permission: ${fallbackUser._id}`);
+        return await this._formatReviewer(fallbackUser, assignmentRule);
+      }
+    }
+    
+    // If no user with request.review permission found, try system admin role
+    console.log(`[REVIEWER ASSIGNMENT] No users with request.review permission found, trying system-admin role`);
     const { Role } = require('../../models/index');
     const { UserRole } = require('../../models/index');
 
     const systemAdminRole = await Role.findOne({ code: 'system-admin' });
     if (!systemAdminRole) {
-      throw new Error('System admin role not found. Cannot assign fallback reviewer.');
+      // Last resort: find any active user with high authority
+      console.log(`[REVIEWER ASSIGNMENT] System admin role not found, finding any user with authority >= 80`);
+      const highAuthorityUser = await User.findOne({
+        authority: { $gte: AUTHORITY_TIERS.OPERATIONAL_ADMIN },
+        isActive: true
+      }).select('_id firstName lastName email authority roles organizations coverageAreas locations').lean();
+      
+      if (highAuthorityUser) {
+        console.log(`[REVIEWER ASSIGNMENT] Using high authority user as fallback: ${highAuthorityUser._id}`);
+        return await this._formatReviewer(highAuthorityUser, assignmentRule);
+      }
+      
+      throw new Error('System admin role not found and no high authority users available. Cannot assign fallback reviewer.');
     }
 
     const userRole = await UserRole.findOne({
@@ -263,14 +358,38 @@ class ReviewerAssignmentService {
     }).limit(1);
 
     if (!userRole) {
+      // Try to find any user with system admin role in embedded roles
+      const systemAdminUser = await User.findOne({
+        'roles.roleCode': 'system-admin',
+        'roles.isActive': true,
+        isActive: true
+      }).select('_id firstName lastName email authority roles organizations coverageAreas locations').lean();
+      
+      if (systemAdminUser) {
+        console.log(`[REVIEWER ASSIGNMENT] Using system admin from embedded roles: ${systemAdminUser._id}`);
+        return await this._formatReviewer(systemAdminUser, assignmentRule);
+      }
+      
       throw new Error('No active system admin found. Cannot assign fallback reviewer.');
     }
 
-    const user = await User.findById(userRole.userId);
+    const user = await User.findById(userRole.userId)
+      .select('_id firstName lastName email authority roles organizations coverageAreas locations')
+      .lean();
+      
     if (!user) {
       throw new Error('System admin user not found.');
     }
+    
+    // Verify the fallback reviewer has request.review permission
+    const hasPermission = await permissionService.checkPermission(user._id, 'request', 'review', {});
+    if (!hasPermission) {
+      console.warn(`[REVIEWER ASSIGNMENT] Fallback reviewer ${user._id} does not have request.review permission, but using anyway`);
+    } else {
+      console.log(`[REVIEWER ASSIGNMENT] Fallback reviewer ${user._id} has request.review permission`);
+    }
 
+    console.log(`[REVIEWER ASSIGNMENT] Using system admin as fallback reviewer: ${user._id}`);
     return await this._formatReviewer(user, assignmentRule);
   }
 

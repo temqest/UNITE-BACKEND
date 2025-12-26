@@ -13,7 +13,9 @@ class PermissionService {
    */
   async checkPermission(userId, resource, action, context = {}) {
     try {
-      // 1. Get all active roles for user
+      const { User } = require('../../models/index');
+      
+      // 1. Get all active roles for user from UserRole collection
       let userRoles = await UserRole.find({ 
         userId, 
         isActive: true,
@@ -23,6 +25,35 @@ class PermissionService {
           { expiresAt: { $gt: new Date() } }
         ]
       }).populate('roleId');
+
+      // 2. Also check embedded roles in User model (for consistency with getUsersWithPermission)
+      const user = await User.findById(userId).select('roles').lean();
+      if (user && user.roles && user.roles.length > 0) {
+        const activeEmbeddedRoles = user.roles.filter(r => r.isActive !== false);
+        if (activeEmbeddedRoles.length > 0) {
+          // Get role documents for embedded roles
+          const embeddedRoleIds = activeEmbeddedRoles
+            .map(r => r.roleId)
+            .filter(Boolean);
+          
+          if (embeddedRoleIds.length > 0) {
+            const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } });
+            // Convert to same format as UserRole (with roleId populated)
+            const embeddedUserRoles = embeddedRoles.map(role => ({
+              roleId: role,
+              userId: userId,
+              isActive: true
+            }));
+            // Merge with UserRole results (avoid duplicates)
+            const existingRoleIds = new Set(userRoles.map(ur => ur.roleId._id.toString()));
+            embeddedUserRoles.forEach(eur => {
+              if (!existingRoleIds.has(eur.roleId._id.toString())) {
+                userRoles.push(eur);
+              }
+            });
+          }
+        }
+      }
 
       if (userRoles.length === 0) {
         return false;

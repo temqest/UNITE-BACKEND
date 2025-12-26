@@ -13,7 +13,7 @@ class RequestStateService {
    */
   static TRANSITIONS = {
     [REQUEST_STATES.PENDING_REVIEW]: {
-      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED, // Intermediate state before auto-publish
+      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Directly approve and publish on accept
       [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED, // Intermediate state
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
     },
@@ -24,7 +24,7 @@ class RequestStateService {
     },
     [REQUEST_STATES.REVIEW_RESCHEDULED]: {
       [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED, // Auto-publish on confirm
-      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED, // Accept rescheduled request → review-accepted (needs confirmation)
+      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Accept rescheduled request → directly approved and published
       [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED, // Can reject from rescheduled
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Loop allowed (requester can counter-reschedule)
     },

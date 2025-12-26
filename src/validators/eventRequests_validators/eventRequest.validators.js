@@ -11,7 +11,8 @@ const Joi = require('joi');
  */
 const validateCreateEventRequest = (req, res, next) => {
   const schema = Joi.object({
-    Event_ID: Joi.string().trim().required(),
+    // Event_ID is optional - it will be generated when the request is approved and event is created
+    Event_ID: Joi.string().trim().optional(),
     // Required event fields
     Event_Title: Joi.string().trim().required(),
     Location: Joi.string().trim().required(),

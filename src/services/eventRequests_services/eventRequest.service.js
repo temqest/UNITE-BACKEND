@@ -340,11 +340,10 @@ class EventRequestService {
         request.status = nextState;
         request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
         
-        // If accepted and goes directly to approved (e.g., from review-rescheduled), publish event
+        // Accept action always goes directly to approved and publishes event
         if (nextState === REQUEST_STATES.APPROVED) {
           await eventPublisherService.publishEvent(request);
         }
-        // If goes to review-accepted, wait for confirmation (no auto-transition)
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
         request.addDecisionHistory('reject', actorSnapshot, actionData.notes || '');

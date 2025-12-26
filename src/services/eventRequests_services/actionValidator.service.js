@@ -213,9 +213,78 @@ class ActionValidatorService {
     const available = [REQUEST_ACTIONS.VIEW]; // Always allow view
 
     const currentState = request.status || request.Status;
+    
+    // Special handling for review-rescheduled state (reschedule loop)
+    if (currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+      const userIdStr = userId.toString();
+      const isRequester = this._isRequester(userId, request);
+      const isReviewer = this._isReviewer(userId, request);
+      
+      // Check who proposed the reschedule
+      const rescheduleProposal = request.rescheduleProposal;
+      const proposerId = rescheduleProposal?.proposedBy?.userId?.toString() || 
+                        rescheduleProposal?.proposedBy?.id?.toString();
+      const isRescheduleProposer = proposerId === userIdStr;
+      
+      // If user is the one who proposed the reschedule, they can only view
+      // (they already made their move, waiting for the other party to respond)
+      if (isRescheduleProposer) {
+        return [REQUEST_ACTIONS.VIEW];
+      }
+      
+      // If user is NOT the proposer, they are the "other party" and can respond
+      // The response actions depend on whether they are the requester or reviewer:
+      // - Requester (stakeholder/admin): confirm, reschedule, view
+      // - Reviewer (coordinator): accept, reject, reschedule, view
+      
+      if (isRequester) {
+        // Requester (stakeholder or admin) can confirm or counter-reschedule
+        const confirmValidation = await this.validateAction(userId, REQUEST_ACTIONS.CONFIRM, request, context);
+        if (confirmValidation.valid) {
+          available.push(REQUEST_ACTIONS.CONFIRM);
+        }
+        
+        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
+        if (rescheduleValidation.valid) {
+          available.push(REQUEST_ACTIONS.RESCHEDULE);
+        }
+      } else if (isReviewer) {
+        // Reviewer (coordinator) can accept, reject, or counter-reschedule
+        const acceptValidation = await this.validateAction(userId, REQUEST_ACTIONS.ACCEPT, request, context);
+        if (acceptValidation.valid) {
+          available.push(REQUEST_ACTIONS.ACCEPT);
+        }
+        
+        const rejectValidation = await this.validateAction(userId, REQUEST_ACTIONS.REJECT, request, context);
+        if (rejectValidation.valid) {
+          available.push(REQUEST_ACTIONS.REJECT);
+        }
+        
+        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
+        if (rescheduleValidation.valid) {
+          available.push(REQUEST_ACTIONS.RESCHEDULE);
+        }
+      } else {
+        // User is neither requester nor reviewer (e.g., system admin viewing)
+        // Check all possible actions normally
+        const possibleActions = RequestStateService.getAvailableActions(currentState);
+        for (const action of possibleActions) {
+          if (action === REQUEST_ACTIONS.VIEW) continue; // Already added
+          const validation = await this.validateAction(userId, action, request, context);
+          if (validation.valid) {
+            available.push(action);
+          }
+        }
+      }
+      
+      return available;
+    }
+
+    // Normal state handling - check all possible actions
     const possibleActions = RequestStateService.getAvailableActions(currentState);
 
     for (const action of possibleActions) {
+      if (action === REQUEST_ACTIONS.VIEW) continue; // Already added
       const validation = await this.validateAction(userId, action, request, context);
       if (validation.valid) {
         available.push(action);

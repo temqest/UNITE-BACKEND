@@ -159,7 +159,7 @@ const eventRequestSchema = new mongoose.Schema({
   
   Event_ID: {
     type: String,
-    required: true,
+    required: false, // Optional - will be generated when request is approved and event is created
     trim: true,
     ref: 'Event',
     index: true
