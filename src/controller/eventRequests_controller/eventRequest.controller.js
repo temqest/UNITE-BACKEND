@@ -45,14 +45,24 @@ class EventRequestController {
       const userId = req.user._id || req.user.id;
       const filters = {
         status: req.query.status,
+        search: req.query.search,
+        requesterName: req.query.requesterName,
+        requesterEmail: req.query.requesterEmail,
         organizationId: req.query.organizationId,
         coverageAreaId: req.query.coverageAreaId,
+        province: req.query.province,
+        district: req.query.district,
         municipalityId: req.query.municipalityId,
+        category: req.query.category,
+        title: req.query.title,
+        coordinator: req.query.coordinator,
+        stakeholder: req.query.stakeholder,
         limit: parseInt(req.query.limit) || 100,
         skip: parseInt(req.query.skip) || 0
       };
 
-      const requests = await eventRequestService.getRequests(userId, filters);
+      const result = await eventRequestService.getRequests(userId, filters);
+      const { requests, totalCount, statusCounts } = result;
 
       // Compute allowedActions for each request in parallel
       const formattedRequests = await Promise.all(
@@ -63,7 +73,13 @@ class EventRequestController {
         success: true,
         data: {
           requests: formattedRequests,
-          count: requests.length
+          count: totalCount,
+          statusCounts: statusCounts || {
+            all: totalCount,
+            approved: 0,
+            pending: 0,
+            rejected: 0
+          }
         }
       });
     } catch (error) {

@@ -170,10 +170,48 @@ class EventRequestService {
   }
 
   /**
+   * Map tab filter to status groups
+   * @private
+   * @param {string} statusFilter - Status filter from frontend (e.g., "approved", "pending", "rejected")
+   * @returns {string[]} Array of status values to match
+   */
+  _mapStatusFilterToStatusGroup(statusFilter) {
+    if (!statusFilter) return null;
+    
+    const normalized = String(statusFilter).toLowerCase().trim();
+    
+    // Map tab filters to status groups
+    const statusGroups = {
+      'approved': [
+        REQUEST_STATES.APPROVED,
+        REQUEST_STATES.COMPLETED,
+        REQUEST_STATES.REVIEW_ACCEPTED
+      ],
+      'pending': [
+        REQUEST_STATES.PENDING_REVIEW,
+        REQUEST_STATES.REVIEW_RESCHEDULED
+      ],
+      'rejected': [
+        REQUEST_STATES.REJECTED,
+        REQUEST_STATES.REVIEW_REJECTED
+      ]
+    };
+    
+    // If it's a known tab filter, return the status group
+    if (statusGroups[normalized]) {
+      return statusGroups[normalized];
+    }
+    
+    // Otherwise, normalize the status and return as single-item array
+    const normalizedState = RequestStateService.normalizeState(statusFilter);
+    return [normalizedState];
+  }
+
+  /**
    * Get requests user can access
    * @param {string|ObjectId} userId - User ID
    * @param {Object} filters - Filter options
-   * @returns {Promise<Object[]>} Array of requests
+   * @returns {Promise<{requests: Object[], totalCount: number}>} Object with requests array and total count
    */
   async getRequests(userId, filters = {}) {
     try {
@@ -185,9 +223,16 @@ class EventRequestService {
       // Build query based on permissions and authority
       const query = {};
 
-      // Filter by status if provided
+      // Filter by status if provided - map to status groups
       if (filters.status) {
-        query.status = filters.status;
+        const statusGroup = this._mapStatusFilterToStatusGroup(filters.status);
+        if (statusGroup && statusGroup.length > 0) {
+          if (statusGroup.length === 1) {
+            query.status = statusGroup[0];
+          } else {
+            query.status = { $in: statusGroup };
+          }
+        }
       }
 
       // Check if user is system admin (can see all)
@@ -227,10 +272,163 @@ class EventRequestService {
       if (filters.coverageAreaId) {
         query.coverageAreaId = filters.coverageAreaId;
       }
+      if (filters.province) {
+        query.province = filters.province;
+      }
+      if (filters.district) {
+        query.district = filters.district;
+      }
       if (filters.municipalityId) {
         query.municipalityId = filters.municipalityId;
       }
+      
+      // Handle category filter - map frontend values to backend values
+      if (filters.category && filters.category.trim()) {
+        const categoryValue = filters.category.trim();
+        // Map frontend category values to backend values
+        let backendCategory = categoryValue;
+        if (categoryValue.toLowerCase() === 'blood drive') {
+          backendCategory = 'BloodDrive';
+        } else if (categoryValue.toLowerCase() === 'training') {
+          backendCategory = 'Training';
+        } else if (categoryValue.toLowerCase() === 'advocacy') {
+          backendCategory = 'Advocacy';
+        }
+        // Apply case-insensitive regex match
+        const categoryRegex = new RegExp(backendCategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        if (query.$and) {
+          query.$and.push({ Category: categoryRegex });
+        } else {
+          query.Category = categoryRegex;
+        }
+      }
 
+      // Handle search filter - search by requester name, email, or event title
+      // Note: requester.name is stored as snapshot when request is created, so we can search it directly
+      // For more accurate results, we could use aggregation with $lookup, but this is more performant
+      if (filters.search && filters.search.trim()) {
+        const searchTerm = filters.search.trim();
+        const searchRegex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        
+        // Build search conditions for requester name, email, and event title
+        const searchConditions = [
+          { 'requester.name': searchRegex },
+          { Event_Title: searchRegex },
+          { Email: searchRegex }
+        ];
+        
+        // If we already have $and, add search to it; otherwise create $and with permission + search
+        if (query.$and) {
+          query.$and.push({ $or: searchConditions });
+        } else if (query.$or || query['requester.userId']) {
+          // We have permission restrictions, combine with search using $and
+          const permissionQuery = query.$or ? { $or: query.$or } : { 'requester.userId': query['requester.userId'] };
+          query.$and = [
+            permissionQuery,
+            { $or: searchConditions }
+          ];
+          // Remove the original permission conditions since they're now in $and
+          if (query.$or) delete query.$or;
+          if (query['requester.userId']) delete query['requester.userId'];
+        } else {
+          // No permission restrictions, just search
+          query.$or = searchConditions;
+        }
+      }
+
+      // Handle separate requester name and email filters if provided
+      if (filters.requesterName && filters.requesterName.trim()) {
+        const nameRegex = new RegExp(filters.requesterName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        if (query.$and) {
+          query.$and.push({ 'requester.name': nameRegex });
+        } else {
+          query['requester.name'] = nameRegex;
+        }
+      }
+      
+      if (filters.requesterEmail && filters.requesterEmail.trim()) {
+        const emailRegex = new RegExp(filters.requesterEmail.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        if (query.$and) {
+          query.$and.push({ Email: emailRegex });
+        } else {
+          query.Email = emailRegex;
+        }
+      }
+      
+      // Handle title filter (separate from search filter)
+      if (filters.title && filters.title.trim()) {
+        const titleRegex = new RegExp(filters.title.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        if (query.$and) {
+          query.$and.push({ Event_Title: titleRegex });
+        } else {
+          query.Event_Title = titleRegex;
+        }
+      }
+      
+      // Handle coordinator filter - filter by reviewer.userId
+      if (filters.coordinator) {
+        const coordinatorId = filters.coordinator;
+        // Handle both ObjectId and string formats
+        const coordinatorCondition = { 'reviewer.userId': coordinatorId };
+        if (query.$and) {
+          query.$and.push(coordinatorCondition);
+        } else {
+          Object.assign(query, coordinatorCondition);
+        }
+      }
+      
+      // Handle stakeholder filter - filter by requester.userId
+      if (filters.stakeholder) {
+        const stakeholderId = filters.stakeholder;
+        // Handle both ObjectId and string formats
+        const stakeholderCondition = { 'requester.userId': stakeholderId };
+        if (query.$and) {
+          query.$and.push(stakeholderCondition);
+        } else {
+          Object.assign(query, stakeholderCondition);
+        }
+      }
+
+      // Calculate status counts using aggregation before pagination
+      const statusCountsPipeline = [
+        { $match: query },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 }
+          }
+        }
+      ];
+      
+      const statusCountsResult = await EventRequest.aggregate(statusCountsPipeline);
+      const statusCounts = {
+        all: 0,
+        approved: 0,
+        pending: 0,
+        rejected: 0
+      };
+      
+      // Map status counts to tab categories
+      statusCountsResult.forEach(item => {
+        const status = String(item._id || '').toLowerCase();
+        statusCounts.all += item.count;
+        
+        if (status.includes('approv') || status.includes('complete') || status.includes('review-accepted')) {
+          statusCounts.approved += item.count;
+        } else if (status.includes('pending') || status.includes('review') || status.includes('rescheduled')) {
+          statusCounts.pending += item.count;
+        } else if (status.includes('reject')) {
+          statusCounts.rejected += item.count;
+        }
+      });
+      
+      // Set all count to total count
+      statusCounts.all = statusCounts.all || 0;
+
+      // Get total count before pagination
+      const totalCount = await EventRequest.countDocuments(query);
+
+      // Apply pagination
       const requests = await EventRequest.find(query)
         .populate('requester.userId', 'firstName lastName email')
         .populate('reviewer.userId', 'firstName lastName email')
@@ -241,7 +439,7 @@ class EventRequestService {
         .limit(filters.limit || 100)
         .skip(filters.skip || 0);
 
-      return requests;
+      return { requests, totalCount, statusCounts };
     } catch (error) {
       console.error(`[EVENT REQUEST SERVICE] Error getting requests: ${error.message}`);
       throw new Error(`Failed to get requests: ${error.message}`);
