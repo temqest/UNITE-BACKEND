@@ -14,7 +14,7 @@ class RequestStateService {
   static TRANSITIONS = {
     [REQUEST_STATES.PENDING_REVIEW]: {
       [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Directly approve and publish on accept
-      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED, // Intermediate state
+      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REJECTED, // Directly reject - no intermediate state
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
     },
     [REQUEST_STATES.REVIEW_ACCEPTED]: {
@@ -25,15 +25,18 @@ class RequestStateService {
     [REQUEST_STATES.REVIEW_RESCHEDULED]: {
       [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED, // Auto-publish on confirm
       [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Accept rescheduled request → directly approved and published
-      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED, // Can reject from rescheduled
+      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REJECTED, // Can reject from rescheduled - directly to rejected
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Loop allowed (requester can counter-reschedule)
     },
     [REQUEST_STATES.REVIEW_REJECTED]: {
+      // Legacy state - new rejections go directly to REJECTED
+      // This is kept for backward compatibility with existing data
       [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.REJECTED, // Finalize rejection
       [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED // Alternative way to finalize
     },
     [REQUEST_STATES.APPROVED]: {
-      [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED
+      [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED,
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Allow rescheduling approved events
     },
     [REQUEST_STATES.REJECTED]: {
       // No transitions from rejected
@@ -91,6 +94,8 @@ class RequestStateService {
     const normalized = String(state).toLowerCase().trim();
     
     // Map legacy states to new states
+    // IMPORTANT: 'review-rejected' (with hyphen) is the intermediate state REVIEW_REJECTED
+    // 'review_rejected' (with underscore) is a legacy final state that maps to REJECTED
     const legacyMap = {
       'pending': REQUEST_STATES.PENDING_REVIEW,
       'pending_admin_review': REQUEST_STATES.PENDING_REVIEW,
@@ -99,7 +104,7 @@ class RequestStateService {
       'accepted_by_admin': REQUEST_STATES.APPROVED,
       'review_accepted': REQUEST_STATES.APPROVED,
       'rejected_by_admin': REQUEST_STATES.REJECTED,
-      'review_rejected': REQUEST_STATES.REJECTED,
+      'review_rejected': REQUEST_STATES.REJECTED, // Legacy final rejection state (underscore)
       'rescheduled_by_admin': REQUEST_STATES.REVIEW_RESCHEDULED,
       'rescheduled_by_coordinator': REQUEST_STATES.REVIEW_RESCHEDULED,
       'review_rescheduled': REQUEST_STATES.REVIEW_RESCHEDULED,

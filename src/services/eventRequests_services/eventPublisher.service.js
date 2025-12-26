@@ -9,23 +9,42 @@ const { REQUEST_STATES } = require('../../utils/eventRequests/requestConstants')
 
 class EventPublisherService {
   /**
+   * Generate unique Event_ID
+   * @returns {string} Generated Event_ID
+   */
+  generateEventId() {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substr(2, 9);
+    return `EVENT_${timestamp}_${random}`;
+  }
+
+  /**
    * Publish event when request is approved
    * @param {Object} request - Request document
    * @returns {Promise<Object>} Published event
    */
   async publishEvent(request) {
     try {
+      // Generate Event_ID if not present in request
+      const eventId = request.Event_ID || this.generateEventId();
+      
+      // Update request with Event_ID if it was generated
+      if (!request.Event_ID) {
+        request.Event_ID = eventId;
+        await request.save();
+      }
+      
       // Find or create event
-      let event = await Event.findOne({ Event_ID: request.Event_ID });
+      let event = await Event.findOne({ Event_ID: eventId });
       
       if (!event) {
         // Create new event from request data
         event = new Event({
-          Event_ID: request.Event_ID,
+          Event_ID: eventId,
           Event_Title: request.Event_Title,
           Location: request.Location,
           Start_Date: request.Date || request.Start_Date, // Map Date to Start_Date for Event model
-          End_Date: null, // No end date needed
+          End_Date: request.End_Date || null, // Use End_Date from request if available
           Email: request.Email,
           Phone_Number: request.Phone_Number,
           Event_Description: request.Event_Description,
@@ -35,10 +54,13 @@ class EventPublisherService {
           district: request.district,
           municipality: request.municipalityId,
           // Creator information
-          made_by_id: request.requester?.userId?.toString() || request.requester?.userId?.toString(),
+          made_by_id: request.requester?.userId?.toString() || 'system',
           made_by_role: this._mapRoleToEventEnum(request.requester?.roleSnapshot || 'stakeholder'),
           // Coordinator and stakeholder (if available)
-          coordinator_id: request.reviewer?.userId?.toString() || null,
+          // Note: Event model requires coordinator_id, so use reviewer or requester if reviewer not available
+          coordinator_id: request.reviewer?.userId?.toString() || 
+                          request.requester?.userId?.toString() || 
+                          'system',
           stakeholder_id: request.requester?.authoritySnapshot < 60 ? request.requester?.userId?.toString() : null,
           // Status
           Status: 'Approved'
@@ -48,7 +70,7 @@ class EventPublisherService {
         event.Event_Title = request.Event_Title || event.Event_Title;
         event.Location = request.Location || event.Location;
         event.Start_Date = request.Date || request.Start_Date || event.Start_Date;
-        event.End_Date = null; // No end date needed
+        event.End_Date = request.End_Date || event.End_Date || null;
         event.Email = request.Email || event.Email;
         event.Phone_Number = request.Phone_Number || event.Phone_Number;
         event.Event_Description = request.Event_Description || event.Event_Description;

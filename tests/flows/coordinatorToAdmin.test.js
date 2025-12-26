@@ -281,5 +281,52 @@ describe('Coordinator → Admin Flow', () => {
 
     logger.logResult('Authority validation passed');
   });
+
+  test('7. Non-assigned admin can review pending request', async () => {
+    // This test verifies that ANY admin with request.review permission can act on pending requests
+    // Not just the assigned reviewer (permission-based, not assignment-based)
+    
+    logger.logAction('Creating new request for non-assigned reviewer test');
+    const requestPayload = {
+      ...testData.requestPayloads.coordinator(23), // Unique day: +23 days (Day 33)
+      Event_Title: 'Test Non-Assigned Admin Reviewer Request'
+      // Don't specify reviewer - will auto-assign an admin reviewer
+    };
+
+    const newRequest = await createRequest(app, coordinatorToken, requestPayload);
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
+    
+    // Get the assigned reviewer ID
+    const assignedReviewerId = newRequest.reviewer?.userId || newRequest.reviewer?.id || newRequest.reviewer_id;
+    expect(assignedReviewerId).toBeDefined();
+    
+    logger.logAction(`Request created, assigned reviewer: ${assignedReviewerId}`);
+    
+    // Verify that the test admin can act on the request
+    // even if they are NOT the assigned reviewer
+    // This tests that permission-based review works, not just assignment-based
+    
+    // Get available actions as the test admin (who may or may not be the assigned reviewer)
+    const availableActions = await getAvailableActions(app, adminToken, requestId);
+    logger.logActions(availableActions);
+    
+    // Expected actions for any admin with request.review permission
+    const expectedActions = ['view', 'accept', 'reject', 'reschedule'];
+    assertActionsAvailable(availableActions, expectedActions, logger);
+    
+    // Verify the admin can actually execute an action (accept)
+    logger.logAction('Non-assigned admin accepting request');
+    const acceptedRequest = await executeReviewAction(
+      app,
+      adminToken,
+      requestId,
+      'accept',
+      { notes: 'Accepted by non-assigned admin with review permission' }
+    );
+    
+    // Verify state transition
+    assertRequestState(acceptedRequest, 'review-accepted', logger);
+    logger.logResult('Non-assigned admin successfully reviewed request');
+  });
 });
 

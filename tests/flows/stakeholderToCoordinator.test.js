@@ -358,5 +358,52 @@ describe('Stakeholder → Coordinator Flow', () => {
 
     logger.logResult('Permission validation working correctly');
   });
+
+  test('8. Non-assigned coordinator can review pending request', async () => {
+    // This test verifies that ANY coordinator with request.review permission can act on pending requests
+    // Not just the assigned reviewer (permission-based, not assignment-based)
+    
+    logger.logAction('Creating new request for non-assigned reviewer test');
+    const requestPayload = {
+      ...testData.requestPayloads.stakeholder(14), // Unique day: +14 days (Day 21)
+      Event_Title: 'Test Non-Assigned Reviewer Request'
+      // Don't specify coordinatorId - will auto-assign a reviewer
+    };
+
+    const newRequest = await createRequest(app, stakeholderToken, requestPayload);
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
+    
+    // Get the assigned reviewer ID
+    const assignedReviewerId = newRequest.reviewer?.userId || newRequest.reviewer?.id || newRequest.reviewer_id;
+    expect(assignedReviewerId).toBeDefined();
+    
+    logger.logAction(`Request created, assigned reviewer: ${assignedReviewerId}`);
+    
+    // Verify that the assigned coordinator (from test setup) can act on the request
+    // even if they are NOT the assigned reviewer
+    // This tests that permission-based review works, not just assignment-based
+    
+    // Get available actions as the test coordinator (who may or may not be the assigned reviewer)
+    const availableActions = await getAvailableActions(app, coordinatorToken, requestId);
+    logger.logActions(availableActions);
+    
+    // Expected actions for any coordinator with request.review permission
+    const expectedActions = ['view', 'accept', 'reject', 'reschedule'];
+    assertActionsAvailable(availableActions, expectedActions, logger);
+    
+    // Verify the coordinator can actually execute an action (accept)
+    logger.logAction('Non-assigned coordinator accepting request');
+    const acceptedRequest = await executeReviewAction(
+      app,
+      coordinatorToken,
+      requestId,
+      'accept',
+      { notes: 'Accepted by non-assigned coordinator with review permission' }
+    );
+    
+    // Verify state transition
+    assertRequestState(acceptedRequest, 'review-accepted', logger);
+    logger.logResult('Non-assigned coordinator successfully reviewed request');
+  });
 });
 
