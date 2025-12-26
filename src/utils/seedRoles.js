@@ -23,6 +23,7 @@ const defaultPermissions = [
   { code: 'event.delete', name: 'Delete Event', resource: 'event', action: 'delete', description: 'Delete events' },
   { code: 'event.approve', name: 'Approve Event', resource: 'event', action: 'approve', description: 'Approve events' },
   { code: 'event.publish', name: 'Publish Event', resource: 'event', action: 'publish', description: 'Publish and finalize events for public visibility' },
+  { code: 'event.manage-staff', name: 'Manage Event Staff', resource: 'event', action: 'manage-staff', description: 'Assign and manage volunteers/staff for events' },
   
   // Request permissions
   { code: 'request.create', name: 'Create Request', resource: 'request', action: 'create', description: 'Create new requests' },
@@ -125,7 +126,7 @@ const defaultRoles = [
     isSystemRole: true,
     authority: 60,
     permissions: [
-      { resource: 'event', actions: ['create', 'read', 'update', 'approve', 'publish'] },
+      { resource: 'event', actions: ['create', 'read', 'update', 'approve', 'publish', 'manage-staff'] },
       { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule', 'confirm'] },
       { resource: 'user', actions: ['read'] },
       { resource: 'location', actions: ['read'] },
@@ -138,11 +139,11 @@ const defaultRoles = [
   {
     code: 'stakeholder',
     name: 'Stakeholder',
-    description: 'Stakeholder with event creation and request confirmation capabilities',
+    description: 'Stakeholder with event creation, editing, and request confirmation capabilities',
     isSystemRole: true,
     authority: 30,
     permissions: [
-      { resource: 'event', actions: ['create', 'read'] },
+      { resource: 'event', actions: ['create', 'read', 'update'] },
       { resource: 'request', actions: ['create', 'read', 'confirm', 'decline', 'reschedule'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
       { resource: 'page', actions: ['campaign', 'calendar', 'chat', 'notification', 'settings'] },

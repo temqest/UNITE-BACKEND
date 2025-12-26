@@ -51,14 +51,69 @@ class EventRequestService {
         throw new Error('User does not have permission to create requests');
       }
 
-      // 3. Assign reviewer based on requester authority
+      // 3. Auto-populate location fields if not provided
+      // Derive from requester's location/coverage area
+      let finalDistrict = requestData.district;
+      let finalProvince = requestData.province;
+      let finalMunicipalityId = requestData.municipalityId;
+
+      if (!finalDistrict || !finalProvince) {
+        // Try to get from requester's coverage areas (for coordinators)
+        if (requester.coverageAreas && requester.coverageAreas.length > 0) {
+          const primaryCoverage = requester.coverageAreas.find(ca => ca.isPrimary) || requester.coverageAreas[0];
+          if (primaryCoverage) {
+            if (!finalDistrict && primaryCoverage.districtIds && primaryCoverage.districtIds.length > 0) {
+              finalDistrict = primaryCoverage.districtIds[0];
+            }
+            // Get province from district's parent or from coverage area
+            if (!finalProvince && finalDistrict) {
+              const { Location } = require('../../models/index');
+              const districtLocation = await Location.findById(finalDistrict);
+              if (districtLocation && districtLocation.province) {
+                finalProvince = districtLocation.province;
+              }
+            }
+          }
+        }
+
+        // Try to get from requester's locations (for stakeholders)
+        if (!finalDistrict && requester.locations && requester.locations.municipalityId) {
+          finalMunicipalityId = requester.locations.municipalityId;
+          const { Location } = require('../../models/index');
+          const municipalityLocation = await Location.findById(finalMunicipalityId);
+          if (municipalityLocation) {
+            // Get district from municipality's parent
+            if (municipalityLocation.parent) {
+              const parentLocation = await Location.findById(municipalityLocation.parent);
+              if (parentLocation && parentLocation.type === 'district') {
+                finalDistrict = parentLocation._id;
+                // Get province from district's province field or parent
+                if (parentLocation.province) {
+                  finalProvince = parentLocation.province;
+                } else if (parentLocation.parent) {
+                  const provinceLocation = await Location.findById(parentLocation.parent);
+                  if (provinceLocation && provinceLocation.type === 'province') {
+                    finalProvince = provinceLocation._id;
+                  }
+                }
+              }
+            }
+            // If municipality has direct province reference
+            if (!finalProvince && municipalityLocation.province) {
+              finalProvince = municipalityLocation.province;
+            }
+          }
+        }
+      }
+
+      // 4. Assign reviewer based on requester authority
       const reviewer = await reviewerAssignmentService.assignReviewer(requesterId, {
-        locationId: requestData.district || requestData.municipalityId,
+        locationId: finalDistrict || finalMunicipalityId,
         organizationId: requestData.organizationId,
         coverageAreaId: requestData.coverageAreaId
       });
 
-      // 4. Create request document with all event details
+      // 5. Create request document with all event details
       const request = new EventRequest({
         Request_ID: this.generateRequestId(),
         Event_ID: requestData.Event_ID,
@@ -71,9 +126,9 @@ class EventRequestService {
         reviewer: reviewer,
         organizationId: requestData.organizationId,
         coverageAreaId: requestData.coverageAreaId,
-        municipalityId: requestData.municipalityId,
-        district: requestData.district,
-        province: requestData.province,
+        municipalityId: finalMunicipalityId,
+        district: finalDistrict,
+        province: finalProvince,
         // Event details - all fields from Event model
         Event_Title: requestData.Event_Title,
         Location: requestData.Location,
@@ -96,7 +151,7 @@ class EventRequestService {
         notes: requestData.notes
       });
 
-      // 5. Add initial status history
+      // 6. Add initial status history
       request.addStatusHistory(REQUEST_STATES.PENDING_REVIEW, {
         userId: requester._id,
         name: `${requester.firstName || ''} ${requester.lastName || ''}`.trim() || requester.email,
@@ -104,7 +159,7 @@ class EventRequestService {
         authoritySnapshot: requester.authority || 20
       }, 'Request created');
 
-      // 6. Save request
+      // 7. Save request
       await request.save();
 
       return request;
@@ -179,6 +234,9 @@ class EventRequestService {
       const requests = await EventRequest.find(query)
         .populate('requester.userId', 'firstName lastName email')
         .populate('reviewer.userId', 'firstName lastName email')
+        .populate('province', 'name code type')
+        .populate('district', 'name code type province')
+        .populate('municipalityId', 'name code type district province')
         .sort({ createdAt: -1 })
         .limit(filters.limit || 100)
         .skip(filters.skip || 0);
@@ -200,7 +258,10 @@ class EventRequestService {
     try {
       const request = await EventRequest.findOne({ Request_ID: requestId })
         .populate('requester.userId', 'firstName lastName email authority')
-        .populate('reviewer.userId', 'firstName lastName email authority');
+        .populate('reviewer.userId', 'firstName lastName email authority')
+        .populate('province', 'name code type')
+        .populate('district', 'name code type province')
+        .populate('municipalityId', 'name code type district province');
 
       if (!request) {
         throw new Error('Request not found');
@@ -277,6 +338,11 @@ class EventRequestService {
       }
 
       await request.save();
+
+      // Re-populate location references before returning
+      await request.populate('province', 'name code type');
+      await request.populate('district', 'name code type province');
+      await request.populate('municipalityId', 'name code type district province');
 
       return request;
     } catch (error) {
@@ -378,6 +444,11 @@ class EventRequestService {
 
       // 7. Save request
       await request.save();
+
+      // Re-populate location references before returning
+      await request.populate('province', 'name code type');
+      await request.populate('district', 'name code type province');
+      await request.populate('municipalityId', 'name code type district province');
 
       return request;
     } catch (error) {
