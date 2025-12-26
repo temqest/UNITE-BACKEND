@@ -62,7 +62,7 @@ describe('Coordinator ↔ Stakeholder Bidirectional Flow', () => {
     };
 
     const createdRequest = await createRequest(app, coordinatorToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     expect(createdRequest).toBeDefined();
     assertRequestState(createdRequest, 'pending-review', logger);
@@ -94,7 +94,7 @@ describe('Coordinator ↔ Stakeholder Bidirectional Flow', () => {
     };
 
     const createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     expect(createdRequest).toBeDefined();
     assertRequestState(createdRequest, 'pending-review', logger);
@@ -134,7 +134,7 @@ describe('Coordinator ↔ Stakeholder Bidirectional Flow', () => {
     };
 
     const createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // First reschedule by coordinator
     logger.logAction('First reschedule by coordinator');
@@ -240,7 +240,7 @@ describe('Coordinator ↔ Stakeholder Bidirectional Flow', () => {
     };
 
     const createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // Verify reviewer has matching organization/coverage
     const reviewerId = createdRequest.reviewer?.userId || createdRequest.reviewer?.id || createdRequest.reviewer_id;

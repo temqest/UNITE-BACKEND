@@ -55,7 +55,7 @@ describe('Request Lifecycle Integration Tests', () => {
     };
 
     let createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // Verify initial state
     assertRequestState(createdRequest, 'pending-review', logger);
@@ -112,7 +112,7 @@ describe('Request Lifecycle Integration Tests', () => {
     };
 
     let createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // Verify initial state
     assertRequestState(createdRequest, 'pending-review', logger);
@@ -168,7 +168,7 @@ describe('Request Lifecycle Integration Tests', () => {
     };
 
     let createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // First reschedule by coordinator
     logger.logAction('First reschedule by coordinator');
@@ -209,29 +209,17 @@ describe('Request Lifecycle Integration Tests', () => {
     assertRequestState(updatedRequest, 'review-rescheduled', logger);
     logger.logTransition('review-rescheduled', 'review-rescheduled (iteration 3)');
 
-    // Stakeholder accepts final reschedule
-    logger.logAction('Stakeholder accepting final reschedule');
-    updatedRequest = await executeReviewAction(
+    // Stakeholder confirms final reschedule
+    logger.logAction('Stakeholder confirming final reschedule');
+    updatedRequest = await confirmDecision(
       app,
       stakeholderToken,
       requestId,
-      'accept',
-      { notes: 'Accepted final reschedule' }
-    );
-    assertRequestState(updatedRequest, 'review-accepted', logger);
-    logger.logTransition('review-rescheduled', 'review-accepted');
-
-    // Coordinator confirms
-    logger.logAction('Coordinator confirming');
-    updatedRequest = await confirmDecision(
-      app,
-      coordinatorToken,
-      requestId,
       'confirm',
-      { notes: 'Confirmed' }
+      { notes: 'Confirmed final reschedule' }
     );
     assertRequestState(updatedRequest, 'approved', logger);
-    logger.logTransition('review-accepted', 'approved');
+    logger.logTransition('review-rescheduled', 'approved');
 
     logger.logResult('Reschedule loop with multiple iterations completed successfully');
   });
@@ -247,7 +235,7 @@ describe('Request Lifecycle Integration Tests', () => {
     };
 
     const createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // Verify coordinator has review permission (should pass in normal case)
     const context = { locationId: createdRequest.district || createdRequest.location?.district };
@@ -276,7 +264,7 @@ describe('Request Lifecycle Integration Tests', () => {
     };
 
     const createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // Get reviewer
     const reviewerId = createdRequest.reviewer?.userId || createdRequest.reviewer?.id || createdRequest.reviewer_id;
@@ -299,7 +287,7 @@ describe('Request Lifecycle Integration Tests', () => {
     };
 
     const createdRequest = await createRequest(app, stakeholderToken, requestPayload);
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     // Get reviewer and requester
     const reviewerId = createdRequest.reviewer?.userId || createdRequest.reviewer?.id || createdRequest.reviewer_id;

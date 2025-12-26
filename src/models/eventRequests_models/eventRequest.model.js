@@ -224,8 +224,76 @@ const eventRequestSchema = new mongoose.Schema({
     index: true
   },
   
-  // Event details
+  // Event details - all fields from Event model
+  Event_Title: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  Location: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  Date: {
+    type: Date,
+    required: true
+  },
+  Email: {
+    type: String,
+    required: true,
+    trim: true,
+    lowercase: true
+  },
+  Phone_Number: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  Event_Description: {
+    type: String,
+    required: false,
+    trim: true
+  },
   Category: {
+    type: String,
+    trim: true
+  },
+  // Category-specific fields (for BloodDrive, Training, Advocacy)
+  Target_Donation: {
+    type: Number,
+    required: false
+  },
+  VenueType: {
+    type: String,
+    trim: true
+  },
+  TrainingType: {
+    type: String,
+    trim: true
+  },
+  MaxParticipants: {
+    type: Number,
+    required: false
+  },
+  Topic: {
+    type: String,
+    trim: true
+  },
+  TargetAudience: {
+    type: String,
+    trim: true
+  },
+  ExpectedAudienceSize: {
+    type: Number,
+    required: false
+  },
+  PartnerOrganization: {
+    type: String,
+    trim: true
+  },
+  // Staff assignment
+  StaffAssignmentID: {
     type: String,
     trim: true
   },

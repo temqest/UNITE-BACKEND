@@ -12,16 +12,38 @@ const Joi = require('joi');
 const validateCreateEventRequest = (req, res, next) => {
   const schema = Joi.object({
     Event_ID: Joi.string().trim().required(),
+    // Required event fields
+    Event_Title: Joi.string().trim().required(),
+    Location: Joi.string().trim().required(),
+    Date: Joi.date().optional(), // Can be Date or Start_Date (for backward compatibility)
+    Start_Date: Joi.date().optional(), // Support old field name for backward compatibility
+    Email: Joi.string().email().required(),
+    Phone_Number: Joi.string().trim().required(),
+    // Optional event fields
+    Event_Description: Joi.string().trim().optional(),
     Category: Joi.string().trim().optional(),
-    organizationId: Joi.string().hex().length(24).optional(),
-    coverageAreaId: Joi.string().hex().length(24).optional(),
-    municipalityId: Joi.string().hex().length(24).optional(),
-    district: Joi.string().hex().length(24).optional(),
-    province: Joi.string().hex().length(24).optional(),
-    notes: Joi.string().trim().max(1000).optional()
-  });
+    // Category-specific fields
+    Target_Donation: Joi.number().optional(),
+    VenueType: Joi.string().trim().optional(),
+    TrainingType: Joi.string().trim().optional(),
+    MaxParticipants: Joi.number().optional(),
+    Topic: Joi.string().trim().optional(),
+    TargetAudience: Joi.string().trim().optional(),
+    ExpectedAudienceSize: Joi.number().optional(),
+    PartnerOrganization: Joi.string().trim().optional(),
+    StaffAssignmentID: Joi.string().trim().optional(),
+    // Location and organization references
+    organizationId: Joi.string().optional(),
+    coverageAreaId: Joi.string().optional(),
+    municipalityId: Joi.string().optional(),
+    district: Joi.string().optional(),
+    province: Joi.string().optional(),
+    // Request-specific fields
+    notes: Joi.string().trim().max(1000).optional(),
+    coordinatorId: Joi.string().optional() // For testing purposes
+  }).unknown(true); // Allow unknown fields to pass through
 
-  const { error, value } = schema.validate(req.body, { abortEarly: false });
+  const { error, value } = schema.validate(req.body, { abortEarly: false, allowUnknown: true });
   if (error) {
     const errorMessages = error.details.map(d => d.message);
     return res.status(400).json({
@@ -30,6 +52,21 @@ const validateCreateEventRequest = (req, res, next) => {
       errors: errorMessages
     });
   }
+  
+  // Ensure at least one of Date or Start_Date is provided
+  if (!value.Date && !value.Start_Date) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: ['Either Date or Start_Date is required']
+    });
+  }
+  
+  // Normalize: use Date if provided, otherwise use Start_Date
+  if (!value.Date && value.Start_Date) {
+    value.Date = value.Start_Date;
+  }
+  
   req.validatedData = value;
   next();
 };

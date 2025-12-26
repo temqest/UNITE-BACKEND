@@ -77,9 +77,9 @@ describe('Admin → Coordinator Flow', () => {
     createdRequest = await createRequest(app, adminToken, requestPayload);
 
     expect(createdRequest).toBeDefined();
-    expect(createdRequest.Request_ID || createdRequest._id).toBeDefined();
+    expect(createdRequest.requestId || createdRequest.Request_ID || createdRequest._id).toBeDefined();
 
-    logger.logAction(`Created request ${createdRequest.Request_ID || createdRequest._id}`);
+    logger.logAction(`Created request ${createdRequest.requestId || createdRequest.Request_ID || createdRequest._id}`);
 
     // Verify request is in pending-review state
     assertRequestState(createdRequest, 'pending-review', logger);
@@ -113,7 +113,7 @@ describe('Admin → Coordinator Flow', () => {
   });
 
   test('2. Coordinator receives request with correct actions', async () => {
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     logger.logActor(
       testData.users.coordinator.email,
@@ -153,7 +153,7 @@ describe('Admin → Coordinator Flow', () => {
   });
 
   test('3. Coordinator accepts → Request published', async () => {
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     logger.logAction('Coordinator accepting request');
 
@@ -197,7 +197,7 @@ describe('Admin → Coordinator Flow', () => {
     };
 
     const newRequest = await createRequest(app, adminToken, requestPayload);
-    const requestId = newRequest.Request_ID || newRequest._id;
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
 
     logger.logAction(`Coordinator rejecting request ${requestId}`);
 
@@ -241,7 +241,7 @@ describe('Admin → Coordinator Flow', () => {
     };
 
     const newRequest = await createRequest(app, adminToken, requestPayload);
-    const requestId = newRequest.Request_ID || newRequest._id;
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
 
     logger.logAction(`Coordinator rescheduling request ${requestId}`);
 
@@ -291,7 +291,7 @@ describe('Admin → Coordinator Flow', () => {
     };
 
     const newRequest = await createRequest(app, adminToken, requestPayload);
-    const requestId = newRequest.Request_ID || newRequest._id;
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
 
     // Verify coordinator was assigned OR admin (fallback)
     // The service checks permissions with locationId (district), same as above

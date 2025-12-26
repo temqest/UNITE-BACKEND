@@ -78,9 +78,9 @@ describe('Coordinator → Admin Flow', () => {
     createdRequest = await createRequest(app, coordinatorToken, requestPayload);
 
     expect(createdRequest).toBeDefined();
-    expect(createdRequest.Request_ID || createdRequest._id).toBeDefined();
+    expect(createdRequest.requestId || createdRequest.Request_ID || createdRequest._id).toBeDefined();
 
-    logger.logAction(`Created request ${createdRequest.Request_ID || createdRequest._id}`);
+    logger.logAction(`Created request ${createdRequest.requestId || createdRequest.Request_ID || createdRequest._id}`);
 
     // Verify request is in pending-review state
     assertRequestState(createdRequest, 'pending-review', logger);
@@ -112,7 +112,7 @@ describe('Coordinator → Admin Flow', () => {
   });
 
   test('2. Admin receives request with correct actions', async () => {
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
     const reviewerId = createdRequest.reviewer?.userId || createdRequest.reviewer?.id || createdRequest.reviewer_id;
 
     logger.logActor(
@@ -144,7 +144,7 @@ describe('Coordinator → Admin Flow', () => {
   });
 
   test('3. Admin accepts → Request published', async () => {
-    const requestId = createdRequest.Request_ID || createdRequest._id;
+    const requestId = createdRequest.requestId || createdRequest.Request_ID || createdRequest._id;
 
     logger.logAction('Admin accepting request');
 
@@ -187,7 +187,7 @@ describe('Coordinator → Admin Flow', () => {
     };
 
     const newRequest = await createRequest(app, coordinatorToken, requestPayload);
-    const requestId = newRequest.Request_ID || newRequest._id;
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
 
     logger.logAction(`Admin rejecting request ${requestId}`);
 
@@ -230,7 +230,7 @@ describe('Coordinator → Admin Flow', () => {
     };
 
     const newRequest = await createRequest(app, coordinatorToken, requestPayload);
-    const requestId = newRequest.Request_ID || newRequest._id;
+    const requestId = newRequest.requestId || newRequest.Request_ID || newRequest._id;
 
     logger.logAction(`Admin rescheduling request ${requestId}`);
 

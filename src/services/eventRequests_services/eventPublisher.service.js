@@ -19,24 +19,41 @@ class EventPublisherService {
       let event = await Event.findOne({ Event_ID: request.Event_ID });
       
       if (!event) {
-        throw new Error(`Event with Event_ID ${request.Event_ID} not found`);
-      }
-
-      // Update event status to published/active
-      // Assuming event has a Status field that can be set to 'Published' or 'Active'
-      event.Status = event.Status || 'Published';
-      
-      // Link event to request
-      if (!event.Request_ID) {
-        event.Request_ID = request.Request_ID;
-      }
-
-      // Update event with request details if needed
-      if (request.requester) {
-        // Update event creator information if needed
-        if (!event.made_by_id) {
-          event.made_by_id = request.requester.userId.toString();
-        }
+        // Create new event from request data
+        event = new Event({
+          Event_ID: request.Event_ID,
+          Event_Title: request.Event_Title,
+          Location: request.Location,
+          Start_Date: request.Date || request.Start_Date, // Map Date to Start_Date for Event model
+          End_Date: null, // No end date needed
+          Email: request.Email,
+          Phone_Number: request.Phone_Number,
+          Event_Description: request.Event_Description,
+          Category: request.Category,
+          // Location references
+          province: request.province,
+          district: request.district,
+          municipality: request.municipalityId,
+          // Creator information
+          made_by_id: request.requester?.userId?.toString() || request.requester?.userId?.toString(),
+          made_by_role: this._mapRoleToEventEnum(request.requester?.roleSnapshot || 'stakeholder'),
+          // Coordinator and stakeholder (if available)
+          coordinator_id: request.reviewer?.userId?.toString() || null,
+          stakeholder_id: request.requester?.authoritySnapshot < 60 ? request.requester?.userId?.toString() : null,
+          // Status
+          Status: 'Approved'
+        });
+      } else {
+        // Update existing event with request data
+        event.Event_Title = request.Event_Title || event.Event_Title;
+        event.Location = request.Location || event.Location;
+        event.Start_Date = request.Date || request.Start_Date || event.Start_Date;
+        event.End_Date = null; // No end date needed
+        event.Email = request.Email || event.Email;
+        event.Phone_Number = request.Phone_Number || event.Phone_Number;
+        event.Event_Description = request.Event_Description || event.Event_Description;
+        event.Category = request.Category || event.Category;
+        event.Status = 'Approved';
       }
 
       // Save event
@@ -53,6 +70,25 @@ class EventPublisherService {
       console.error(`[EVENT PUBLISHER] Error publishing event: ${error.message}`);
       throw new Error(`Failed to publish event: ${error.message}`);
     }
+  }
+
+  /**
+   * Map role code to Event model enum value
+   * @param {string} roleCode - Role code (lowercase)
+   * @returns {string} Event model enum value (capitalized)
+   */
+  _mapRoleToEventEnum(roleCode) {
+    if (!roleCode) return 'Stakeholder';
+    
+    const roleMap = {
+      'system-admin': 'SystemAdmin',
+      'coordinator': 'Coordinator',
+      'stakeholder': 'Stakeholder',
+      'admin': 'SystemAdmin',
+      'operational-admin': 'SystemAdmin'
+    };
+    
+    return roleMap[roleCode.toLowerCase()] || 'Stakeholder';
   }
 
   /**

@@ -1,6 +1,7 @@
 /**
  * Request Helper
  * Provides utilities for creating requests, executing actions, and managing request lifecycle
+ * Updated for new event request system (/api/event-requests)
  */
 
 const request = require('supertest');
@@ -13,15 +14,27 @@ const request = require('supertest');
  * @returns {Promise<Object>} Created request
  */
 async function createRequest(app, token, requestData) {
+  // Generate Event_ID if not provided (for testing)
+  if (!requestData.Event_ID) {
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 10000);
+    requestData.Event_ID = `EVT-${timestamp}-${random}`;
+  }
+
   const response = await request(app)
-    .post('/api/requests')
+    .post('/api/event-requests')
     .set('Authorization', `Bearer ${token}`)
     .send(requestData);
 
   if (response.status !== 201 && response.status !== 200) {
-    throw new Error(`Failed to create request: ${response.body.message || 'Unknown error'}`);
+    const errorMsg = response.body.message || 
+                     (Array.isArray(response.body.errors) ? response.body.errors.join(', ') : response.body.errors) ||
+                     JSON.stringify(response.body) ||
+                     'Unknown error';
+    throw new Error(`Failed to create request: ${errorMsg}`);
   }
 
+  // New API returns: { success: true, data: { request: {...} } }
   return response.body.data?.request || response.body.request || response.body.data;
 }
 
@@ -29,12 +42,12 @@ async function createRequest(app, token, requestData) {
  * Get request by ID
  * @param {Object} app - Express app instance
  * @param {string} token - User JWT token
- * @param {string} requestId - Request ID
+ * @param {string} requestId - Request ID (can be Request_ID or _id)
  * @returns {Promise<Object>} Request object
  */
 async function getRequest(app, token, requestId) {
   const response = await request(app)
-    .get(`/api/requests/${requestId}`)
+    .get(`/api/event-requests/${requestId}`)
     .set('Authorization', `Bearer ${token}`);
 
   if (response.status !== 200) {
@@ -53,18 +66,19 @@ async function getRequest(app, token, requestId) {
  */
 async function getAvailableActions(app, token, requestId) {
   const response = await request(app)
-    .get(`/api/requests/${requestId}/actions`)
+    .get(`/api/event-requests/${requestId}/actions`)
     .set('Authorization', `Bearer ${token}`);
 
   if (response.status !== 200) {
     throw new Error(`Failed to get available actions: ${response.body.message || 'Unknown error'}`);
   }
 
+  // New API returns: { success: true, data: { actions: [...] } }
   return response.body.data?.actions || response.body.actions || [];
 }
 
 /**
- * Execute a review action (accept/reject/reschedule)
+ * Execute a review action (accept/reject/reschedule) using unified actions endpoint
  * @param {Object} app - Express app instance
  * @param {string} token - User JWT token
  * @param {string} requestId - Request ID
@@ -74,7 +88,7 @@ async function getAvailableActions(app, token, requestId) {
  */
 async function executeReviewAction(app, token, requestId, action, actionData = {}) {
   const response = await request(app)
-    .post(`/api/requests/${requestId}/review-decision`)
+    .post(`/api/event-requests/${requestId}/actions`)
     .set('Authorization', `Bearer ${token}`)
     .send({
       action,
@@ -85,6 +99,7 @@ async function executeReviewAction(app, token, requestId, action, actionData = {
     throw new Error(`Failed to execute ${action}: ${response.body.message || 'Unknown error'}`);
   }
 
+  // New API returns: { success: true, data: { request: {...} } }
   return response.body.data?.request || response.body.request || response.body.data;
 }
 
@@ -99,7 +114,7 @@ async function executeReviewAction(app, token, requestId, action, actionData = {
  */
 async function confirmDecision(app, token, requestId, action = 'confirm', actionData = {}) {
   const response = await request(app)
-    .post(`/api/requests/${requestId}/confirm`)
+    .post(`/api/event-requests/${requestId}/actions`)
     .set('Authorization', `Bearer ${token}`)
     .send({
       action,
@@ -124,11 +139,11 @@ async function confirmDecision(app, token, requestId, action = 'confirm', action
  */
 async function executeAction(app, token, requestId, action, actionData = {}) {
   const response = await request(app)
-    .post(`/api/requests/${requestId}/actions`)
+    .post(`/api/event-requests/${requestId}/actions`)
     .set('Authorization', `Bearer ${token}`)
     .send({
       action,
-      data: actionData
+      ...actionData
     });
 
   if (response.status !== 200) {
@@ -153,7 +168,8 @@ async function waitForStateChange(app, token, requestId, expectedState, timeout 
   
   while (Date.now() - startTime < timeout) {
     const request = await getRequest(app, token, requestId);
-    const currentState = request.Status || request.status;
+    // New model uses 'status' field
+    const currentState = request.status || request.Status;
     
     if (currentState === expectedState) {
       return request;
@@ -163,7 +179,7 @@ async function waitForStateChange(app, token, requestId, expectedState, timeout 
   }
   
   const finalRequest = await getRequest(app, token, requestId);
-  throw new Error(`Request state did not change to ${expectedState} within ${timeout}ms. Current state: ${finalRequest.Status || finalRequest.status}`);
+  throw new Error(`Request state did not change to ${expectedState} within ${timeout}ms. Current state: ${finalRequest.status || finalRequest.Status}`);
 }
 
 module.exports = {
@@ -175,4 +191,3 @@ module.exports = {
   executeAction,
   waitForStateChange
 };
-

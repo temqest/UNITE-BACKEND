@@ -58,7 +58,7 @@ class EventRequestService {
         coverageAreaId: requestData.coverageAreaId
       });
 
-      // 4. Create request document
+      // 4. Create request document with all event details
       const request = new EventRequest({
         Request_ID: this.generateRequestId(),
         Event_ID: requestData.Event_ID,
@@ -74,7 +74,24 @@ class EventRequestService {
         municipalityId: requestData.municipalityId,
         district: requestData.district,
         province: requestData.province,
+        // Event details - all fields from Event model
+        Event_Title: requestData.Event_Title,
+        Location: requestData.Location,
+        Date: requestData.Date || requestData.Start_Date, // Support both for backward compatibility
+        Email: requestData.Email,
+        Phone_Number: requestData.Phone_Number,
+        Event_Description: requestData.Event_Description,
         Category: requestData.Category,
+        // Category-specific fields
+        Target_Donation: requestData.Target_Donation,
+        VenueType: requestData.VenueType,
+        TrainingType: requestData.TrainingType,
+        MaxParticipants: requestData.MaxParticipants,
+        Topic: requestData.Topic,
+        TargetAudience: requestData.TargetAudience,
+        ExpectedAudienceSize: requestData.ExpectedAudienceSize,
+        PartnerOrganization: requestData.PartnerOrganization,
+        StaffAssignmentID: requestData.StaffAssignmentID,
         status: REQUEST_STATES.PENDING_REVIEW,
         notes: requestData.notes
       });
@@ -323,10 +340,11 @@ class EventRequestService {
         request.status = nextState;
         request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
         
-        // Auto-publish event if approved
+        // If accepted and goes directly to approved (e.g., from review-rescheduled), publish event
         if (nextState === REQUEST_STATES.APPROVED) {
           await eventPublisherService.publishEvent(request);
         }
+        // If goes to review-accepted, wait for confirmation (no auto-transition)
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
         request.addDecisionHistory('reject', actorSnapshot, actionData.notes || '');
@@ -348,7 +366,7 @@ class EventRequestService {
       } else if (action === REQUEST_ACTIONS.CONFIRM) {
         request.status = nextState;
         
-        // Auto-publish event if approved
+        // Auto-publish event if approved (from review-accepted or review-rescheduled)
         if (nextState === REQUEST_STATES.APPROVED) {
           await eventPublisherService.publishEvent(request);
         }

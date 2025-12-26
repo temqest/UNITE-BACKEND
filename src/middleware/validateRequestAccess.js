@@ -15,8 +15,12 @@ const validateRequestAccess = async (req, res, next) => {
     const { requestId } = req.params;
     const userId = req.user._id || req.user.id;
 
-    // Get request
-    const request = await EventRequest.findOne({ Request_ID: requestId });
+    // Get request - try Request_ID first, then _id
+    let request = await EventRequest.findOne({ Request_ID: requestId });
+    if (!request && requestId.match(/^[0-9a-fA-F]{24}$/)) {
+      // If requestId looks like an ObjectId, try _id
+      request = await EventRequest.findById(requestId);
+    }
     if (!request) {
       return res.status(404).json({
         success: false,

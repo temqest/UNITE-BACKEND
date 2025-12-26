@@ -126,7 +126,7 @@ const defaultRoles = [
     authority: 60,
     permissions: [
       { resource: 'event', actions: ['create', 'read', 'update', 'approve', 'publish'] },
-      { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule'] },
+      { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule', 'confirm'] },
       { resource: 'user', actions: ['read'] },
       { resource: 'location', actions: ['read'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
@@ -143,7 +143,7 @@ const defaultRoles = [
     authority: 30,
     permissions: [
       { resource: 'event', actions: ['create', 'read'] },
-      { resource: 'request', actions: ['create', 'read', 'confirm', 'decline'] },
+      { resource: 'request', actions: ['create', 'read', 'confirm', 'decline', 'reschedule'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
       { resource: 'page', actions: ['campaign', 'calendar', 'chat', 'notification', 'settings'] },
       { resource: 'feature', actions: ['create-event', 'request-blood'] }

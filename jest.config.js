@@ -11,6 +11,10 @@ module.exports = {
   testMatch: [
     '**/tests/**/*.test.js'
   ],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/tests/eventRequests/eventRequest.test.js' // Exclude Mocha test file
+  ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup/testSetup.js'],
   // Handle ES modules - uuid v13+ uses pure ES modules
   // Transform uuid and other ES module packages

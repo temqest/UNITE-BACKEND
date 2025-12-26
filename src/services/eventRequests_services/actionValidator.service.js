@@ -6,23 +6,25 @@
 
 const permissionService = require('../users_services/permission.service');
 const { User } = require('../../models/index');
-const { AUTHORITY_TIERS, REQUEST_ACTIONS } = require('../../utils/eventRequests/requestConstants');
+const { AUTHORITY_TIERS, REQUEST_ACTIONS, REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
 const RequestStateService = require('./requestState.service');
 
 class ActionValidatorService {
   /**
    * Action to permission mapping
    */
-  static ACTION_PERMISSIONS = {
-    [REQUEST_ACTIONS.VIEW]: { resource: 'request', action: 'read' },
-    [REQUEST_ACTIONS.ACCEPT]: { resource: 'request', action: 'review' },
-    [REQUEST_ACTIONS.REJECT]: { resource: 'request', action: 'review' },
-    [REQUEST_ACTIONS.RESCHEDULE]: { resource: 'request', action: 'reschedule' },
-    [REQUEST_ACTIONS.CONFIRM]: { resource: 'request', action: 'confirm' },
-    [REQUEST_ACTIONS.CANCEL]: { resource: 'request', action: 'cancel' },
-    [REQUEST_ACTIONS.DELETE]: { resource: 'request', action: 'delete' },
-    [REQUEST_ACTIONS.EDIT]: { resource: 'request', action: 'update' }
-  };
+  constructor() {
+    this.ACTION_PERMISSIONS = {
+      [REQUEST_ACTIONS.VIEW]: { resource: 'request', action: 'read' },
+      [REQUEST_ACTIONS.ACCEPT]: { resource: 'request', action: 'review' },
+      [REQUEST_ACTIONS.REJECT]: { resource: 'request', action: 'review' },
+      [REQUEST_ACTIONS.RESCHEDULE]: { resource: 'request', action: 'reschedule' },
+      [REQUEST_ACTIONS.CONFIRM]: { resource: 'request', action: 'confirm' },
+      [REQUEST_ACTIONS.CANCEL]: { resource: 'request', action: 'cancel' },
+      [REQUEST_ACTIONS.DELETE]: { resource: 'request', action: 'delete' },
+      [REQUEST_ACTIONS.EDIT]: { resource: 'request', action: 'update' }
+    };
+  }
 
   /**
    * Validate if user can perform action on request
@@ -43,7 +45,37 @@ class ActionValidatorService {
         };
       }
 
-      // 2. Check permission
+      // 2. Special cases for requesters in review-rescheduled state
+      const isRequester = this._isRequester(userId, request);
+      
+      if (currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+        // Requester can reschedule (counter-reschedule) without reschedule permission
+        if (action === REQUEST_ACTIONS.RESCHEDULE && isRequester) {
+          const locationId = context.locationId || request.district || request.municipalityId;
+          
+          // Requester can counter-reschedule without reschedule permission
+          // Still need basic read permission
+          const hasReadPermission = await permissionService.checkPermission(
+            userId,
+            'request',
+            'read',
+            { locationId }
+          );
+          
+          if (!hasReadPermission) {
+            return {
+              valid: false,
+              reason: 'User does not have request.read permission'
+            };
+          }
+          
+          // Skip authority hierarchy check for requester counter-reschedule
+          return { valid: true };
+        }
+        
+      }
+
+      // 3. Check permission
       const permission = this.ACTION_PERMISSIONS[action];
       if (!permission) {
         return {
@@ -67,7 +99,7 @@ class ActionValidatorService {
         };
       }
 
-      // 3. Check authority hierarchy for review actions
+      // 4. Check authority hierarchy for review actions
       if ([REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.RESCHEDULE].includes(action)) {
         const authorityCheck = await this._checkAuthorityHierarchy(userId, request);
         if (!authorityCheck.valid) {
@@ -75,7 +107,7 @@ class ActionValidatorService {
         }
       }
 
-      // 4. Special checks for confirm action
+      // 5. Special checks for confirm action
       if (action === REQUEST_ACTIONS.CONFIRM) {
         const isRequester = this._isRequester(userId, request);
         const isReviewer = this._isReviewer(userId, request);
@@ -124,7 +156,16 @@ class ActionValidatorService {
       // Get requester authority
       const requesterAuthority = request.requester?.authoritySnapshot || AUTHORITY_TIERS.BASIC_USER;
 
-      // Reviewer authority must be >= requester authority
+      // Special case: If requester is admin (80+) and reviewer is coordinator (60),
+      // allow it (admin requests go to coordinators for execution)
+      if (requesterAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && 
+          actorAuthority >= AUTHORITY_TIERS.COORDINATOR && 
+          actorAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+        // Admin/System Admin requests can be reviewed by coordinators
+        return { valid: true };
+      }
+
+      // Normal case: Reviewer authority must be >= requester authority
       if (actorAuthority < requesterAuthority) {
         return {
           valid: false,

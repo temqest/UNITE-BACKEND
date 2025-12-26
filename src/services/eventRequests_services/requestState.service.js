@@ -13,14 +13,24 @@ class RequestStateService {
    */
   static TRANSITIONS = {
     [REQUEST_STATES.PENDING_REVIEW]: {
-      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Auto-publish on accept
-      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REJECTED,
+      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED, // Intermediate state before auto-publish
+      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED, // Intermediate state
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
+    },
+    [REQUEST_STATES.REVIEW_ACCEPTED]: {
+      // Auto-transition to approved (handled by service, no user action needed)
+      // But allow confirm as explicit action
+      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED // Finalize acceptance
     },
     [REQUEST_STATES.REVIEW_RESCHEDULED]: {
       [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED, // Auto-publish on confirm
-      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REJECTED,
-      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Loop allowed
+      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.REVIEW_ACCEPTED, // Accept rescheduled request → review-accepted (needs confirmation)
+      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REVIEW_REJECTED, // Can reject from rescheduled
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Loop allowed (requester can counter-reschedule)
+    },
+    [REQUEST_STATES.REVIEW_REJECTED]: {
+      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.REJECTED, // Finalize rejection
+      [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED // Alternative way to finalize
     },
     [REQUEST_STATES.APPROVED]: {
       [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED

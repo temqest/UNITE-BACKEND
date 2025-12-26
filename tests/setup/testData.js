@@ -50,8 +50,7 @@ module.exports = {
       return {
         Event_Title: 'Test Blood Drive Event',
         Event_Description: 'Automated test blood drive event',
-        Start_Date: startDate.toISOString(),
-        End_Date: new Date(startDate.getTime() + 8 * 60 * 60 * 1000).toISOString(), // +8 hours
+        Date: startDate.toISOString(), // Use Date instead of Start_Date
         Location: 'Test Location',
         Email: 'test@example.com',
         Phone_Number: '+639123456789',
@@ -69,8 +68,7 @@ module.exports = {
       return {
         Event_Title: 'Coordinator Created Event',
         Event_Description: 'Event created by coordinator for testing',
-        Start_Date: startDate.toISOString(),
-        End_Date: new Date(startDate.getTime() + 8 * 60 * 60 * 1000).toISOString(),
+        Date: startDate.toISOString(), // Use Date instead of Start_Date
         Location: 'Coordinator Test Location',
         Email: 'coordinator@example.com',
         Phone_Number: '+639123456789',
@@ -88,8 +86,7 @@ module.exports = {
       return {
         Event_Title: 'Admin Created Event',
         Event_Description: 'Event created by admin for testing',
-        Start_Date: startDate.toISOString(),
-        End_Date: new Date(startDate.getTime() + 8 * 60 * 60 * 1000).toISOString(),
+        Date: startDate.toISOString(), // Use Date instead of Start_Date
         Location: 'Admin Test Location',
         Email: 'admin@example.com',
         Phone_Number: '+639123456789',
