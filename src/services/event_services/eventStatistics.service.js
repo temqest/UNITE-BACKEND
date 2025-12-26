@@ -6,7 +6,19 @@ const {
   Training,
   Coordinator
 } = require('../../models/index');
-const { REQUEST_STATUSES } = require('../request_services/requestFlow.helpers');
+// Use new constants instead of legacy helpers
+const { REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
+// Create REQUEST_STATUSES object for backward compatibility with existing code
+const REQUEST_STATUSES = {
+  PENDING_REVIEW: REQUEST_STATES.PENDING_REVIEW,
+  REVIEW_ACCEPTED: REQUEST_STATES.REVIEW_ACCEPTED,
+  REVIEW_REJECTED: REQUEST_STATES.REVIEW_REJECTED,
+  REVIEW_RESCHEDULED: REQUEST_STATES.REVIEW_RESCHEDULED,
+  APPROVED: REQUEST_STATES.APPROVED,
+  REJECTED: REQUEST_STATES.REJECTED,
+  COMPLETED: REQUEST_STATES.COMPLETED,
+  CANCELLED: REQUEST_STATES.CANCELLED
+};
 const cache = require('../../utils/cache');
 
 class EventStatisticsService {

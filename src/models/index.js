@@ -27,7 +27,9 @@ const Training = require('./events_models/training.model');
 // ============================================
 // REQUEST MODELS
 // ============================================
-const EventRequest = require('./request_models/eventRequest.model');
+const EventRequest = require('./eventRequests_models/eventRequest.model'); // New clean model
+// Legacy EventRequest model is not loaded here to avoid conflicts
+// It's available in /legacy-event-request folder for reference
 const EventRequestHistory = require('./request_models/eventRequestHistory.model');
 const BloodBagRequest = require('./request_models/bloodBagRequest.model');
 
@@ -180,7 +182,7 @@ module.exports = {
   Training,
   
   // Request Models
-  EventRequest,
+  EventRequest, // New clean model
   EventRequestHistory,
   BloodBagRequest,
   

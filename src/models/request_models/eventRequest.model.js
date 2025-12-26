@@ -37,9 +37,11 @@ const decisionSchema = new mongoose.Schema({
   resultStatus: { type: String, trim: true },
   actor: {
     id: { type: String, trim: true, required: true },
-    // Allow 'Admin' legacy value and 'Stakeholder' for reschedule flows
-    role: { type: String, enum: ['SystemAdmin', 'Admin', 'Coordinator', 'Stakeholder'], required: true },
-    name: { type: String, trim: true }
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // New: ObjectId reference
+    // DEPRECATED: role enum removed - use roleSnapshot for display only
+    roleSnapshot: { type: String, trim: true }, // Free text, no enum - for audit/display purposes
+    name: { type: String, trim: true },
+    authoritySnapshot: { type: Number } // Authority at time of decision
   },
   payload: {
     proposedDate: { type: Date },
@@ -91,36 +93,80 @@ const eventRequestSchema = new mongoose.Schema({
     trim: true,
     ref: 'Event'
   },
-  // Legacy fields (for backward compatibility)
+  // ========== DEPRECATED LEGACY FIELDS ==========
+  // These fields are kept for backward compatibility during migration
+  // DO NOT USE IN NEW CODE - Use requester, assignedCoordinator, stakeholderReference instead
   coordinator_id: {
     type: String,
-    required: false, // Made optional for new requests
+    required: false,
     trim: true,
-    ref: 'Coordinator'
+    ref: 'Coordinator',
+    // DEPRECATED: Use assignedCoordinator.userId instead
+    deprecated: true
   },
   stakeholder_id: {
     type: String,
     trim: true,
-    ref: 'Stakeholder'
+    ref: 'Stakeholder',
+    // DEPRECATED: Use stakeholderReference.userId instead
+    deprecated: true
   },
   made_by_id: {
     type: String,
-    required: false, // Made optional for new requests
+    required: false,
     trim: true,
-    refPath: 'made_by_role'
+    refPath: 'made_by_role',
+    // DEPRECATED: Use requester.userId instead
+    deprecated: true
   },
   made_by_role: {
     type: String,
-    required: false, // Made optional for new requests
-    trim: true
-    // Removed enum to support any role code
+    required: false,
+    trim: true,
+    // DEPRECATED: Use requester.roleSnapshot instead
+    deprecated: true
   },
-  // New role-agnostic fields
+  
+  // ========== NEW ROLE-AGNOSTIC FIELDS ==========
   requester: {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false },
-    id: { type: String, trim: true }, // Legacy ID for backward compatibility
-    roleSnapshot: { type: String, trim: true }, // Role at time of creation
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Required for new requests
+    id: { type: String, trim: true }, // Legacy ID fallback for backward compatibility
+    roleSnapshot: { type: String, trim: true }, // Role at time of creation (for audit/display)
+    authoritySnapshot: { type: Number }, // Authority at creation time (for hierarchy validation)
     name: { type: String, trim: true }
+  },
+  
+  // Assigned coordinator (replaces coordinator_id)
+  assignedCoordinator: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    id: { type: String, trim: true }, // Legacy ID fallback
+    assignedAt: { type: Date, default: Date.now },
+    assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    assignmentRule: { type: String, enum: ['auto', 'manual', 'organization_match', 'coverage_match'], trim: true } // How coordinator was assigned
+  },
+  
+  // Stakeholder reference (replaces stakeholder_id)
+  stakeholderReference: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    id: { type: String, trim: true }, // Legacy ID fallback
+    relationshipType: { type: String, enum: ['creator', 'participant', 'sponsor'], default: 'creator' }
+  },
+  
+  // Organization and coverage area references
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    index: true
+  },
+  coverageAreaId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CoverageArea',
+    index: true
+  },
+  municipalityId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Location',
+    index: true
   },
   reviewer: reviewerSchema,
   creator: {
@@ -254,17 +300,58 @@ const eventRequestSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes
 eventRequestSchema.index({ Status: 1 });
-eventRequestSchema.index({ coordinator_id: 1, Status: 1 }); // Legacy index
-eventRequestSchema.index({ stakeholder_id: 1, Status: 1 }); // Legacy index
+eventRequestSchema.index({ coordinator_id: 1, Status: 1 }); // Legacy index (deprecated)
+eventRequestSchema.index({ stakeholder_id: 1, Status: 1 }); // Legacy index (deprecated)
 eventRequestSchema.index({ 'requester.userId': 1, Status: 1 }); // New index
+eventRequestSchema.index({ 'assignedCoordinator.userId': 1, Status: 1 }); // New index
+eventRequestSchema.index({ 'stakeholderReference.userId': 1, Status: 1 }); // New index
 eventRequestSchema.index({ 'reviewer.userId': 1, Status: 1 }); // New index
 eventRequestSchema.index({ 'reviewer.id': 1, Status: 1 }); // Legacy index
+eventRequestSchema.index({ organizationId: 1, Status: 1 }); // Organization index
+eventRequestSchema.index({ coverageAreaId: 1, Status: 1 }); // Coverage area index
+eventRequestSchema.index({ municipalityId: 1, Status: 1 }); // Municipality index
 eventRequestSchema.index({ expiresAt: 1 });
 eventRequestSchema.index({ 'location.district': 1 }); // New location index
 eventRequestSchema.index({ 'location.province': 1 }); // New location index
 
-const EventRequest = mongoose.model('EventRequest', eventRequestSchema);
+/**
+ * MIGRATION NOTES:
+ * 
+ * Legacy fields (made_by_id, made_by_role, coordinator_id, stakeholder_id) are kept for backward compatibility
+ * but should NOT be used in new code. Use the following new fields instead:
+ * 
+ * - requester.userId (ObjectId) - replaces made_by_id
+ * - requester.authoritySnapshot (Number) - authority at creation time (REQUIRED for hierarchy validation)
+ * - requester.roleSnapshot (String) - role at creation time (for audit/display only)
+ * 
+ * - reviewer.userId (ObjectId) - assigned reviewer
+ * - reviewer.assignmentRule (String) - tracks how reviewer was assigned ('auto', 'manual', 'organization_match', 'coverage_match', 'admin-selected')
+ * 
+ * - assignedCoordinator.userId (ObjectId) - replaces coordinator_id
+ * - stakeholderReference.userId (ObjectId) - replaces stakeholder_id
+ * 
+ * - organizationId, coverageAreaId, municipalityId - organization and coverage references for routing
+ * 
+ * All new code must use these new fields. Legacy fields will be removed in a future version.
+ */
 
-module.exports = EventRequest;
+// Deprecation warning for legacy fields
+eventRequestSchema.pre('save', function() {
+  if (this.isNew && (this.made_by_id || this.made_by_role || this.coordinator_id || this.stakeholder_id)) {
+    console.warn('[DEPRECATED] New request using legacy fields. Migrate to requester.userId, assignedCoordinator.userId, stakeholderReference.userId');
+  }
+  
+  // Ensure authoritySnapshot is always set for new requests
+  if (this.isNew && this.requester && !this.requester.authoritySnapshot) {
+    console.warn('[WARNING] requester.authoritySnapshot not set. This is required for authority hierarchy validation.');
+  }
+});
+
+// Legacy model - renamed to avoid conflicts with new EventRequest model
+// Use mongoose.models check to avoid overwrite errors
+const EventRequestLegacy = mongoose.models.EventRequestLegacy || mongoose.model('EventRequestLegacy', eventRequestSchema);
+
+module.exports = EventRequestLegacy;
 

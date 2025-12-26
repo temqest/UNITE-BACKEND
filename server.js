@@ -594,8 +594,10 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-// Start the server
-startServer();
+// Start the server (skip in test environment)
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 
 module.exports = app;
 

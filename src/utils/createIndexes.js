@@ -8,7 +8,7 @@ async function createIndexes() {
     console.log('Connected to MongoDB');
 
     const Event = require('../models/events_models/event.model');
-    const EventRequest = require('../models/request_models/eventRequest.model');
+    const { EventRequest } = require('../models/index'); // Use new model from index
     const Message = require('../models/chat_models/message.model');
     const Conversation = require('../models/chat_models/conversation.model');
     const Presence = require('../models/chat_models/presence.model');

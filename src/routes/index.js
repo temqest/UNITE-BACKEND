@@ -11,7 +11,8 @@ const { validateCheckPermission } = require('../validators/rbac_validators/permi
 const authRoutes = require('./auth.routes');
 const usersRoutes = require('./users.routes');
 const eventsRoutes = require('./events.routes');
-const requestsRoutes = require('./requests.routes');
+const requestsRoutes = require('./requests.routes'); // Legacy routes (kept for backward compatibility)
+const eventRequestsRoutes = require('./eventRequests.routes'); // New event request system
 const utilityRoutes = require('./utility.routes');
 const inventoryRoutes = require('./inventory.routes');
 const chatRoutes = require('./chat.routes');
@@ -30,7 +31,8 @@ router.use('/api/auth', authRoutes);
 router.use('/api', authRoutes);
 router.use('/api', usersRoutes);
 router.use('/api', eventsRoutes);
-router.use('/api', requestsRoutes);
+router.use('/api', requestsRoutes); // Legacy routes (kept for backward compatibility)
+router.use('/api', eventRequestsRoutes); // New event request system
 router.use('/api', utilityRoutes);
 router.use('/api', inventoryRoutes);
 router.use('/api', locationsRoutes); // New flexible location routes

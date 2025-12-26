@@ -59,14 +59,30 @@ class PermissionService {
         return false;
       });
 
-      // Log permission check for diagnostic purposes
+      // Enhanced diagnostic logging for permission denials
       if (!hasPermission) {
-        console.log('[checkPermission] Permission denied:', {
+        const User = require('../../models/index').User;
+        const authorityService = require('./authority.service');
+        let userAuthority = null;
+        try {
+          const user = await User.findById(userId).select('authority').lean();
+          userAuthority = user?.authority || await authorityService.calculateUserAuthority(userId);
+        } catch (e) {
+          // Ignore errors in diagnostic logging
+        }
+        
+        console.log('[PERMISSION DENIED]', {
           userId: userId.toString(),
           resource,
           action,
+          requiredPermission: `${resource}.${action}`,
+          locationId: context.locationId?.toString() || null,
+          coverageAreaId: context.coverageAreaId?.toString() || null,
+          userAuthority,
           permissionsFound: permissions.length,
-          hasWildcard: permissions.some(p => p.resource === '*' && p.actions.includes('*'))
+          hasWildcard: permissions.some(p => p.resource === '*' && p.actions.includes('*')),
+          reason: 'INSUFFICIENT_PERMISSION',
+          timestamp: new Date().toISOString()
         });
       }
 
