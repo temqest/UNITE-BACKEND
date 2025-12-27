@@ -18,6 +18,33 @@ router.get('/public/events', async (req, res, next) => {
     next(error);
   }
 });
+
+/**
+ * @route   GET /api/events/all
+ * @desc    Get all approved events for calendar consumption (with populated location names and category data)
+ * @access  Public (returns only approved events)
+ */
+router.get('/events/all', async (req, res, next) => {
+  try {
+    await eventOverviewController.getAllEventsForCalendar(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/me/events
+ * @desc    Get events for logged-in user based on role (SysAdmin: all, Coordinator: own+coverage+org, Stakeholder: own only)
+ * @access  Private (requires authentication)
+ */
+router.get('/me/events', authenticate, async (req, res, next) => {
+  try {
+    await eventOverviewController.getUserEvents(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ==================== CALENDAR ROUTES ====================
 
 /**

@@ -4,7 +4,7 @@
  * Handles automatic event publishing when request is approved
  */
 
-const { Event } = require('../../models/index');
+const { Event, BloodDrive, Training, Advocacy } = require('../../models/index');
 const { REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
 
 class EventPublisherService {
@@ -81,11 +81,34 @@ class EventPublisherService {
       // Save event
       await event.save();
 
+      // Create category record if category is specified
+      let categoryRecord = null;
+      let categoryWarning = null;
+      
+      if (event.Category) {
+        try {
+          categoryRecord = await this._createCategoryRecord(event.Event_ID, event.Category, request);
+          if (categoryRecord) {
+            console.log(`[EVENT PUBLISHER] Category record created for Event ${event.Event_ID}, Category: ${event.Category}`);
+          } else {
+            categoryWarning = `Category record creation skipped for Event ${event.Event_ID} (Category: ${event.Category}) - missing required fields`;
+            console.warn(`[EVENT PUBLISHER] ${categoryWarning}`);
+          }
+        } catch (categoryError) {
+          categoryWarning = `Category record creation failed for Event ${event.Event_ID} (Category: ${event.Category}): ${categoryError.message}`;
+          console.error(`[EVENT PUBLISHER] ${categoryWarning}`);
+          // Don't fail event creation if category creation fails - log warning instead
+        }
+      }
+
       // Update request with event reference
       request.eventId = event._id;
       await request.save();
 
       console.log(`[EVENT PUBLISHER] Event ${event.Event_ID} published for request ${request.Request_ID}`);
+      if (categoryWarning) {
+        console.warn(`[EVENT PUBLISHER] Warning: ${categoryWarning}`);
+      }
 
       return event;
     } catch (error) {
@@ -111,6 +134,116 @@ class EventPublisherService {
     };
     
     return roleMap[roleCode.toLowerCase()] || 'Stakeholder';
+  }
+
+  /**
+   * Create category record for event
+   * @private
+   * @param {string} eventId - Event_ID
+   * @param {string} category - Category type (BloodDrive, Training, Advocacy)
+   * @param {Object} requestData - Request document with category data
+   * @returns {Promise<Object|null>} Created category record or null if validation fails
+   */
+  async _createCategoryRecord(eventId, category, requestData) {
+    if (!eventId || !category) {
+      console.warn(`[EVENT PUBLISHER] Cannot create category record: missing eventId or category`);
+      return null;
+    }
+
+    const categoryType = String(category).trim();
+    
+    try {
+      // Check if category record already exists
+      let existingRecord = null;
+      if (categoryType === 'BloodDrive' || categoryType.toLowerCase().includes('blood')) {
+        existingRecord = await BloodDrive.findOne({ BloodDrive_ID: eventId });
+        if (existingRecord) {
+          console.log(`[EVENT PUBLISHER] BloodDrive record already exists for Event ${eventId}`);
+          return existingRecord;
+        }
+      } else if (categoryType === 'Training' || categoryType.toLowerCase().includes('train')) {
+        existingRecord = await Training.findOne({ Training_ID: eventId });
+        if (existingRecord) {
+          console.log(`[EVENT PUBLISHER] Training record already exists for Event ${eventId}`);
+          return existingRecord;
+        }
+      } else if (categoryType === 'Advocacy' || categoryType.toLowerCase().includes('advoc')) {
+        existingRecord = await Advocacy.findOne({ Advocacy_ID: eventId });
+        if (existingRecord) {
+          console.log(`[EVENT PUBLISHER] Advocacy record already exists for Event ${eventId}`);
+          return existingRecord;
+        }
+      }
+
+      // Create new category record based on type
+      if (categoryType === 'BloodDrive' || categoryType.toLowerCase().includes('blood')) {
+        // BloodDrive requires Target_Donation
+        const targetDonation = requestData.Target_Donation;
+        if (targetDonation === undefined || targetDonation === null) {
+          console.warn(`[EVENT PUBLISHER] Cannot create BloodDrive record: Target_Donation is required but missing`);
+          return null;
+        }
+
+        const bloodDrive = new BloodDrive({
+          BloodDrive_ID: eventId,
+          Target_Donation: Number(targetDonation),
+          VenueType: requestData.VenueType || undefined
+        });
+
+        await bloodDrive.save();
+        return bloodDrive;
+
+      } else if (categoryType === 'Training' || categoryType.toLowerCase().includes('train')) {
+        // Training requires MaxParticipants
+        const maxParticipants = requestData.MaxParticipants;
+        if (maxParticipants === undefined || maxParticipants === null) {
+          console.warn(`[EVENT PUBLISHER] Cannot create Training record: MaxParticipants is required but missing`);
+          return null;
+        }
+
+        const training = new Training({
+          Training_ID: eventId,
+          TrainingType: requestData.TrainingType || undefined,
+          MaxParticipants: Number(maxParticipants)
+        });
+
+        await training.save();
+        return training;
+
+      } else if (categoryType === 'Advocacy' || categoryType.toLowerCase().includes('advoc')) {
+        // Advocacy fields are all optional, but we should have at least Topic or TargetAudience
+        const topic = requestData.Topic;
+        const targetAudience = requestData.TargetAudience;
+        
+        if (!topic && !targetAudience) {
+          console.warn(`[EVENT PUBLISHER] Cannot create Advocacy record: Topic or TargetAudience is required but both are missing`);
+          return null;
+        }
+
+        const expectedSizeRaw = requestData.ExpectedAudienceSize;
+        const expectedSize = expectedSizeRaw !== undefined && expectedSizeRaw !== null && expectedSizeRaw !== '' 
+          ? Number(expectedSizeRaw) 
+          : undefined;
+
+        const advocacy = new Advocacy({
+          Advocacy_ID: eventId,
+          Topic: topic || undefined,
+          TargetAudience: targetAudience || undefined,
+          ExpectedAudienceSize: expectedSize,
+          PartnerOrganization: requestData.PartnerOrganization || undefined
+        });
+
+        await advocacy.save();
+        return advocacy;
+
+      } else {
+        console.warn(`[EVENT PUBLISHER] Unknown category type: ${categoryType}`);
+        return null;
+      }
+    } catch (error) {
+      console.error(`[EVENT PUBLISHER] Error creating category record for Event ${eventId}, Category ${categoryType}:`, error);
+      throw error;
+    }
   }
 
   /**

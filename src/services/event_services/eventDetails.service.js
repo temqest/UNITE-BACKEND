@@ -173,40 +173,157 @@ class EventDetailsService {
    * @param {string} eventId 
    * @returns {Object} Category info
    */
-  async getEventCategory(eventId) {
+  async getEventCategory(eventId, eventCategory = null) {
     try {
-      const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: eventId });
+      // First try to find category-specific records
+      const [bloodDrive, advocacy, training] = await Promise.all([
+        BloodDrive.findOne({ BloodDrive_ID: eventId }).lean(),
+        Advocacy.findOne({ Advocacy_ID: eventId }).lean(),
+        Training.findOne({ Training_ID: eventId }).lean()
+      ]);
+
+      // Debug logging (always log to help diagnose)
+      console.log(`[getEventCategory] Searching for Event_ID: ${eventId}, eventCategory: ${eventCategory}`);
+      console.log(`[getEventCategory] Query results:`, {
+        bloodDriveFound: !!bloodDrive,
+        advocacyFound: !!advocacy,
+        trainingFound: !!training,
+        bloodDriveData: bloodDrive ? { Target_Donation: bloodDrive.Target_Donation, VenueType: bloodDrive.VenueType } : null
+      });
+
       if (bloodDrive) {
+        const categoryData = {
+          Target_Donation: bloodDrive.Target_Donation,
+          VenueType: bloodDrive.VenueType
+        };
+        
+        console.log(`[getEventCategory] ✅ Found BloodDrive record! Returning data:`, categoryData);
+        
         return {
           type: 'BloodDrive',
-          data: {
-            Target_Donation: bloodDrive.Target_Donation,
-            VenueType: bloodDrive.VenueType
-          }
+          data: categoryData
         };
       }
 
-      const advocacy = await Advocacy.findOne({ Advocacy_ID: eventId });
       if (advocacy) {
+        const categoryData = {
+          Topic: advocacy.Topic,
+          TargetAudience: advocacy.TargetAudience,
+          ExpectedAudienceSize: advocacy.ExpectedAudienceSize,
+          PartnerOrganization: advocacy.PartnerOrganization
+        };
+        
+        console.log(`[getEventCategory] ✅ Found Advocacy record! Returning data:`, categoryData);
+        
         return {
           type: 'Advocacy',
-          data: {
-            Topic: advocacy.Topic,
-            TargetAudience: advocacy.TargetAudience,
-            ExpectedAudienceSize: advocacy.ExpectedAudienceSize,
-            PartnerOrganization: advocacy.PartnerOrganization
-          }
+          data: categoryData
         };
       }
 
-      const training = await Training.findOne({ Training_ID: eventId });
       if (training) {
+        const categoryData = {
+          TrainingType: training.TrainingType,
+          MaxParticipants: training.MaxParticipants
+        };
+        
+        console.log(`[getEventCategory] ✅ Found Training record! Returning data:`, categoryData);
+        
         return {
           type: 'Training',
-          data: {
-            TrainingType: training.TrainingType,
-            MaxParticipants: training.MaxParticipants
+          data: categoryData
+        };
+      }
+
+      // If no category-specific record found, try to use Event's Category field as fallback
+      // But also try to fetch the category record one more time using the known category type
+      let categoryStr = null;
+      
+      if (eventCategory) {
+        categoryStr = String(eventCategory).trim();
+      } else {
+        // Last resort: fetch Event document to check Category field
+        try {
+          const { Event } = require('../../models');
+          const event = await Event.findOne({ Event_ID: eventId }).select('Category').lean();
+          if (event && event.Category) {
+            categoryStr = String(event.Category).trim();
           }
+        } catch (eventFetchError) {
+          // Ignore errors when fetching Event document
+        }
+      }
+
+      // If we have a category type but no record found, try alternative search methods
+      if (categoryStr && categoryStr !== 'Unknown') {
+        console.log(`[getEventCategory] ⚠️ Found category type "${categoryStr}" from Event.Category but NO category record found for Event_ID: ${eventId}`);
+        
+        // Try to find the record with case-insensitive or partial matching as a last resort
+        let alternativeRecord = null;
+        try {
+          if (categoryStr === 'BloodDrive' || categoryStr.toLowerCase().includes('blood')) {
+            // Try case-insensitive search
+            alternativeRecord = await BloodDrive.findOne({ 
+              BloodDrive_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
+            }).lean();
+            
+            // If still not found, try to find any BloodDrive record (for debugging)
+            if (!alternativeRecord) {
+              const sampleRecords = await BloodDrive.find({}).select('BloodDrive_ID').limit(3).lean();
+              console.log(`[getEventCategory] Sample BloodDrive_IDs in database:`, sampleRecords.map(r => r.BloodDrive_ID));
+            }
+          } else if (categoryStr === 'Advocacy' || categoryStr.toLowerCase().includes('advoc')) {
+            alternativeRecord = await Advocacy.findOne({ 
+              Advocacy_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
+            }).lean();
+          } else if (categoryStr === 'Training' || categoryStr.toLowerCase().includes('train')) {
+            alternativeRecord = await Training.findOne({ 
+              Training_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
+            }).lean();
+          }
+          
+          if (alternativeRecord) {
+            console.log(`[getEventCategory] ✅ Found ${categoryStr} record with alternative search!`);
+            // Extract data based on category type
+            if (categoryStr === 'BloodDrive' || categoryStr.toLowerCase().includes('blood')) {
+              return {
+                type: 'BloodDrive',
+                data: {
+                  Target_Donation: alternativeRecord.Target_Donation,
+                  VenueType: alternativeRecord.VenueType
+                }
+              };
+            } else if (categoryStr === 'Advocacy' || categoryStr.toLowerCase().includes('advoc')) {
+              return {
+                type: 'Advocacy',
+                data: {
+                  Topic: alternativeRecord.Topic,
+                  TargetAudience: alternativeRecord.TargetAudience,
+                  ExpectedAudienceSize: alternativeRecord.ExpectedAudienceSize,
+                  PartnerOrganization: alternativeRecord.PartnerOrganization
+                }
+              };
+            } else if (categoryStr === 'Training' || categoryStr.toLowerCase().includes('train')) {
+              return {
+                type: 'Training',
+                data: {
+                  TrainingType: alternativeRecord.TrainingType,
+                  MaxParticipants: alternativeRecord.MaxParticipants
+                }
+              };
+            }
+          }
+        } catch (altSearchError) {
+          console.error(`[getEventCategory] Error in alternative search:`, altSearchError);
+        }
+        
+        console.log(`[getEventCategory] This means the ${categoryStr} record with ${categoryStr}_ID="${eventId}" does not exist in the database.`);
+        console.log(`[getEventCategory] The category-specific record needs to be created for this event to display category data.`);
+        
+        // Return the category type with null data (record doesn't exist)
+        return {
+          type: categoryStr,
+          data: null
         };
       }
 
@@ -216,6 +333,7 @@ class EventDetailsService {
       };
 
     } catch (error) {
+      console.error('[getEventCategory] Error:', error);
       return {
         type: 'Unknown',
         data: null
@@ -417,9 +535,12 @@ class EventDetailsService {
         return { success: true, events: [] };
       }
 
-      // Fetch minimal event fields for requested ids
+      // Fetch minimal event fields for requested ids with location population
       const events = await Event.find({ Event_ID: { $in: ids } })
-        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role stakeholder Email Phone_Number')
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role stakeholder province district municipality Email Phone_Number')
         .lean();
 
       // Collect unique coordinator and stakeholder ids to resolve names in batch
@@ -480,15 +601,20 @@ class EventDetailsService {
             coordId = e.made_by_id;
           }
         }
-        const staff = coordId ? staffById.get(String(coordId)) : null;
         const coord = coordId ? coordById.get(String(coordId)) : null;
         const stakeholder = stakeholderId ? stakeholderById.get(String(stakeholderId)) : null;
 
-        const coordinatorName = staff
-          ? `${staff.First_Name || ''} ${staff.Middle_Name || ''} ${staff.Last_Name || ''}`.trim()
-          : (coord ? (coord.Name || coord.Coordinator_Name || null) : null);
+        // Resolve coordinator name from User model (coordById is already populated)
+        const coordinatorName = coord 
+          ? (coord.fullName || `${coord.firstName || ''} ${coord.lastName || ''}`.trim() || coord.Name || coord.Coordinator_Name || null)
+          : null;
 
         const category = categories[idx] || { type: 'Unknown', data: null };
+
+        // Extract location names from populated refs
+        const provinceName = e.province?.name || (typeof e.province === 'object' && e.province?.name) || null;
+        const districtName = e.district?.name || (typeof e.district === 'object' && e.district?.name) || null;
+        const municipalityName = e.municipality?.name || (typeof e.municipality === 'object' && e.municipality?.name) || null;
 
         return {
           Event_ID: e.Event_ID,
@@ -499,6 +625,9 @@ class EventDetailsService {
           Status: e.Status,
           MadeByCoordinatorID: coordId,
           MadeByStakeholderID: stakeholderId,
+          province: provinceName,
+          district: districtName,
+          municipality: municipalityName,
           coordinator: {
             id: coordId || null,
             name: coordinatorName || null,

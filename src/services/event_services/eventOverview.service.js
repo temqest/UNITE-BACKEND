@@ -5,8 +5,24 @@ const {
   Advocacy,
   Training,
   EventStaff,
-  User
+  User,
+  Location
 } = require('../../models/index');
+
+// Register Location model with aliases for Province, District, Municipality
+// This is needed because Event model references these names, but they're all Location model
+const mongoose = require('mongoose');
+const locationSchema = Location.schema;
+
+if (!mongoose.models.Province) {
+  mongoose.model('Province', locationSchema, Location.collection.name);
+}
+if (!mongoose.models.District) {
+  mongoose.model('District', locationSchema, Location.collection.name);
+}
+if (!mongoose.models.Municipality) {
+  mongoose.model('Municipality', locationSchema, Location.collection.name);
+}
 
 class EventOverviewService {
   /**
@@ -517,6 +533,440 @@ class EventOverviewService {
 
     } catch (error) {
       return null;
+    }
+  }
+
+  /**
+   * Get all approved events for calendar consumption
+   * Returns properly populated events with location names, category data, and coordinator/stakeholder names
+   * @param {Object} filters - Optional date_from/date_to filters
+   * @returns {Object} Events array with populated data
+   */
+  async getAllEventsForCalendar(filters = {}) {
+    try {
+      const query = {
+        Status: 'Approved'
+      };
+
+      // Apply date filters if provided
+      if (filters.date_from || filters.date_to) {
+        query.Start_Date = {};
+        if (filters.date_from) {
+          query.Start_Date.$gte = new Date(filters.date_from);
+        }
+        if (filters.date_to) {
+          query.Start_Date.$lte = new Date(filters.date_to);
+        }
+      }
+
+      // Fetch events with location population
+      const events = await Event.find(query)
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role province district municipality Email Phone_Number Category')
+        .sort({ Start_Date: 1 })
+        .lean();
+
+      // Collect unique coordinator and stakeholder IDs
+      const coordinatorIds = Array.from(new Set(
+        events.map(e => e.coordinator_id || e.coordinator?.toString()).filter(Boolean)
+      ));
+      const stakeholderIds = Array.from(new Set(
+        events.map(e => e.stakeholder_id || e.stakeholder?.toString()).filter(Boolean)
+      ));
+
+      // Fetch coordinator and stakeholder users in batch
+      const coordUsers = [];
+      const stakeholderUsers = [];
+
+      for (const coordId of coordinatorIds) {
+        let user = null;
+        if (require('mongoose').Types.ObjectId.isValid(coordId)) {
+          user = await User.findById(coordId).lean();
+        } else {
+          user = await User.findByLegacyId(coordId).lean();
+        }
+        if (user) coordUsers.push(user);
+      }
+
+      for (const stakeId of stakeholderIds) {
+        let user = null;
+        if (require('mongoose').Types.ObjectId.isValid(stakeId)) {
+          user = await User.findById(stakeId).lean();
+        } else {
+          user = await User.findByLegacyId(stakeId).lean();
+        }
+        if (user) stakeholderUsers.push(user);
+      }
+
+      // Create lookup maps
+      const coordById = new Map();
+      for (const u of coordUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        coordById.set(String(id), u);
+      }
+
+      const stakeholderById = new Map();
+      for (const u of stakeholderUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        stakeholderById.set(String(id), u);
+      }
+
+      // Fetch categories in parallel (pass Event.Category as fallback)
+      const eventDetailsService = require('./eventDetails.service');
+      const categories = await Promise.all(
+        events.map(ev => eventDetailsService.getEventCategory(ev.Event_ID, ev.Category))
+      );
+
+      // Map events to calendar format
+      const mapped = events.map((e, idx) => {
+        let coordId = e.coordinator_id;
+        let stakeholderId = e.stakeholder_id || e.stakeholder?.toString();
+        
+        if (!coordId && !stakeholderId) {
+          if (e.stakeholder_id || e.stakeholder) {
+            stakeholderId = e.made_by_id;
+          } else {
+            coordId = e.made_by_id;
+          }
+        }
+
+        const coord = coordId ? coordById.get(String(coordId)) : null;
+        const stakeholder = stakeholderId ? stakeholderById.get(String(stakeholderId)) : null;
+
+        const coordinatorName = coord
+          ? (coord.fullName || `${coord.firstName || ''} ${coord.lastName || ''}`.trim() || coord.Name || coord.Coordinator_Name || null)
+          : null;
+
+        const category = categories[idx] || { type: 'Unknown', data: null };
+
+        // Extract location names from populated refs
+        const provinceName = e.province?.name || (typeof e.province === 'object' && e.province?.name) || null;
+        const districtName = e.district?.name || (typeof e.district === 'object' && e.district?.name) || null;
+        const municipalityName = e.municipality?.name || (typeof e.municipality === 'object' && e.municipality?.name) || null;
+
+        return {
+          Event_ID: e.Event_ID,
+          Event_Title: e.Event_Title,
+          Location: e.Location,
+          Start_Date: e.Start_Date,
+          End_Date: e.End_Date,
+          Status: e.Status,
+          province: provinceName,
+          district: districtName,
+          municipality: municipalityName,
+          coordinator: {
+            id: coordId || null,
+            name: coordinatorName || null
+          },
+          stakeholder: stakeholder ? {
+            id: stakeholder._id ? stakeholder._id.toString() : (stakeholder.userId || stakeholder.id),
+            name: stakeholder.fullName || `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim()
+          } : null,
+          category: category.type,
+          categoryData: category.data || null,
+          Email: e.Email,
+          Phone_Number: e.Phone_Number
+        };
+      });
+
+      return {
+        success: true,
+        data: mapped
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to get all events for calendar: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get events for logged-in user based on role
+   * - SysAdmin: All events
+   * - Coordinator: Own events + stakeholder events in coverage area + organization events
+   * - Stakeholder: Only own events
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} filters - Optional date_from/date_to filters
+   * @returns {Object} Events array with populated data
+   */
+  async getUserEventsForCalendar(userId, filters = {}) {
+    try {
+      // Convert userId to string for consistent handling
+      const userIdStr = String(userId);
+      
+      // Try to find user by ObjectId first, then by legacy ID
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(userIdStr)) {
+        user = await User.findById(userIdStr);
+      }
+      if (!user) {
+        user = await User.findByLegacyId(userIdStr);
+      }
+      
+      if (!user) {
+        throw new Error(`User not found: ${userIdStr}`);
+      }
+
+      // Check if user is system admin
+      const isSystemAdmin = user.isSystemAdmin || user.authority >= 100;
+      
+      if (isSystemAdmin) {
+        // System admin sees all events - use getAllEventsForCalendar
+        return await this.getAllEventsForCalendar(filters);
+      }
+
+      // Build base query for approved events
+      const query = {
+        Status: 'Approved'
+      };
+
+      // Apply date filters if provided
+      if (filters.date_from || filters.date_to) {
+        query.Start_Date = {};
+        if (filters.date_from) {
+          query.Start_Date.$gte = new Date(filters.date_from);
+        }
+        if (filters.date_to) {
+          query.Start_Date.$lte = new Date(filters.date_to);
+        }
+      }
+
+      // Check user role
+      const userRoles = (user.roles || []).filter(r => r.isActive).map(r => r.roleCode || '').map(r => r.toLowerCase());
+      const isCoordinator = userRoles.some(r => r.includes('coordinator'));
+      const isStakeholder = userRoles.some(r => r.includes('stakeholder'));
+
+      // Use user._id for queries (consistent ObjectId format)
+      const userObjectId = user._id || userId;
+      const userObjectIdStr = userObjectId.toString();
+      
+      if (isStakeholder) {
+        // Stakeholder: Only own events
+        query.$or = [
+          { stakeholder_id: userObjectIdStr },
+          { stakeholder_id: userObjectId },
+          { made_by_id: userObjectIdStr },
+          { made_by_id: userObjectId }
+        ];
+      } else if (isCoordinator) {
+        // Coordinator: Own events + stakeholder events in coverage area + organization events
+        const orClauses = [
+          { coordinator_id: userObjectIdStr }, // Own events (string)
+          { coordinator_id: userObjectId }, // Own events (ObjectId)
+          { made_by_id: userObjectIdStr }, // Events created by coordinator (string)
+          { made_by_id: userObjectId } // Events created by coordinator (ObjectId)
+        ];
+
+        // Get coordinator's coverage areas and municipalities
+        let municipalityIds = [];
+        let organizationIds = [];
+        
+        try {
+          const coordinatorContextService = require('../users_services/coordinatorContext.service');
+          const context = await coordinatorContextService.getCoordinatorContext(userObjectId);
+          
+          // Get municipality IDs from coverage areas
+          municipalityIds = (context.coverageAreas || [])
+            .flatMap(ca => ca.municipalityIds || [])
+            .filter(Boolean)
+            .map(id => id.toString());
+
+          // Get organization IDs
+          organizationIds = (context.organizations || [])
+            .map(org => org._id.toString())
+            .filter(Boolean);
+        } catch (contextError) {
+          // If context service fails, log but continue with just own events
+          console.error('[getUserEventsForCalendar] Error getting coordinator context:', contextError.message);
+          // Continue with just own events (orClauses already has coordinator_id and made_by_id)
+        }
+
+        // Add coverage area filter: events where stakeholder's location matches coordinator's coverage
+        if (municipalityIds.length > 0) {
+          try {
+            // Find stakeholders in coordinator's coverage area
+            const locationService = require('../utility_services/location.service');
+            const userLocations = await locationService.getUserLocations(userObjectId);
+            const locationIds = userLocations.map(loc => loc._id.toString());
+
+            if (locationIds.length > 0) {
+              // Get all users (stakeholders) in these locations
+              const { UserLocation } = require('../../models');
+              const stakeholderAssignments = await UserLocation.find({
+                locationId: { $in: locationIds }
+              }).select('userId').lean();
+              
+              const stakeholderIdsInCoverage = Array.from(new Set(
+                stakeholderAssignments.map(a => a.userId.toString())
+              ));
+
+              if (stakeholderIdsInCoverage.length > 0) {
+                orClauses.push({
+                  stakeholder_id: { $in: stakeholderIdsInCoverage }
+                });
+              }
+            }
+
+            // Also match events by municipality if event has municipality field
+            orClauses.push({
+              municipality: { $in: municipalityIds }
+            });
+          } catch (locationError) {
+            // If location service fails, log but continue
+            console.error('[getUserEventsForCalendar] Error getting user locations:', locationError.message);
+            // Still add municipality filter even if location lookup fails
+            orClauses.push({
+              municipality: { $in: municipalityIds }
+            });
+          }
+        }
+
+        // Add organization filter: events where stakeholder's organization matches
+        if (organizationIds.length > 0) {
+          // Find stakeholders in coordinator's organizations
+          const stakeholdersInOrgs = await User.find({
+            'organizations.organizationId': { $in: organizationIds },
+            'roles.roleCode': { $regex: /stakeholder/i }
+          }).select('_id').lean();
+
+          const stakeholderIdsInOrgs = stakeholdersInOrgs.map(s => s._id.toString());
+
+          if (stakeholderIdsInOrgs.length > 0) {
+            orClauses.push({
+              stakeholder_id: { $in: stakeholderIdsInOrgs }
+            });
+          }
+        }
+
+        query.$or = orClauses;
+      } else {
+        // Unknown role: only own events
+        query.$or = [
+          { made_by_id: userObjectIdStr },
+          { made_by_id: userObjectId }
+        ];
+      }
+
+      // Fetch events with location population
+      const events = await Event.find(query)
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role province district municipality Email Phone_Number Category')
+        .sort({ Start_Date: 1 })
+        .lean();
+
+      // Collect unique coordinator and stakeholder IDs
+      const coordinatorIds = Array.from(new Set(
+        events.map(e => e.coordinator_id || e.coordinator?.toString()).filter(Boolean)
+      ));
+      const stakeholderIds = Array.from(new Set(
+        events.map(e => e.stakeholder_id || e.stakeholder?.toString()).filter(Boolean)
+      ));
+
+      // Fetch coordinator and stakeholder users in batch
+      const coordUsers = [];
+      const stakeholderUsers = [];
+
+      for (const coordId of coordinatorIds) {
+        let coordUser = null;
+        if (require('mongoose').Types.ObjectId.isValid(coordId)) {
+          coordUser = await User.findById(coordId).lean();
+        } else {
+          coordUser = await User.findByLegacyId(coordId).lean();
+        }
+        if (coordUser) coordUsers.push(coordUser);
+      }
+
+      for (const stakeId of stakeholderIds) {
+        let stakeUser = null;
+        if (require('mongoose').Types.ObjectId.isValid(stakeId)) {
+          stakeUser = await User.findById(stakeId).lean();
+        } else {
+          stakeUser = await User.findByLegacyId(stakeId).lean();
+        }
+        if (stakeUser) stakeholderUsers.push(stakeUser);
+      }
+
+      // Create lookup maps
+      const coordById = new Map();
+      for (const u of coordUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        coordById.set(String(id), u);
+      }
+
+      const stakeholderById = new Map();
+      for (const u of stakeholderUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        stakeholderById.set(String(id), u);
+      }
+
+      // Fetch categories in parallel (pass Event.Category as fallback)
+      const eventDetailsService = require('./eventDetails.service');
+      const categories = await Promise.all(
+        events.map(ev => eventDetailsService.getEventCategory(ev.Event_ID, ev.Category))
+      );
+
+      // Map events to calendar format
+      const mapped = events.map((e, idx) => {
+        let coordId = e.coordinator_id;
+        let stakeholderId = e.stakeholder_id || e.stakeholder?.toString();
+        
+        if (!coordId && !stakeholderId) {
+          if (e.stakeholder_id || e.stakeholder) {
+            stakeholderId = e.made_by_id;
+          } else {
+            coordId = e.made_by_id;
+          }
+        }
+
+        const coord = coordId ? coordById.get(String(coordId)) : null;
+        const stakeholder = stakeholderId ? stakeholderById.get(String(stakeholderId)) : null;
+
+        const coordinatorName = coord
+          ? (coord.fullName || `${coord.firstName || ''} ${coord.lastName || ''}`.trim() || coord.Name || coord.Coordinator_Name || null)
+          : null;
+
+        const category = categories[idx] || { type: 'Unknown', data: null };
+
+        // Extract location names from populated refs
+        const provinceName = e.province?.name || (typeof e.province === 'object' && e.province?.name) || null;
+        const districtName = e.district?.name || (typeof e.district === 'object' && e.district?.name) || null;
+        const municipalityName = e.municipality?.name || (typeof e.municipality === 'object' && e.municipality?.name) || null;
+
+        return {
+          Event_ID: e.Event_ID,
+          Event_Title: e.Event_Title,
+          Location: e.Location,
+          Start_Date: e.Start_Date,
+          End_Date: e.End_Date,
+          Status: e.Status,
+          province: provinceName,
+          district: districtName,
+          municipality: municipalityName,
+          coordinator: {
+            id: coordId || null,
+            name: coordinatorName || null
+          },
+          stakeholder: stakeholder ? {
+            id: stakeholder._id ? stakeholder._id.toString() : (stakeholder.userId || stakeholder.id),
+            name: stakeholder.fullName || `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim()
+          } : null,
+          category: category.type,
+          categoryData: category.data || null,
+          Email: e.Email,
+          Phone_Number: e.Phone_Number
+        };
+      });
+
+      return {
+        success: true,
+        data: mapped
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to get user events for calendar: ${error.message}`);
     }
   }
 }
