@@ -18,6 +18,60 @@ function requirePermission(resource, action) {
         });
       }
 
+      // Extract locationId from request (body, params, or query)
+      const locationId = req.body?.locationId || 
+                        req.params?.locationId || 
+                        req.query?.locationId ||
+                        req.body?.location?.district ||
+                        req.body?.location?.province ||
+                        null;
+
+      // First check if user has wildcard permission (*.*) - admins get all permissions
+      console.log('[requirePermission] Checking permissions for user:', {
+        userId: userId.toString(),
+        resource,
+        action,
+        locationId: locationId?.toString() || null
+      });
+
+      let userPermissions = [];
+      try {
+        userPermissions = await permissionService.getUserPermissions(userId, null);
+        console.log('[requirePermission] getUserPermissions returned:', {
+          count: userPermissions.length,
+          permissions: userPermissions.map(p => ({
+            resource: p.resource,
+            actions: p.actions,
+            hasWildcard: p.resource === '*' && p.actions.includes('*')
+          }))
+        });
+      } catch (permError) {
+        console.error('[requirePermission] Error getting user permissions:', permError);
+      }
+
+      // Check for wildcard permission in multiple formats
+      const hasWildcard = userPermissions.some(p => {
+        // Standard format: { resource: '*', actions: ['*'] }
+        if (p.resource === '*' && Array.isArray(p.actions) && p.actions.includes('*')) {
+          return true;
+        }
+        // Also check if actions includes the specific action
+        if (p.resource === '*' && Array.isArray(p.actions) && p.actions.includes(action)) {
+          return true;
+        }
+        return false;
+      });
+      
+      if (hasWildcard) {
+        console.log('[requirePermission] ✓ Wildcard permission (*.*) granted:', {
+          userId: userId.toString(),
+          resource,
+          action,
+          permissionsFound: userPermissions.length
+        });
+        return next();
+      }
+
       // Bypass permission check for SysAdmin (authority >= 80)
       const authorityService = require('../services/users_services/authority.service');
       const userAuthority = await authorityService.calculateUserAuthority(userId);
@@ -32,15 +86,14 @@ function requirePermission(resource, action) {
         return next();
       }
 
-      // Extract locationId from request (body, params, or query)
-      const locationId = req.body?.locationId || 
-                        req.params?.locationId || 
-                        req.query?.locationId ||
-                        req.body?.location?.district ||
-                        req.body?.location?.province ||
-                        null;
-
       // Check permission
+      console.log('[requirePermission] Checking specific permission:', {
+        userId: userId.toString(),
+        resource,
+        action,
+        locationId: locationId?.toString() || null
+      });
+
       const hasPermission = await permissionService.checkPermission(
         userId,
         resource,
@@ -48,13 +101,23 @@ function requirePermission(resource, action) {
         { locationId }
       );
 
+      console.log('[requirePermission] checkPermission result:', {
+        userId: userId.toString(),
+        resource,
+        action,
+        hasPermission,
+        authority: userAuthority
+      });
+
       if (!hasPermission) {
-        console.log('[requirePermission] Permission denied:', {
+        console.log('[requirePermission] ✗ Permission denied:', {
           userId: userId.toString(),
           authority: userAuthority,
           resource,
           action,
-          locationId: locationId?.toString() || null
+          locationId: locationId?.toString() || null,
+          userPermissionsCount: userPermissions.length,
+          userPermissions: userPermissions.map(p => `${p.resource}.${Array.isArray(p.actions) ? p.actions.join(',') : p.actions}`)
         });
         return res.status(403).json({ 
           success: false, 
@@ -62,6 +125,12 @@ function requirePermission(resource, action) {
           required: { resource, action }
         });
       }
+
+      console.log('[requirePermission] ✓ Permission granted:', {
+        userId: userId.toString(),
+        resource,
+        action
+      });
 
       next();
     } catch (error) {
@@ -91,6 +160,27 @@ function requireAnyPermission(permissions) {
         });
       }
 
+      const locationId = req.body?.locationId || 
+                        req.params?.locationId || 
+                        req.query?.locationId ||
+                        req.body?.location?.district ||
+                        req.body?.location?.province ||
+                        null;
+
+      // First check if user has wildcard permission (*.*) - admins get all permissions
+      const userPermissions = await permissionService.getUserPermissions(userId, null);
+      const hasWildcard = userPermissions.some(p => 
+        p.resource === '*' && p.actions.includes('*')
+      );
+      
+      if (hasWildcard) {
+        console.log('[requireAnyPermission] Wildcard permission (*.*) granted:', {
+          userId: userId.toString(),
+          permissions
+        });
+        return next();
+      }
+
       // Bypass permission check for SysAdmin (authority >= 80)
       const authorityService = require('../services/users_services/authority.service');
       const userAuthority = await authorityService.calculateUserAuthority(userId);
@@ -103,13 +193,6 @@ function requireAnyPermission(permissions) {
         });
         return next();
       }
-
-      const locationId = req.body?.locationId || 
-                        req.params?.locationId || 
-                        req.query?.locationId ||
-                        req.body?.location?.district ||
-                        req.body?.location?.province ||
-                        null;
 
       // Check if user has any of the required permissions
       for (const perm of permissions) {
@@ -162,6 +245,27 @@ function requireAllPermissions(permissions) {
         });
       }
 
+      const locationId = req.body?.locationId || 
+                        req.params?.locationId || 
+                        req.query?.locationId ||
+                        req.body?.location?.district ||
+                        req.body?.location?.province ||
+                        null;
+
+      // First check if user has wildcard permission (*.*) - admins get all permissions
+      const userPermissions = await permissionService.getUserPermissions(userId, null);
+      const hasWildcard = userPermissions.some(p => 
+        p.resource === '*' && p.actions.includes('*')
+      );
+      
+      if (hasWildcard) {
+        console.log('[requireAllPermissions] Wildcard permission (*.*) granted:', {
+          userId: userId.toString(),
+          permissions
+        });
+        return next();
+      }
+
       // Bypass permission check for SysAdmin (authority >= 80)
       const authorityService = require('../services/users_services/authority.service');
       const userAuthority = await authorityService.calculateUserAuthority(userId);
@@ -174,13 +278,6 @@ function requireAllPermissions(permissions) {
         });
         return next();
       }
-
-      const locationId = req.body?.locationId || 
-                        req.params?.locationId || 
-                        req.query?.locationId ||
-                        req.body?.location?.district ||
-                        req.body?.location?.province ||
-                        null;
 
       // Check if user has all required permissions
       for (const perm of permissions) {

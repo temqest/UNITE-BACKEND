@@ -240,7 +240,6 @@ app.use('/', routes);
 const { messageService, presenceService, typingService, permissionsService } = require('./src/services/chat_services');
 const { Notification: NotificationModel, User } = require('./src/models');
 const notificationService = require('./src/services/utility_services/notification.service');
-const permissionService = require('./src/services/users_services/permission.service');
 const s3 = require('./src/utils/s3');
 
 // Store connected users: userId -> socketId
@@ -327,11 +326,18 @@ io.on('connection', (socket) => {
       // Create notification for receiver
       try {
         // Get receiver details to determine recipient type
-        const receiver = await User.findById(receiverId) || await User.findOne({ userId: receiverId });
+        const mongoose = require('mongoose');
+        let receiver = null;
+        if (mongoose.Types.ObjectId.isValid(receiverId)) {
+          receiver = await User.findById(receiverId);
+        }
+        if (!receiver) {
+          receiver = await User.findOne({ userId: receiverId });
+        }
         if (receiver) {
-          // Get user's primary role for recipient type
-          const roles = await permissionService.getUserRoles(receiver._id);
-          const recipientType = roles.length > 0 ? roles[0].code : 'user';
+          // Get user's primary role from embedded roles array
+          const activeRoles = (receiver.roles || []).filter(r => r.isActive !== false);
+          const recipientType = activeRoles.length > 0 ? activeRoles[0].roleCode : 'user';
           await notificationService.createNewMessageNotification(
             receiverId,
             recipientType,

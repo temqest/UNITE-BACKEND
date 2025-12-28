@@ -1,19 +1,29 @@
-const { User, UserRole, UserLocation } = require('../../models');
-const permissionService = require('../../services/users_services/permission.service');
+const { User } = require('../../models');
+const authorityService = require('../../services/users_services/authority.service');
+
+// Authority tier constants (must match authority.service.js)
+const AUTHORITY_TIERS = {
+  SYSTEM_ADMIN: 100,
+  OPERATIONAL_ADMIN: 80,
+  COORDINATOR: 60,
+  STAKEHOLDER: 30,
+  BASIC_USER: 20
+};
 
 class ChatPermissionsService {
   /**
-   * Get allowed recipients for a user based on their roles and permissions
+   * Get allowed recipients for a user based on authority and relationships
    * @param {string} userId - The user's ID (ObjectId or legacy userId)
    * @returns {Array} - Array of allowed recipient IDs
    */
   async getAllowedRecipients(userId) {
     try {
       const allowedRecipients = [];
+      const mongoose = require('mongoose');
 
       // Get user by ID (try ObjectId first, then legacy userId)
       let user = null;
-      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+      if (mongoose.Types.ObjectId.isValid(userId)) {
         user = await User.findById(userId);
       }
       if (!user) {
@@ -23,71 +33,166 @@ class ChatPermissionsService {
         return [];
       }
 
-      // Get user's roles
-      const userRoles = await permissionService.getUserRoles(user._id);
-      if (userRoles.length === 0) {
+      // Get user's authority (use persisted field)
+      const userAuthority = user.authority || await authorityService.calculateUserAuthority(user._id);
+      
+      if (!userAuthority || userAuthority < AUTHORITY_TIERS.BASIC_USER) {
         return [];
       }
 
-      const roleCodes = userRoles.map(ur => ur.code);
+      // System Admin (100): Can chat with Coordinators (60) and Operational Admins (80)
+      if (userAuthority >= AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        // Get all coordinators (authority 60)
+        const coordinators = await User.find({
+          authority: AUTHORITY_TIERS.COORDINATOR,
+          isActive: true
+        }).select('_id');
+        allowedRecipients.push(...coordinators.map(u => u._id.toString()));
 
-      // System Admin: can chat with Coordinators
-      if (roleCodes.includes('system-admin')) {
-        const coordinatorRole = await permissionService.getRoleByCode('coordinator');
-        if (coordinatorRole) {
-          const coordinatorUserRoles = await UserRole.find({ roleId: coordinatorRole._id }).populate('userId');
-          const coordinatorIds = coordinatorUserRoles
-            .map(ur => ur.userId)
-            .filter(u => u && u._id)
-            .map(u => u._id.toString());
-          allowedRecipients.push(...coordinatorIds);
-        }
+        // Get all operational admins (authority 80)
+        const operationalAdmins = await User.find({
+          authority: AUTHORITY_TIERS.OPERATIONAL_ADMIN,
+          isActive: true
+        }).select('_id');
+        allowedRecipients.push(...operationalAdmins.map(u => u._id.toString()));
       }
 
-      // Coordinator: can chat with assigned Stakeholders and System Admins
-      if (roleCodes.includes('coordinator')) {
-        // Get stakeholders (users with stakeholder role)
-        const stakeholderRole = await permissionService.getRoleByCode('stakeholder');
-        if (stakeholderRole) {
-          const stakeholderUserRoles = await UserRole.find({ roleId: stakeholderRole._id }).populate('userId');
-          const stakeholderIds = stakeholderUserRoles
-            .map(ur => ur.userId)
-            .filter(u => u && u._id)
-            .map(u => u._id.toString());
-          allowedRecipients.push(...stakeholderIds);
-        }
+      // Operational Admin (80): Can chat with Coordinators (60) and Stakeholders (30)
+      if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && userAuthority < AUTHORITY_TIERS.SYSTEM_ADMIN) {
+        // Get all coordinators
+        const coordinators = await User.find({
+          authority: AUTHORITY_TIERS.COORDINATOR,
+          isActive: true
+        }).select('_id');
+        allowedRecipients.push(...coordinators.map(u => u._id.toString()));
 
-        // Add System Admins
-        const adminRole = await permissionService.getRoleByCode('system-admin');
-        if (adminRole) {
-          const adminUserRoles = await UserRole.find({ roleId: adminRole._id }).populate('userId');
-          const adminIds = adminUserRoles
-            .map(ur => ur.userId)
-            .filter(u => u && u._id)
-            .map(u => u._id.toString());
-          allowedRecipients.push(...adminIds);
-        }
+        // Get all stakeholders
+        const stakeholders = await User.find({
+          authority: AUTHORITY_TIERS.STAKEHOLDER,
+          isActive: true
+        }).select('_id');
+        allowedRecipients.push(...stakeholders.map(u => u._id.toString()));
       }
 
-      // Stakeholder: can chat with their assigned Coordinator
-      if (roleCodes.includes('stakeholder')) {
-        // Find coordinators (users with coordinator role)
-        const coordinatorRole = await permissionService.getRoleByCode('coordinator');
-        if (coordinatorRole) {
-          const coordinatorUserRoles = await UserRole.find({ roleId: coordinatorRole._id }).populate('userId');
-          const coordinatorIds = coordinatorUserRoles
-            .map(ur => ur.userId)
-            .filter(u => u && u._id)
-            .map(u => u._id.toString());
-          allowedRecipients.push(...coordinatorIds);
+      // Coordinator (60): Can chat with assigned Stakeholders (30) and System/Operational Admins (80-100)
+      if (userAuthority >= AUTHORITY_TIERS.COORDINATOR && userAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+        // Get stakeholders assigned to this coordinator via organizations
+        // Stakeholders have organizations[] with coordinatorId reference
+        const stakeholderIds = await this.getAssignedStakeholders(user._id);
+        allowedRecipients.push(...stakeholderIds);
+
+        // Get System Admins and Operational Admins
+        const admins = await User.find({
+          $or: [
+            { authority: AUTHORITY_TIERS.SYSTEM_ADMIN },
+            { authority: AUTHORITY_TIERS.OPERATIONAL_ADMIN }
+          ],
+          isActive: true
+        }).select('_id');
+        allowedRecipients.push(...admins.map(u => u._id.toString()));
+      }
+
+      // Stakeholder (30): Can chat with assigned Coordinator (60)
+      if (userAuthority >= AUTHORITY_TIERS.STAKEHOLDER && userAuthority < AUTHORITY_TIERS.COORDINATOR) {
+        // Get coordinator assigned via organizations
+        const coordinatorId = await this.getAssignedCoordinator(user._id);
+        if (coordinatorId) {
+          allowedRecipients.push(coordinatorId);
         }
       }
 
       // Remove self from allowed recipients
       const userIdStr = user._id.toString();
-      return allowedRecipients.filter(id => id !== userIdStr);
+      return [...new Set(allowedRecipients.filter(id => id !== userIdStr))];
     } catch (error) {
       throw new Error(`Failed to get allowed recipients: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get stakeholders assigned to a coordinator
+   * @param {string|ObjectId} coordinatorId - Coordinator's user ID
+   * @returns {Array} - Array of stakeholder user IDs
+   */
+  async getAssignedStakeholders(coordinatorId) {
+    try {
+      const coordinatorIdStr = coordinatorId.toString();
+      
+      // Find stakeholders whose organizations reference this coordinator
+      // Check if stakeholder's organizations have coordinatorId in metadata or assignedBy
+      const stakeholders = await User.find({
+        authority: AUTHORITY_TIERS.STAKEHOLDER,
+        isActive: true,
+        $or: [
+          { 'organizations.assignedBy': coordinatorId },
+          { 'metadata.assignedCoordinator': coordinatorId }
+        ]
+      }).select('_id');
+
+      // Also check if coordinator's coverage areas match stakeholder's locations
+      const coordinator = await User.findById(coordinatorId).select('coverageAreas');
+      if (coordinator && coordinator.coverageAreas && coordinator.coverageAreas.length > 0) {
+        const municipalityIds = coordinator.coverageAreas.flatMap(ca => ca.municipalityIds || []);
+        if (municipalityIds.length > 0) {
+          const stakeholdersByLocation = await User.find({
+            authority: AUTHORITY_TIERS.STAKEHOLDER,
+            isActive: true,
+            'locations.municipalityId': { $in: municipalityIds }
+          }).select('_id');
+          
+          stakeholders.push(...stakeholdersByLocation);
+        }
+      }
+
+      return [...new Set(stakeholders.map(u => u._id.toString()))];
+    } catch (error) {
+      console.error('[ChatPermissions] Error getting assigned stakeholders:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get coordinator assigned to a stakeholder
+   * @param {string|ObjectId} stakeholderId - Stakeholder's user ID
+   * @returns {string|null} - Coordinator user ID or null
+   */
+  async getAssignedCoordinator(stakeholderId) {
+    try {
+      const stakeholder = await User.findById(stakeholderId).select('organizations metadata locations');
+      if (!stakeholder) {
+        return null;
+      }
+
+      // Check organizations for assignedBy (coordinator who assigned the organization)
+      if (stakeholder.organizations && stakeholder.organizations.length > 0) {
+        const primaryOrg = stakeholder.organizations.find(org => org.isPrimary) || stakeholder.organizations[0];
+        if (primaryOrg && primaryOrg.assignedBy) {
+          return primaryOrg.assignedBy.toString();
+        }
+      }
+
+      // Check metadata.assignedCoordinator
+      if (stakeholder.metadata && stakeholder.metadata.assignedCoordinator) {
+        return stakeholder.metadata.assignedCoordinator.toString();
+      }
+
+      // Check if stakeholder's location matches a coordinator's coverage area
+      if (stakeholder.locations && stakeholder.locations.municipalityId) {
+        const coordinators = await User.find({
+          authority: AUTHORITY_TIERS.COORDINATOR,
+          isActive: true,
+          'coverageAreas.municipalityIds': stakeholder.locations.municipalityId
+        }).select('_id').limit(1);
+        
+        if (coordinators.length > 0) {
+          return coordinators[0]._id.toString();
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('[ChatPermissions] Error getting assigned coordinator:', error);
+      return null;
     }
   }
 
@@ -99,31 +204,82 @@ class ChatPermissionsService {
    */
   async canSendMessage(senderId, receiverId) {
     try {
-      // Convert to strings for comparison
+      console.log('[ChatPermissions] canSendMessage called:', {
+        senderId: senderId.toString(),
+        receiverId: receiverId.toString()
+      });
+
+      // First check if sender has chat.create permission (or wildcard permission)
+      const permissionService = require('../../services/users_services/permission.service');
+      const hasChatPermission = await permissionService.checkPermission(senderId, 'chat', 'create');
+      
+      console.log('[ChatPermissions] hasChatPermission result:', {
+        senderId: senderId.toString(),
+        hasChatPermission
+      });
+      
+      if (!hasChatPermission) {
+        console.log('[ChatPermissions] ✗ User does not have chat.create permission');
+        return false;
+      }
+
+      // If user has chat.create permission, check if they can send to this specific recipient
+      // For admins with wildcard permissions, allow sending to anyone
+      const userPermissions = await permissionService.getUserPermissions(senderId, null);
+      const hasWildcard = userPermissions.some(p => 
+        p.resource === '*' && (Array.isArray(p.actions) ? p.actions.includes('*') : p.actions === '*')
+      );
+      
+      console.log('[ChatPermissions] Wildcard check:', {
+        senderId: senderId.toString(),
+        hasWildcard,
+        permissionsCount: userPermissions.length
+      });
+      
+      if (hasWildcard) {
+        // Admins with wildcard can send to anyone
+        console.log('[ChatPermissions] ✓ Wildcard permission - allowing send to anyone');
+        return true;
+      }
+      
+      // For users with chat.create permission, check recipient list
+      console.log('[ChatPermissions] Checking recipient list for sender:', senderId.toString());
+      const allowedRecipients = await this.getAllowedRecipients(senderId);
+      const allowedRecipientsStr = allowedRecipients.map(id => String(id));
       const senderIdStr = String(senderId);
       const receiverIdStr = String(receiverId);
       
-      // Check direct permission
-      const allowedRecipients = await this.getAllowedRecipients(senderId);
-      const allowedRecipientsStr = allowedRecipients.map(id => String(id));
+      console.log('[ChatPermissions] Recipient check:', {
+        senderId: senderIdStr,
+        receiverId: receiverIdStr,
+        allowedRecipientsCount: allowedRecipientsStr.length,
+        isReceiverAllowed: allowedRecipientsStr.includes(receiverIdStr)
+      });
       
       if (allowedRecipientsStr.includes(receiverIdStr)) {
+        console.log('[ChatPermissions] ✓ Receiver is in allowed recipients list');
         return true;
       }
 
       // Bidirectional check: if sender can't see receiver, check if receiver can see sender
+      console.log('[ChatPermissions] Performing bidirectional check...');
       try {
         const reverseAllowed = await this.getAllowedRecipients(receiverId);
         const reverseAllowedStr = reverseAllowed.map(id => String(id));
         if (reverseAllowedStr.includes(senderIdStr)) {
+          console.log('[ChatPermissions] ✓ Bidirectional check passed - receiver can see sender');
           return true;
         }
+        console.log('[ChatPermissions] ✗ Bidirectional check failed');
       } catch (reverseError) {
+        console.error('[ChatPermissions] Error in bidirectional check:', reverseError);
         // Silently fail bidirectional check
       }
 
+      console.log('[ChatPermissions] ✗ All checks failed - cannot send message');
       return false;
     } catch (error) {
+      console.error('[ChatPermissions] Error in canSendMessage:', error);
       return false;
     }
   }
@@ -135,9 +291,11 @@ class ChatPermissionsService {
    */
   async getUserChatRole(userId) {
     try {
+      const mongoose = require('mongoose');
+      
       // Get user by ID
       let user = null;
-      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+      if (mongoose.Types.ObjectId.isValid(userId)) {
         user = await User.findById(userId);
       }
       if (!user) {
@@ -147,16 +305,17 @@ class ChatPermissionsService {
         return null;
       }
 
-      // Get user's roles
-      const userRoles = await permissionService.getUserRoles(user._id);
-      const roleCodes = userRoles.map(ur => ur.code);
-      const primaryRole = roleCodes[0] || 'user';
+      // Get primary role from embedded roles array
+      const activeRoles = (user.roles || []).filter(r => r.isActive !== false);
+      const primaryRole = activeRoles.length > 0 ? activeRoles[0].roleCode : 'user';
+      const roleCodes = activeRoles.map(r => r.roleCode);
 
       return {
         role: primaryRole,
         roles: roleCodes,
         userType: primaryRole,
-        user: user
+        user: user,
+        authority: user.authority || AUTHORITY_TIERS.BASIC_USER
       };
     } catch (error) {
       throw new Error(`Failed to get user chat role: ${error.message}`);
@@ -179,18 +338,22 @@ class ChatPermissionsService {
         // Get user by ObjectId
         const user = await User.findById(recipientId);
         if (user) {
-          // Get user's roles
-          const userRoles = await permissionService.getUserRoles(user._id);
-          const roleCodes = userRoles.map(ur => ur.code);
-          const primaryRole = roleCodes[0] || 'user';
+          // Get primary role from embedded roles array
+          const activeRoles = (user.roles || []).filter(r => r.isActive !== false);
+          const primaryRole = activeRoles.length > 0 ? activeRoles[0].roleCode : 'user';
+          const roleCodes = activeRoles.map(r => r.roleCode);
+
+          // Format name from firstName and lastName
+          const name = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown';
 
           recipients.push({
             id: user._id.toString(),
-            name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown',
+            name: name,
             role: primaryRole,
             roles: roleCodes,
             email: user.email || '',
-            type: primaryRole
+            type: primaryRole,
+            authority: user.authority || AUTHORITY_TIERS.BASIC_USER
           });
         }
       }

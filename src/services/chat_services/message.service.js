@@ -10,9 +10,14 @@ class MessageService {
   async sendMessage(senderId, receiverId, content, messageType = 'text', attachments = []) {
     try {
       // Validate permissions
+      console.log('[MessageService] Validating send message permission:', {
+        senderId: senderId.toString(),
+        receiverId: receiverId.toString()
+      });
       const canSend = await permissionsService.canSendMessage(senderId, receiverId);
+      console.log('[MessageService] canSendMessage result:', canSend);
       if (!canSend) {
-        throw new Error('You do not have permission to send messages to this user');
+        throw new Error('You do not have permission to send messages');
       }
 
       // Generate conversation ID (sorted to ensure consistency)
@@ -237,26 +242,30 @@ class MessageService {
   async getUserDetails(userId) {
     try {
       const { User } = require('../../models');
-      const permissionService = require('../users_services/permission.service');
+      const mongoose = require('mongoose');
 
       let user = null;
-      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+      if (mongoose.Types.ObjectId.isValid(userId)) {
         user = await User.findById(userId);
       } else {
         user = await User.findByLegacyId(userId);
       }
 
       if (user) {
-        // Get user roles
-        const roles = await permissionService.getUserRoles(user._id);
-        const primaryRole = roles.length > 0 ? roles[0].code : null;
+        // Get primary role from embedded roles array
+        const activeRoles = (user.roles || []).filter(r => r.isActive !== false);
+        const primaryRole = activeRoles.length > 0 ? activeRoles[0].roleCode : 'user';
+
+        // Format name from firstName and lastName
+        const name = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown';
 
         return {
           id: user._id.toString(),
-          name: user.fullName || `${user.firstName} ${user.lastName}`,
+          name: name,
           role: primaryRole,
-          email: user.email,
-          type: primaryRole || 'user'
+          email: user.email || '',
+          type: primaryRole,
+          authority: user.authority || 20
         };
       }
 
@@ -264,14 +273,19 @@ class MessageService {
         id: userId,
         name: 'Unknown User',
         role: 'Unknown',
-        type: 'unknown'
+        type: 'unknown',
+        email: '',
+        authority: 20
       };
     } catch (error) {
+      console.error('[MessageService] Error getting user details:', error);
       return {
         id: userId,
         name: 'Unknown User',
         role: 'Unknown',
-        type: 'unknown'
+        type: 'unknown',
+        email: '',
+        authority: 20
       };
     }
   }
