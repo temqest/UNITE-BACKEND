@@ -76,14 +76,13 @@ router.get(
 
 /**
  * @route   PUT /api/event-requests/:requestId
- * @desc    Update event request (pending only)
- * @access  Private (requires request.update permission or be requester)
+ * @desc    Update event request (pending or approved)
+ * @access  Private (permission check handled in service - allows assigned coordinators/reviewers)
  */
 router.put(
   '/event-requests/:requestId',
   authenticate,
   validateRequestId,
-  requirePermission('request', 'update'),
   validateUpdateEventRequest,
   async (req, res, next) => {
     try {
@@ -165,6 +164,24 @@ router.delete(
   async (req, res, next) => {
     try {
       await eventRequestController.deleteRequest(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @route   POST /api/event-requests/:requestId/staff
+ * @desc    Assign staff to event
+ * @access  Private (requires event.manage-staff permission)
+ */
+router.post(
+  '/event-requests/:requestId/staff',
+  authenticate,
+  validateRequestId,
+  async (req, res, next) => {
+    try {
+      await eventRequestController.assignStaff(req, res);
     } catch (error) {
       next(error);
     }

@@ -6,6 +6,8 @@
 
 const eventRequestService = require('../../services/eventRequests_services/eventRequest.service');
 const actionValidatorService = require('../../services/eventRequests_services/actionValidator.service');
+const permissionService = require('../../services/users_services/permission.service');
+const EventRequest = require('../../models/eventRequests_models/eventRequest.model');
 const { STATUS_LABELS } = require('../../utils/eventRequests/requestConstants');
 
 class EventRequestController {
@@ -102,10 +104,18 @@ class EventRequestController {
 
       const request = await eventRequestService.getRequestById(requestId, userId);
 
+      // Get staff separately if not already attached
+      const EventStaff = require('../../models/events_models/eventStaff.model');
+      const staff = request.staff || await EventStaff.find({ EventID: request.Event_ID });
+
       res.status(200).json({
         success: true,
         data: {
-          request: await this._formatRequest(request, userId)
+          request: await this._formatRequest(request, userId),
+          staff: staff.map(s => ({
+            FullName: s.FullName || s.Staff_FullName,
+            Role: s.Role
+          }))
         }
       });
     } catch (error) {
@@ -348,6 +358,98 @@ class EventRequestController {
     }
 
     return formatted;
+  }
+
+  /**
+   * Assign staff to event
+   * @route POST /api/event-requests/:requestId/staff
+   */
+  async assignStaff(req, res) {
+    try {
+      const { requestId } = req.params;
+      const userId = req.user._id || req.user.id;
+      const { eventId, staffMembers } = req.body;
+
+      if (!eventId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Event ID is required'
+        });
+      }
+
+      if (!staffMembers || !Array.isArray(staffMembers)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Staff members array is required'
+        });
+      }
+
+      // Get request to check permissions - try Request_ID first, then _id
+      let request = await EventRequest.findOne({ Request_ID: requestId });
+      if (!request && requestId.match(/^[0-9a-fA-F]{24}$/)) {
+        request = await EventRequest.findById(requestId);
+      }
+      if (!request) {
+        return res.status(404).json({
+          success: false,
+          message: 'Request not found'
+        });
+      }
+
+      // Check permission - use event.manage-staff permission
+      const locationId = request.district || request.municipalityId;
+      const canManageStaff = await permissionService.checkPermission(
+        userId,
+        'event',
+        'manage-staff',
+        { locationId }
+      );
+
+      if (!canManageStaff) {
+        // Check for wildcard permissions
+        const userPermissions = await permissionService.getUserPermissions(userId);
+        const hasWildcard = userPermissions.some(p => 
+          (p.resource === '*' || p.resource === 'event') && 
+          (p.actions?.includes('*') || p.actions?.includes('manage-staff'))
+        );
+
+        if (!hasWildcard) {
+          return res.status(403).json({
+            success: false,
+            message: 'User does not have permission to manage staff for this event'
+          });
+        }
+      }
+
+      // Assign staff via service
+      const result = await eventRequestService.assignStaffToEvent(
+        userId,
+        requestId,
+        eventId,
+        staffMembers
+      );
+
+      console.log('[EVENT REQUEST CONTROLLER] Staff assignment result:', {
+        eventId: result.event?.Event_ID,
+        staffCount: result.staff?.length || 0,
+        staff: result.staff
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Staff assigned successfully',
+        data: {
+          event: result.event,
+          staff: result.staff || []
+        }
+      });
+    } catch (error) {
+      console.error('[EVENT REQUEST CONTROLLER] Assign staff error:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to assign staff'
+      });
+    }
   }
 }
 

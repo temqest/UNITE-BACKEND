@@ -37,14 +37,28 @@ class EventPublisherService {
       // Find or create event
       let event = await Event.findOne({ Event_ID: eventId });
       
+      // Get the event date (Date field) and times
+      // The request has Date (the event date) and Start_Date/End_Date (which combine Date + times)
+      const eventDate = request.Date || request.Start_Date;
+      const startDate = request.Start_Date || request.Date;
+      let endDate = request.End_Date;
+      
+      // If End_Date is missing but we have Start_Date, default to 2 hours after Start_Date
+      // This ensures both start and end times are set on the same date
+      if (!endDate && startDate) {
+        const start = new Date(startDate);
+        endDate = new Date(start.getTime() + 2 * 60 * 60 * 1000); // Add 2 hours
+        console.log(`[EVENT PUBLISHER] End_Date not provided, defaulting to 2 hours after Start_Date: ${endDate.toISOString()}`);
+      }
+      
       if (!event) {
         // Create new event from request data
         event = new Event({
           Event_ID: eventId,
           Event_Title: request.Event_Title,
           Location: request.Location,
-          Start_Date: request.Date || request.Start_Date, // Map Date to Start_Date for Event model
-          End_Date: request.End_Date || null, // Use End_Date from request if available
+          Start_Date: startDate, // Combined Date + Start_Time
+          End_Date: endDate, // Combined Date + End_Time (same date, different time)
           Email: request.Email,
           Phone_Number: request.Phone_Number,
           Event_Description: request.Event_Description,
@@ -69,8 +83,13 @@ class EventPublisherService {
         // Update existing event with request data
         event.Event_Title = request.Event_Title || event.Event_Title;
         event.Location = request.Location || event.Location;
-        event.Start_Date = request.Date || request.Start_Date || event.Start_Date;
-        event.End_Date = request.End_Date || event.End_Date || null;
+        event.Start_Date = startDate || event.Start_Date;
+        // Ensure End_Date is set - use request End_Date, existing End_Date, or default to 2 hours after Start_Date
+        if (endDate) {
+          event.End_Date = endDate;
+        } else if (!event.End_Date && event.Start_Date) {
+          event.End_Date = new Date(new Date(event.Start_Date).getTime() + 2 * 60 * 60 * 1000);
+        }
         event.Email = request.Email || event.Email;
         event.Phone_Number = request.Phone_Number || event.Phone_Number;
         event.Event_Description = request.Event_Description || event.Event_Description;

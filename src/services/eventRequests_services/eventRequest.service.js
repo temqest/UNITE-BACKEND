@@ -465,24 +465,47 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
-      // Check permission to view
-      const locationId = request.district || request.municipalityId;
-      const canView = await permissionService.checkPermission(
-        userId,
-        'request',
-        'read',
-        { locationId }
+      // Check permission to view - first check for wildcard permissions
+      const userPermissions = await permissionService.getUserPermissions(userId);
+      const hasWildcard = userPermissions.some(p => 
+        (p.resource === '*' || p.resource === 'request') && 
+        (p.actions?.includes('*') || p.actions?.includes('read'))
       );
+
+      let canView = hasWildcard;
+
+      if (!canView) {
+        // Check location-scoped permission
+        const locationId = request.district || request.municipalityId;
+        canView = await permissionService.checkPermission(
+          userId,
+          'request',
+          'read',
+          { locationId }
+        );
+      }
 
       if (!canView) {
         // Check if user is requester or reviewer
-        const isRequester = request.requester.userId._id.toString() === userId.toString();
-        const isReviewer = request.reviewer?.userId?._id.toString() === userId.toString();
+        const isRequester = request.requester?.userId?._id?.toString() === userId.toString() ||
+                           request.requester?.userId?.toString() === userId.toString();
+        const isReviewer = request.reviewer?.userId?._id?.toString() === userId.toString() ||
+                           request.reviewer?.userId?.toString() === userId.toString();
         
         if (!isRequester && !isReviewer) {
           throw new Error('User does not have permission to view this request');
         }
       }
+
+      // Fetch staff assignments for this event
+      const EventStaff = require('../../models/events_models/eventStaff.model');
+      const staff = await EventStaff.find({ EventID: request.Event_ID });
+
+      // Attach staff to request object for response
+      request.staff = staff.map(s => ({
+        FullName: s.Staff_FullName,
+        Role: s.Role
+      }));
 
       return request;
     } catch (error) {
@@ -505,37 +528,133 @@ class EventRequestService {
         throw new Error('Request not found');
       }
 
+      const normalizedStatus = RequestStateService.normalizeState(request.status);
+      const isApproved = normalizedStatus === REQUEST_STATES.APPROVED;
+      
       // Check if request can be edited
-      if (!RequestStateService.canEdit(request.status)) {
+      // Allow editing if pending OR if approved (in which case we'll update the event too)
+      if (!RequestStateService.canEdit(request.status) && !isApproved) {
         throw new Error('Request cannot be edited in current state');
       }
 
-      // Check permission
+      // Check permission based on request status
+      // For approved requests (published events), check event.update permission
+      // For pending requests, check request.update permission
       const locationId = request.district || request.municipalityId;
-      const canUpdate = await permissionService.checkPermission(
-        userId,
-        'request',
-        'update',
-        { locationId }
-      );
+      const resource = isApproved ? 'event' : 'request';
+      const action = 'update';
+      
+      // First, check if user has wildcard permission (*.*) which bypasses all restrictions
+      // This is important for system admins who should have access regardless of location
+      const userPermissions = await permissionService.getUserPermissions(userId, null);
+      const hasWildcard = userPermissions.some(p => p.resource === '*' && p.actions.includes('*'));
+      
+      let canUpdate = false;
+      
+      if (hasWildcard) {
+        // System admin with *.* - grant permission immediately
+        canUpdate = true;
+        console.log(`[EVENT REQUEST SERVICE] User ${userId} has wildcard permission (*.*), granting ${resource}.${action}`);
+      } else {
+        // Check permission with location context
+        canUpdate = await permissionService.checkPermission(
+          userId,
+          resource,
+          action,
+          locationId ? { locationId } : {}
+        );
+      }
 
       if (!canUpdate) {
-        // Check if user is requester
-        const isRequester = request.requester.userId.toString() === userId.toString();
-        if (!isRequester) {
-          throw new Error('User does not have permission to update this request');
+        // Check if user is requester (only for pending requests)
+        if (!isApproved) {
+          const isRequester = request.requester?.userId?.toString() === userId.toString();
+          if (!isRequester) {
+            // For pending requests, also check if user is the assigned coordinator/reviewer
+            const isReviewer = request.reviewer?.userId?.toString() === userId.toString() ||
+                              request.assignedCoordinator?.userId?.toString() === userId.toString();
+            if (!isReviewer) {
+              throw new Error('User does not have permission to update this request');
+            }
+          }
+        } else {
+          // For approved events, check if user is the assigned coordinator
+          // Coordinators should be able to edit events they manage
+          const isAssignedCoordinator = request.assignedCoordinator?.userId?.toString() === userId.toString() ||
+                                       request.reviewer?.userId?.toString() === userId.toString();
+          
+          if (!isAssignedCoordinator) {
+            // Log diagnostic info for debugging
+            const userPermissions = await permissionService.getUserPermissions(userId, null);
+            console.error(`[EVENT REQUEST SERVICE] Permission denied for ${resource}.${action}`, {
+              userId: userId.toString(),
+              resource,
+              action,
+              isApproved,
+              locationId: locationId?.toString(),
+              isAssignedCoordinator,
+              userPermissionsCount: userPermissions.length,
+              hasWildcard: userPermissions.some(p => p.resource === '*' && p.actions.includes('*')),
+              permissions: userPermissions.map(p => `${p.resource}.${p.actions.join(',')}`)
+            });
+            throw new Error(`User does not have permission to update this ${resource}`);
+          }
         }
       }
 
-      // Update allowed fields
-      const allowedFields = ['Category', 'notes', 'municipalityId', 'district', 'province'];
+      // Update allowed fields - event fields and request metadata
+      const allowedFields = [
+        // Event fields
+        'Event_Title', 'Location', 'Date', 'Start_Date', 'End_Date',
+        'Email', 'Phone_Number', 'Event_Description', 'Category',
+        // Category-specific fields
+        'Target_Donation', 'VenueType', 'TrainingType', 'MaxParticipants',
+        'Topic', 'TargetAudience', 'ExpectedAudienceSize', 'PartnerOrganization',
+        'StaffAssignmentID',
+        // Location and organization references
+        'municipalityId', 'district', 'province', 'organizationId', 'coverageAreaId',
+        // Request-specific fields
+        'notes'
+      ];
+      
       for (const field of allowedFields) {
         if (updateData[field] !== undefined) {
           request[field] = updateData[field];
         }
       }
+      
+      // Normalize Date field if Start_Date is provided
+      if (updateData.Start_Date && !updateData.Date) {
+        request.Date = updateData.Start_Date;
+      }
 
       await request.save();
+
+      // If request is approved (event is published), also update the event
+      if (isApproved && request.Event_ID) {
+        try {
+          const event = await Event.findOne({ Event_ID: request.Event_ID });
+          if (event) {
+            // Update event fields that were changed
+            if (updateData.Event_Title !== undefined) event.Event_Title = updateData.Event_Title;
+            if (updateData.Location !== undefined) event.Location = updateData.Location;
+            if (updateData.Start_Date !== undefined) event.Start_Date = new Date(updateData.Start_Date);
+            if (updateData.End_Date !== undefined) event.End_Date = new Date(updateData.End_Date);
+            if (updateData.Email !== undefined) event.Email = updateData.Email;
+            if (updateData.Phone_Number !== undefined) event.Phone_Number = updateData.Phone_Number;
+            if (updateData.Event_Description !== undefined) event.Event_Description = updateData.Event_Description;
+            if (updateData.Category !== undefined) event.Category = updateData.Category;
+            
+            await event.save();
+            console.log(`[EVENT REQUEST SERVICE] Updated event ${request.Event_ID} along with approved request ${requestId}`);
+          } else {
+            console.warn(`[EVENT REQUEST SERVICE] Event ${request.Event_ID} not found for approved request ${requestId}`);
+          }
+        } catch (eventError) {
+          console.error(`[EVENT REQUEST SERVICE] Error updating event for approved request: ${eventError.message}`);
+          // Don't fail the request update if event update fails, but log it
+        }
+      }
 
       // Re-populate location references before returning
       await request.populate('province', 'name code type');
@@ -723,6 +842,139 @@ class EventRequestService {
     } catch (error) {
       console.error(`[EVENT REQUEST SERVICE] Error deleting request: ${error.message}`);
       throw new Error(`Failed to delete request: ${error.message}`);
+    }
+  }
+
+  /**
+   * Assign staff to event
+   * @param {string|ObjectId} userId - User assigning staff
+   * @param {string} requestId - Request ID
+   * @param {string} eventId - Event ID
+   * @param {Array} staffMembers - Array of { FullName, Role }
+   * @returns {Promise<Object>} Result with event and staff
+   */
+  async assignStaffToEvent(userId, requestId, eventId, staffMembers) {
+    try {
+      console.log(`[EVENT REQUEST SERVICE] assignStaffToEvent called:`, {
+        userId: userId?.toString(),
+        requestId,
+        eventId,
+        staffCount: staffMembers?.length || 0
+      });
+
+      const EventStaff = require('../../models/events_models/eventStaff.model');
+      
+      // Verify event exists
+      const event = await Event.findOne({ Event_ID: eventId });
+      if (!event) {
+        throw new Error('Event not found');
+      }
+      console.log(`[EVENT REQUEST SERVICE] Event found: ${event.Event_ID}`);
+
+      // Get existing staff assignments
+      const existingStaff = await EventStaff.find({ EventID: eventId });
+      console.log(`[EVENT REQUEST SERVICE] Found ${existingStaff.length} existing staff assignments`);
+      
+      // Create a map of existing staff by FullName+Role for quick lookup
+      const existingStaffMap = new Map();
+      existingStaff.forEach(s => {
+        const key = `${s.Staff_FullName}|${s.Role}`;
+        existingStaffMap.set(key, s);
+      });
+
+      // Process new staff list - add new ones, keep existing ones that are still in the list
+      const newStaffMap = new Map();
+      const staffList = [];
+      let newStaffCount = 0;
+      let keptStaffCount = 0;
+      
+      for (const staff of staffMembers) {
+        // Validate staff data format
+        if (!staff.FullName || !staff.Role) {
+          console.warn(`[EVENT REQUEST SERVICE] Invalid staff data:`, staff);
+          continue;
+        }
+
+        const key = `${staff.FullName}|${staff.Role}`;
+        newStaffMap.set(key, staff);
+        
+        if (existingStaffMap.has(key)) {
+          // Staff already exists, keep it
+          staffList.push(existingStaffMap.get(key));
+          keptStaffCount++;
+          console.log(`[EVENT REQUEST SERVICE] Keeping existing staff: ${staff.FullName} - ${staff.Role}`);
+        } else {
+          // New staff, create it
+          const eventStaff = new EventStaff({
+            EventID: eventId,
+            Staff_FullName: staff.FullName,
+            Role: staff.Role
+          });
+          const savedStaff = await eventStaff.save();
+          console.log(`[EVENT REQUEST SERVICE] Created new staff: ${savedStaff._id} - ${savedStaff.Staff_FullName} - ${savedStaff.Role}`);
+          staffList.push(savedStaff);
+          newStaffCount++;
+        }
+      }
+
+      // Remove staff that are no longer in the list
+      let removedStaffCount = 0;
+      for (const [key, existingStaffMember] of existingStaffMap) {
+        if (!newStaffMap.has(key)) {
+          const deleteResult = await EventStaff.deleteOne({ _id: existingStaffMember._id });
+          console.log(`[EVENT REQUEST SERVICE] Removed staff: ${existingStaffMember.Staff_FullName} - ${existingStaffMember.Role} (deleted: ${deleteResult.deletedCount})`);
+          removedStaffCount++;
+        }
+      }
+
+      console.log(`[EVENT REQUEST SERVICE] Staff processing summary:`, {
+        newStaff: newStaffCount,
+        keptStaff: keptStaffCount,
+        removedStaff: removedStaffCount,
+        totalStaff: staffList.length
+      });
+
+      // Generate staff assignment ID
+      const staffAssignmentId = `STAFF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      event.StaffAssignmentID = staffAssignmentId;
+      const eventSaveResult = await event.save();
+      console.log(`[EVENT REQUEST SERVICE] Updated event StaffAssignmentID: ${staffAssignmentId}`);
+
+      // Update request if it exists
+      const request = await EventRequest.findOne({ Request_ID: requestId });
+      if (request) {
+        request.StaffAssignmentID = staffAssignmentId;
+        const requestSaveResult = await request.save();
+        console.log(`[EVENT REQUEST SERVICE] Updated request StaffAssignmentID: ${staffAssignmentId}`);
+      } else {
+        console.warn(`[EVENT REQUEST SERVICE] Request ${requestId} not found, skipping request update`);
+      }
+
+      const result = {
+        event: event,
+        staff: staffList.map(s => ({
+          FullName: s.Staff_FullName || s.FullName,
+          Role: s.Role
+        }))
+      };
+
+      console.log(`[EVENT REQUEST SERVICE] assignStaffToEvent completed successfully:`, {
+        eventId,
+        staffCount: result.staff.length,
+        staffList: result.staff.map(s => `${s.FullName} - ${s.Role}`)
+      });
+
+      return result;
+    } catch (error) {
+      console.error(`[EVENT REQUEST SERVICE] Error assigning staff:`, {
+        message: error.message,
+        stack: error.stack,
+        userId: userId?.toString(),
+        requestId,
+        eventId,
+        staffCount: staffMembers?.length || 0
+      });
+      throw new Error(`Failed to assign staff: ${error.message}`);
     }
   }
 }

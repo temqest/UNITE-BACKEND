@@ -1354,12 +1354,12 @@ class UserController {
    */
   async listUsersByCapability(req, res) {
     try {
+      const requesterId = req.user?.id || req.user?._id;
       const { 
         capability,
         organizationType, 
         isActive, 
         locationId,
-        coordinatorId, // For System Admin: filter stakeholders by coordinator's jurisdiction
         page = 1,
         limit = 50
       } = req.query;
@@ -1374,9 +1374,6 @@ class UserController {
       // Get capabilities as array (support multiple capability params)
       const capabilities = Array.isArray(capability) ? capability : [capability];
       
-      // Extract requesterId early for use in logging and filtering
-      const requesterId = req.user?.id || req.user?._id;
-      
       // Debug logging
       console.log('[listUsersByCapability] Request:', {
         capabilities,
@@ -1390,55 +1387,18 @@ class UserController {
       
       // Enhanced diagnostic for coordinator/stakeholder queries
       const isCoordinatorQuery = capabilities.some(c => c === 'request.create' || c === 'event.create');
+      const isStakeholderQuery = capabilities.some(c => c === 'request.review');
       
-      // Check if this is a coordinator query via request.review (system admin fetching coordinators)
-      // System admins (authority >= 80) querying request.review WITHOUT coordinatorId should get coordinators
-      // System admins querying request.review WITH coordinatorId should get stakeholders in that coordinator's jurisdiction
-      let isCoordinatorQueryViaReview = false;
-      if (capabilities.includes('request.review') && !isCoordinatorQuery && requesterId) {
-        try {
-          const authorityService = require('../../services/users_services/authority.service');
-          const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
-          // If requester is system admin (>= 80) and querying request.review WITHOUT coordinatorId,
-          // treat as coordinator query (they want to see all coordinators)
-          // If coordinatorId is provided, treat as stakeholder query (they selected a coordinator)
-          if (requesterAuthority >= 80 && !coordinatorId) {
-            isCoordinatorQueryViaReview = true;
-          }
-        } catch (e) {
-          console.warn('[listUsersByCapability] Could not determine requester authority for coordinator query detection:', e);
-        }
-      }
-      
-      // Stakeholder query: request.review when NOT a coordinator query
-      const isStakeholderQuery = capabilities.some(c => c === 'request.review') && !isCoordinatorQuery && !isCoordinatorQueryViaReview;
-      
-      // Explicit validation: If coordinatorId is provided, this MUST be a stakeholder query
-      if (coordinatorId && !isStakeholderQuery) {
-        console.warn('[listUsersByCapability] WARNING: coordinatorId provided but isStakeholderQuery is false!', {
-          coordinatorId,
-          isCoordinatorQuery,
-          isCoordinatorQueryViaReview,
-          isStakeholderQuery,
-          capabilities
-        });
-      }
-      
-      if (isCoordinatorQuery || isCoordinatorQueryViaReview || isStakeholderQuery) {
-        const queryType = (isCoordinatorQuery || isCoordinatorQueryViaReview) ? 'COORDINATORS' : 'STAKEHOLDERS';
+      if (isCoordinatorQuery || isStakeholderQuery) {
+        const queryType = isCoordinatorQuery ? 'COORDINATORS' : 'STAKEHOLDERS';
         console.log(`[DIAG] ${queryType} QUERY INITIATED:`, {
           queryType,
           capabilities,
           requesterId: requesterId?.toString(),
           locationId,
-          coordinatorId,
-          isCoordinatorQueryViaReview,
-          isStakeholderQuery,
           expectedBehavior: queryType === 'COORDINATORS' 
-            ? 'System Admin: all coordinators (authority >= 60 and < 80) with request.review permission | Coordinator: self | Stakeholder: assigned coordinator'
-            : coordinatorId 
-              ? 'System Admin: stakeholders in coordinator jurisdiction | Coordinator: stakeholders in org+coverage | Stakeholder: self'
-              : 'System Admin: all stakeholders | Coordinator: stakeholders in org+coverage | Stakeholder: self'
+            ? 'System Admin: all coordinators | Coordinator: self | Stakeholder: assigned coordinator'
+            : 'System Admin: all stakeholders | Coordinator: stakeholders in org+coverage | Stakeholder: self'
         });
       }
       
@@ -1457,51 +1417,29 @@ class UserController {
         let userIds = await permissionService.getUsersWithPermission(cap, context);
         capabilityResults[cap] = userIds.length;
         
-        // SPECIAL CASE: For 'request.review' capability
-        // - If it's a coordinator query (system admin fetching coordinators): keep permission results, will filter by authority >= 60 and < 80 later
-        // - If it's a stakeholder query: stakeholders don't have request.review permission, so we MUST query them by authority
-        //   and filter out coordinators from permission results
+        // SPECIAL CASE: For 'request.review' capability (stakeholder page),
+        // stakeholders don't have request.review permission, so we MUST query them by authority
+        // and merge with any users found via permission lookup
         if (cap === 'request.review' && !capabilities.some(c => c.startsWith('staff.'))) {
+          console.log('[listUsersByCapability] request.review requested - querying stakeholders by authority and merging with permission results');
           const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
-          
-          // Check if this is a coordinator query (will be determined later, but we need to handle both cases)
-          // For now, we'll query stakeholders by authority and merge, but filter out coordinators from permission results
-          console.log('[listUsersByCapability] request.review requested - querying stakeholders by authority');
-          
-          // Build stakeholder query - filter by authority only
-          // Location filtering is handled later via jurisdiction service when coordinatorId is provided
-          // This ensures we get all stakeholders first, then filter by coordinator's full jurisdiction
-          const stakeholderQuery = {
+          const stakeholderUsers = await User.find({
             authority: { $lt: AUTHORITY_TIERS.COORDINATOR },
             isActive: true
-          };
-          
-          const stakeholderUsers = await User.find(stakeholderQuery).select('_id').lean();
+          }).select('_id').lean();
           
           const stakeholderIds = stakeholderUsers.map(u => u._id.toString());
-          
-          // Filter permission results to exclude coordinators (authority >= 60)
-          // Permission lookup might return coordinators who have request.review permission
           const permissionUserIds = userIds.map(id => id.toString());
-          const permissionUsers = await User.find({ _id: { $in: permissionUserIds } })
-            .select('_id authority')
-            .lean();
+          console.log(`[listUsersByCapability] Found ${stakeholderIds.length} stakeholders by authority, ${permissionUserIds.length} users via permission lookup`);
           
-          // Only keep permission users who are stakeholders (authority < 60)
-          const stakeholderPermissionIds = permissionUsers
-            .filter(u => (u.authority || 20) < AUTHORITY_TIERS.COORDINATOR)
-            .map(u => u._id.toString());
-          
-          console.log(`[listUsersByCapability] Found ${stakeholderIds.length} stakeholders by authority, ${permissionUserIds.length} users via permission lookup (${stakeholderPermissionIds.length} are stakeholders, ${permissionUserIds.length - stakeholderPermissionIds.length} are coordinators filtered out)`);
-          
-          // Merge: combine stakeholder permission results with stakeholder authority results
-          const mergedSet = new Set([...stakeholderPermissionIds, ...stakeholderIds]);
+          // Merge: combine permission-based results with stakeholder results
+          const mergedSet = new Set([...permissionUserIds, ...stakeholderIds]);
           userIds = Array.from(mergedSet);
           capabilityResults[cap] = userIds.length;
-          const uniqueFromPermissions = stakeholderPermissionIds.filter(id => !stakeholderIds.includes(id)).length;
-          const uniqueStakeholders = stakeholderIds.filter(id => !stakeholderPermissionIds.includes(id)).length;
+          const uniqueFromPermissions = permissionUserIds.filter(id => !stakeholderIds.includes(id)).length;
+          const uniqueStakeholders = stakeholderIds.filter(id => !permissionUserIds.includes(id)).length;
           const overlap = userIds.length - uniqueFromPermissions - uniqueStakeholders;
-          console.log(`[listUsersByCapability] Merged stakeholder results: ${userIds.length} total stakeholders (${uniqueFromPermissions} unique from permissions, ${uniqueStakeholders} unique from authority, ${overlap} overlap)`);
+          console.log(`[listUsersByCapability] Merged results: ${userIds.length} total users (${uniqueFromPermissions} unique from permissions, ${uniqueStakeholders} unique stakeholders, ${overlap} overlap)`);
         }
         
         // DETAILED DIAGNOSTIC: Log each user found with their authority and role info
@@ -1535,14 +1473,14 @@ class UserController {
         totalUniqueUsers: userIdsSet.size
       });
       
-        // Enhanced diagnostic for coordinator/stakeholder queries after capability resolution
-        if (isCoordinatorQuery || isCoordinatorQueryViaReview || isStakeholderQuery) {
-          const queryType = (isCoordinatorQuery || isCoordinatorQueryViaReview) ? 'COORDINATORS' : 'STAKEHOLDERS';
-          console.log(`[DIAG] ${queryType} - After capability resolution:`, {
-            totalUsersFound: userIdsSet.size,
-            capabilityBreakdown: capabilityResults
-          });
-        }
+      // Enhanced diagnostic for coordinator/stakeholder queries after capability resolution
+      if (isCoordinatorQuery || isStakeholderQuery) {
+        const queryType = isCoordinatorQuery ? 'COORDINATORS' : 'STAKEHOLDERS';
+        console.log(`[DIAG] ${queryType} - After capability resolution:`, {
+          totalUsersFound: userIdsSet.size,
+          capabilityBreakdown: capabilityResults
+        });
+      }
       
       // ADDITIONAL DIAGNOSTIC: Check if there are any stakeholders in the database at all
       if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.'))) {
@@ -1592,7 +1530,6 @@ class UserController {
       }
 
       // NEW: Authority filtering - filter out users with equal/higher authority than requester
-      // requesterId already extracted above
       let filteredUserIds = Array.from(userIdsSet);
       
       if (requesterId && filteredUserIds.length > 0) {
@@ -1617,18 +1554,13 @@ class UserController {
         });
         
         // Enhanced diagnostic for coordinator/stakeholder queries after authority filtering
-        if (isCoordinatorQuery || isCoordinatorQueryViaReview || isStakeholderQuery) {
-          const queryType = (isCoordinatorQuery || isCoordinatorQueryViaReview) ? 'COORDINATORS' : 'STAKEHOLDERS';
-          const requesterAuth = requesterId ? await authorityService.calculateUserAuthority(requesterId) : null;
+        if (isCoordinatorQuery || isStakeholderQuery) {
+          const queryType = isCoordinatorQuery ? 'COORDINATORS' : 'STAKEHOLDERS';
           console.log(`[DIAG] ${queryType} - After authority filtering:`, {
             beforeFiltering: userIdsSet.size,
             afterFiltering: filteredUserIds.length,
             filteredOut: userIdsSet.size - filteredUserIds.length,
-            requesterAuthority: requesterAuth,
-            coordinatorId,
-            isStakeholderQuery,
-            isCoordinatorQueryViaReview,
-            stakeholderIdsSample: filteredUserIds.slice(0, 5)
+            requesterAuthority: requesterId ? 'will be calculated' : 'no requester'
           });
         }
       }
@@ -1637,63 +1569,19 @@ class UserController {
       const query = {};
 
       // Server-side jurisdiction filtering: ensure users are within requester's jurisdiction
-      // Operational admins (authority ≥ 80) bypass jurisdiction filtering UNLESS coordinatorId is provided
-      // When coordinatorId is provided, filter stakeholders using the coordinator's jurisdiction
+      // Operational admins (authority ≥ 80) bypass jurisdiction filtering
       if (requesterId && filteredUserIds.length > 0) {
         try {
           const requesterAuthority = await authorityService.calculateUserAuthority(requesterId);
-          const jurisdictionService = require('../../services/users_services/jurisdiction.service');
           
-          // Special case: System Admin querying stakeholders with coordinatorId
-          // Filter stakeholders using the coordinator's jurisdiction (not System Admin's, which bypasses)
-          if (requesterAuthority >= 80 && coordinatorId && isStakeholderQuery) {
-            console.log('[listUsersByCapability] System Admin filtering stakeholders by coordinator jurisdiction:', {
-              coordinatorId,
-              requesterAuthority,
-              userIdsCount: filteredUserIds.length,
-              isStakeholderQuery,
-              stakeholderIdsSample: filteredUserIds.slice(0, 5)
-            });
-            
-            // Verify coordinator exists and has jurisdiction data
-            const { User } = require('../../models/index');
-            const coordinator = await User.findById(coordinatorId) || await User.findByLegacyId(coordinatorId);
-            if (!coordinator) {
-              console.error('[listUsersByCapability] Coordinator not found:', coordinatorId);
-              filteredUserIds = [];
-            } else {
-              const coordOrgs = (coordinator.organizations || []).length;
-              const coordCoverageAreas = (coordinator.coverageAreas || []).length;
-              const coordMunicipalities = (coordinator.coverageAreas || []).flatMap(ca => ca.municipalityIds || []).length;
-              console.log('[listUsersByCapability] Coordinator jurisdiction data:', {
-                coordinatorId,
-                hasOrganizations: coordOrgs > 0,
-                organizationsCount: coordOrgs,
-                hasCoverageAreas: coordCoverageAreas > 0,
-                coverageAreasCount: coordCoverageAreas,
-                municipalitiesCount: coordMunicipalities
-              });
-              
-              // Use coordinator's jurisdiction to filter stakeholders (same logic coordinators use)
-              const coordinatorFiltered = await jurisdictionService.filterUsersByJurisdiction(coordinatorId, filteredUserIds);
-              console.log('[listUsersByCapability] Coordinator jurisdiction filtering:', {
-                before: filteredUserIds.length,
-                after: coordinatorFiltered.length,
-                coordinatorId,
-                filteredOut: filteredUserIds.length - coordinatorFiltered.length,
-                returnedIdsSample: coordinatorFiltered.slice(0, 5)
-              });
-              
-              filteredUserIds = coordinatorFiltered;
-            }
-          } else if (requesterAuthority >= 80) {
-            // Operational admins (≥80) bypass jurisdiction checks (normal case)
+          // Operational admins (≥80) bypass jurisdiction checks
+          if (requesterAuthority >= 80) {
             console.log('[listUsersByCapability] Jurisdiction filtering bypassed (admin):', {
               requesterAuthority,
               userIdsCount: filteredUserIds.length
             });
           } else {
-            // Non-admin: use requester's jurisdiction
+            const jurisdictionService = require('../../services/users_services/jurisdiction.service');
             const jurisdictionFiltered = await jurisdictionService.filterUsersByJurisdiction(requesterId, filteredUserIds);
             console.log('[listUsersByCapability] Jurisdiction filtering:', {
               before: filteredUserIds.length,
@@ -1703,8 +1591,8 @@ class UserController {
             });
             
             // Enhanced diagnostic for coordinator/stakeholder queries after jurisdiction filtering
-            if (isCoordinatorQuery || isCoordinatorQueryViaReview || isStakeholderQuery) {
-              const queryType = (isCoordinatorQuery || isCoordinatorQueryViaReview) ? 'COORDINATORS' : 'STAKEHOLDERS';
+            if (isCoordinatorQuery || isStakeholderQuery) {
+              const queryType = isCoordinatorQuery ? 'COORDINATORS' : 'STAKEHOLDERS';
               console.log(`[DIAG] ${queryType} - After jurisdiction filtering:`, {
                 beforeFiltering: filteredUserIds.length,
                 afterFiltering: jurisdictionFiltered.length,
@@ -1721,42 +1609,11 @@ class UserController {
         }
       }
 
-      // Authority-based filtering for coordinator queries
-      // Coordinators should have authority >= 60 and < 80 AND request.review permission
-      // This applies to both explicit coordinator queries (request.create/event.create) 
-      // and system admin queries for coordinators via request.review
-      if ((isCoordinatorQuery || isCoordinatorQueryViaReview) && filteredUserIds.length > 0) {
-        try {
-          const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
-          
-          // Filter to only users with coordinator-level authority (>= 60 and < 80)
-          const coordinatorUsers = await User.find({
-            _id: { $in: filteredUserIds },
-            authority: { $gte: AUTHORITY_TIERS.COORDINATOR, $lt: AUTHORITY_TIERS.OPERATIONAL_ADMIN },
-            isActive: true
-          }).select('_id authority');
-          
-          const coordinatorUserIds = new Set(coordinatorUsers.map(u => u._id.toString()));
-          const beforeCoordinatorFilter = filteredUserIds.length;
-          filteredUserIds = filteredUserIds.filter(id => coordinatorUserIds.has(id.toString()));
-          
-          console.log('[listUsersByCapability] Coordinator authority filtering:', {
-            before: beforeCoordinatorFilter,
-            after: filteredUserIds.length,
-            filteredOut: beforeCoordinatorFilter - filteredUserIds.length,
-            authorityRange: `${AUTHORITY_TIERS.COORDINATOR} <= authority < ${AUTHORITY_TIERS.OPERATIONAL_ADMIN}`
-          });
-        } catch (err) {
-          console.error('[listUsersByCapability] Coordinator authority filtering error:', err);
-        }
-      }
-      
       // Role type filtering: For stakeholder pages (request.review), explicitly filter to stakeholder roles only
       // This ensures coordinators don't appear in stakeholder lists
       // Use embedded User.roles[] array AND user authority field
-      // BUT: Skip this if it's a coordinator query via request.review (system admin fetching coordinators)
       const roleTypeFilteredCount = filteredUserIds.length;
-      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.')) && !isCoordinatorQueryViaReview && filteredUserIds.length > 0) {
+      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.')) && filteredUserIds.length > 0) {
         try {
           const { AUTHORITY_TIERS } = require('../../services/users_services/authority.service');
           
@@ -1868,8 +1725,7 @@ class UserController {
       }
       
       // Comprehensive diagnostic logging for stakeholder display
-      // Only log for actual stakeholder queries, not coordinator queries via request.review
-      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.')) && !isCoordinatorQueryViaReview) {
+      if (capabilities.includes('request.review') && !capabilities.some(c => c.startsWith('staff.'))) {
         const afterJurisdictionCount = filteredUserIds.length; // This is after jurisdiction filter
         console.log('[DIAG] Stakeholder Display Filtering Breakdown:', {
           totalUsersWithCapability: userIdsSet.size,
@@ -1919,8 +1775,8 @@ class UserController {
       });
       
       // Final diagnostic for coordinator/stakeholder queries
-      if (isCoordinatorQuery || isCoordinatorQueryViaReview || isStakeholderQuery) {
-        const queryType = (isCoordinatorQuery || isCoordinatorQueryViaReview) ? 'COORDINATORS' : 'STAKEHOLDERS';
+      if (isCoordinatorQuery || isStakeholderQuery) {
+        const queryType = isCoordinatorQuery ? 'COORDINATORS' : 'STAKEHOLDERS';
         const authorityService = require('../../services/users_services/authority.service');
         const requesterAuthority = requesterId ? await authorityService.calculateUserAuthority(requesterId) : null;
         

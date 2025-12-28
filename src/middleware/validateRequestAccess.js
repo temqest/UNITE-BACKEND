@@ -28,14 +28,25 @@ const validateRequestAccess = async (req, res, next) => {
       });
     }
 
-    // Check permission
-    const locationId = request.district || request.municipalityId;
-    const canView = await permissionService.checkPermission(
-      userId,
-      'request',
-      'read',
-      { locationId }
+    // Check permission - first check for wildcard permissions
+    const userPermissions = await permissionService.getUserPermissions(userId);
+    const hasWildcard = userPermissions.some(p => 
+      (p.resource === '*' || p.resource === 'request') && 
+      (p.actions?.includes('*') || p.actions?.includes('read'))
     );
+
+    let canView = hasWildcard;
+
+    if (!canView) {
+      // Check location-scoped permission
+      const locationId = request.district || request.municipalityId;
+      canView = await permissionService.checkPermission(
+        userId,
+        'request',
+        'read',
+        { locationId }
+      );
+    }
 
     if (!canView) {
       // Check if user is requester or reviewer

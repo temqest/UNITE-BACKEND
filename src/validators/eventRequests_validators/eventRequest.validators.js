@@ -77,10 +77,33 @@ const validateCreateEventRequest = (req, res, next) => {
  */
 const validateUpdateEventRequest = (req, res, next) => {
   const schema = Joi.object({
+    // Event fields
+    Event_Title: Joi.string().trim().min(3).max(200).optional(),
+    Location: Joi.string().trim().min(3).max(500).optional(),
+    Date: Joi.date().optional(),
+    Start_Date: Joi.date().optional(),
+    End_Date: Joi.date().optional(),
+    Email: Joi.string().email().optional(),
+    Phone_Number: Joi.string().trim().optional(),
+    Event_Description: Joi.string().trim().optional(),
     Category: Joi.string().trim().optional(),
+    // Category-specific fields
+    Target_Donation: Joi.number().optional(),
+    VenueType: Joi.string().trim().optional(),
+    TrainingType: Joi.string().trim().optional(),
+    MaxParticipants: Joi.number().optional(),
+    Topic: Joi.string().trim().optional(),
+    TargetAudience: Joi.string().trim().optional(),
+    ExpectedAudienceSize: Joi.number().optional(),
+    PartnerOrganization: Joi.string().trim().optional(),
+    StaffAssignmentID: Joi.string().trim().optional(),
+    // Location and organization references
     municipalityId: Joi.string().hex().length(24).optional(),
     district: Joi.string().hex().length(24).optional(),
     province: Joi.string().hex().length(24).optional(),
+    organizationId: Joi.string().optional(),
+    coverageAreaId: Joi.string().optional(),
+    // Request-specific fields
     notes: Joi.string().trim().max(1000).optional()
   }).min(1).messages({ 'object.min': 'At least one field must be provided for update' });
 
@@ -93,6 +116,12 @@ const validateUpdateEventRequest = (req, res, next) => {
       errors: errorMessages
     });
   }
+  
+  // Normalize: use Date if provided, otherwise use Start_Date
+  if (!value.Date && value.Start_Date) {
+    value.Date = value.Start_Date;
+  }
+  
   req.validatedData = value;
   next();
 };
