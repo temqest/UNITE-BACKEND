@@ -1021,6 +1021,7 @@ class UserController {
         email, 
         roles, 
         organizationId, 
+        organizationIds,
         municipalityId, 
         barangayId,
         ...simpleFields 
@@ -1123,8 +1124,62 @@ class UserController {
         user.authority = maxAuthority;
       }
 
-      // Handle organization update
-      if (organizationId !== undefined) {
+      // Handle organization update (support both single organizationId and multiple organizationIds)
+      if (organizationIds !== undefined && Array.isArray(organizationIds)) {
+        const { UserOrganization, Organization } = require('../../models');
+        
+        if (organizationIds.length === 0) {
+          throw new Error('At least one organization must be assigned');
+        }
+        
+        // Determine roleInOrg based on user's role
+        let roleInOrg = 'member';
+        if (user.roles && user.roles.length > 0) {
+          const firstRoleCode = user.roles[0].roleCode || '';
+          if (firstRoleCode.toLowerCase() === 'coordinator') {
+            roleInOrg = 'coordinator';
+          }
+        }
+        
+        // Revoke all existing organizations for this user
+        await UserOrganization.updateMany(
+          { userId: user._id },
+          { isActive: false }
+        ).session(session);
+        
+        // Assign new organizations
+        user.organizations = [];
+        for (let i = 0; i < organizationIds.length; i++) {
+          const orgId = organizationIds[i];
+          const org = await Organization.findById(orgId).session(session);
+          if (!org || !org.isActive) {
+            throw new Error(`Organization not found or inactive: ${orgId}`);
+          }
+          
+          // Assign via UserOrganization collection
+          await UserOrganization.assignOrganization(
+            user._id,
+            orgId,
+            {
+              roleInOrg: roleInOrg,
+              isPrimary: i === 0, // First organization is primary
+              assignedBy: requesterId || null,
+              session
+            }
+          );
+          
+          // Add to embedded organizations array
+          user.organizations.push({
+            organizationId: org._id,
+            organizationName: org.name,
+            organizationType: org.type,
+            isPrimary: i === 0,
+            assignedAt: new Date(),
+            assignedBy: requesterId || null
+          });
+        }
+      } else if (organizationId !== undefined) {
+        // Backward compatibility: handle single organizationId
         const { UserOrganization, Organization } = require('../../models');
         
         // Get organization
@@ -2142,6 +2197,43 @@ class UserController {
           requesterAuthority: requesterId ? await require('../../services/users_services/authority.service').calculateUserAuthority(requesterId) : 'unknown'
         });
       }
+
+      // Authority-based filtering for operational staff (Staff Operations page)
+      // Filter: authority >= 60 AND authority !== 100
+      // This ensures only valid staff/coordinators are shown, excluding stakeholders and super admins
+      const isOperationalStaffQuery = isCoordinatorQuery || capabilities.some(c => 
+        c === 'staff.create' || c === 'staff.update' || c === 'staff.delete' || 
+        c === 'event.create' || c === 'event.update' || c === 'request.create'
+      );
+      
+      if (isOperationalStaffQuery && filteredUserIds.length > 0) {
+        try {
+          const usersToCheck = await User.find({
+            _id: { $in: filteredUserIds }
+          }).select('_id authority').lean();
+          
+          const validStaffIds = usersToCheck
+            .filter(user => {
+              const authority = user.authority || 20;
+              // Only include users with authority >= 60 (staff/coordinator level) and exclude super admins (100)
+              return authority >= 60 && authority !== 100;
+            })
+            .map(user => user._id.toString());
+          
+          const beforeStaffFilter = filteredUserIds.length;
+          filteredUserIds = validStaffIds;
+          
+          console.log('[listUsersByCapability] Operational staff authority filtering:', {
+            before: beforeStaffFilter,
+            after: filteredUserIds.length,
+            filteredOut: beforeStaffFilter - filteredUserIds.length,
+            criteria: 'authority >= 60 AND authority !== 100'
+          });
+        } catch (err) {
+          console.error('[listUsersByCapability] Operational staff authority filtering error:', err);
+          // On error, fail safe: filter client-side will handle it
+        }
+      }
       
       if (filteredUserIds.length > 0) {
         query._id = { $in: filteredUserIds };
@@ -2150,8 +2242,13 @@ class UserController {
         query._id = { $in: [] };
       }
 
+      // Default to only active users (soft delete support)
+      // Only show inactive users if explicitly requested
       if (isActive !== undefined) {
         query.isActive = isActive === 'true';
+      } else {
+        // Default to active users only for listUsersByCapability
+        query.isActive = true;
       }
 
       if (organizationType) {
