@@ -827,6 +827,182 @@ class UserController {
   }
 
   /**
+   * Get user edit context
+   * GET /api/users/:userId/edit-context
+   * Returns complete, consistent stakeholder data ready for editing
+   */
+  async getUserEditContext(req, res) {
+    try {
+      const { userId } = req.params;
+      const requesterId = req.user?.id || req.user?._id;
+      
+      // Try as ObjectId first, then legacy userId
+      let user = null;
+      if (require('mongoose').Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId);
+      }
+      if (!user) {
+        user = await User.findByLegacyId(userId);
+      }
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Get current user's authority to determine edit permissions
+      let requesterAuthority = null;
+      if (requesterId) {
+        const requester = await User.findById(requesterId);
+        if (requester) {
+          requesterAuthority = requester.authority || (requester.isSystemAdmin ? 100 : null);
+        }
+      }
+
+      // Resolve role (from embedded roles array)
+      let roleData = null;
+      if (user.roles && Array.isArray(user.roles) && user.roles.length > 0) {
+        const activeRole = user.roles.find(r => r.isActive !== false) || user.roles[0];
+        if (activeRole && activeRole.roleId) {
+          const { Role } = require('../../models');
+          const role = await Role.findById(activeRole.roleId);
+          if (role) {
+            roleData = {
+              _id: role._id.toString(),
+              code: role.code,
+              name: role.name,
+              authority: role.authority
+            };
+          }
+        }
+      }
+
+      // Resolve organization (from embedded organizations array)
+      let organizationData = null;
+      if (user.organizations && Array.isArray(user.organizations) && user.organizations.length > 0) {
+        const primaryOrg = user.organizations.find(o => o.isPrimary) || user.organizations[0];
+        if (primaryOrg && primaryOrg.organizationId) {
+          const { Organization } = require('../../models');
+          const org = await Organization.findById(primaryOrg.organizationId);
+          if (org) {
+            organizationData = {
+              _id: org._id.toString(),
+              name: org.name || primaryOrg.organizationName,
+              type: org.type || primaryOrg.organizationType
+            };
+          } else {
+            // Fallback to embedded data
+            organizationData = {
+              _id: primaryOrg.organizationId.toString(),
+              name: primaryOrg.organizationName || '',
+              type: primaryOrg.organizationType || ''
+            };
+          }
+        }
+      }
+
+      // Resolve location hierarchy
+      let locationData = null;
+      if (user.locations && user.locations.municipalityId) {
+        const { Location } = require('../../models');
+        const municipality = await Location.findById(user.locations.municipalityId);
+        
+        if (municipality) {
+          // Get ancestors to find district and province
+          const ancestors = await locationService.getLocationAncestors(municipality._id, {
+            includeSelf: false,
+            includeInactive: false
+          });
+
+          // Find district (type === 'district' or type === 'city' with isCity metadata)
+          const districtObj = ancestors.find(a => 
+            a.type === 'district' || 
+            (a.type === 'city' && a.metadata?.isCity)
+          );
+
+          // Find province (type === 'province')
+          const provinceObj = ancestors.find(a => a.type === 'province');
+
+          // Get barangay if exists
+          let barangayData = null;
+          if (user.locations.barangayId) {
+            const barangay = await Location.findById(user.locations.barangayId);
+            if (barangay) {
+              barangayData = {
+                _id: barangay._id.toString(),
+                name: barangay.name
+              };
+            }
+          }
+
+          locationData = {
+            municipality: {
+              _id: municipality._id.toString(),
+              name: municipality.name || user.locations.municipalityName || ''
+            },
+            barangay: barangayData,
+            district: districtObj ? {
+              _id: districtObj._id.toString(),
+              name: districtObj.name || districtObj.District_Name || ''
+            } : null,
+            province: provinceObj ? {
+              _id: provinceObj._id.toString(),
+              name: provinceObj.name || provinceObj.Province_Name || ''
+            } : null
+          };
+        }
+      }
+
+      // Determine edit permissions based on current user's authority
+      const isRequesterAdmin = requesterAuthority !== null && requesterAuthority >= 80;
+      const isRequesterCoordinator = requesterAuthority !== null && requesterAuthority >= 60 && requesterAuthority < 80;
+      
+      // Check if coordinator has multiple organizations (for organization editing)
+      let coordinatorCanEditOrg = false;
+      if (isRequesterCoordinator && requesterId) {
+        const requester = await User.findById(requesterId);
+        if (requester && requester.organizations && Array.isArray(requester.organizations)) {
+          coordinatorCanEditOrg = requester.organizations.length > 1;
+        }
+      }
+
+      const editPermissions = {
+        canEditRole: isRequesterAdmin,
+        canEditOrganization: isRequesterAdmin || coordinatorCanEditOrg,
+        canEditLocation: isRequesterAdmin || isRequesterCoordinator,
+        canEditProvinceDistrict: isRequesterAdmin  // Only admin can edit province/district
+      };
+
+      // Build response
+      const response = {
+        success: true,
+        data: {
+          _id: user._id.toString(),
+          firstName: user.firstName || '',
+          middleName: user.middleName || '',
+          lastName: user.lastName || '',
+          email: user.email || '',
+          phoneNumber: user.phoneNumber || '',
+          role: roleData,
+          organization: organizationData,
+          location: locationData,
+          editPermissions
+        }
+      };
+
+      return res.status(200).json(response);
+    } catch (error) {
+      console.error('[getUserEditContext] Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get user edit context'
+      });
+    }
+  }
+
+  /**
    * Update user
    * PUT /api/users/:userId
    */
@@ -1807,18 +1983,61 @@ class UserController {
       }
 
       // Remove passwords from response and ensure coverage area/organization data is included
-      const usersResponse = users.map(u => {
+      // Also resolve province/district from municipality for table display
+      const usersResponse = await Promise.all(users.map(async (u) => {
         const userObj = u.toObject();
         delete userObj.password;
         
         // Ensure locations (municipality/barangay) are properly formatted
         // Locations are already embedded in user document as: { municipalityId, municipalityName, barangayId?, barangayName? }
         
+        // Resolve province and district from municipality for table display
+        if (userObj.locations && userObj.locations.municipalityId) {
+          try {
+            const { Location } = require('../../models');
+            const municipality = await Location.findById(userObj.locations.municipalityId);
+            
+            if (municipality) {
+              // Get ancestors to find district and province
+              const ancestors = await locationService.getLocationAncestors(municipality._id, {
+                includeSelf: false,
+                includeInactive: false
+              });
+
+              // Find district (type === 'district' or type === 'city' with isCity metadata)
+              const districtObj = ancestors.find(a => 
+                a.type === 'district' || 
+                (a.type === 'city' && a.metadata?.isCity)
+              );
+
+              // Find province (type === 'province')
+              const provinceObj = ancestors.find(a => a.type === 'province');
+
+              // Add province and district names to user object for table display
+              if (provinceObj) {
+                userObj.Province_Name = provinceObj.name || provinceObj.Province_Name || '';
+                userObj.province = provinceObj.name || provinceObj.Province_Name || '';
+              }
+              
+              if (districtObj) {
+                userObj.District_Name = districtObj.name || districtObj.District_Name || '';
+                userObj.district = districtObj.name || districtObj.District_Name || '';
+                // Also include district ID for frontend resolution
+                userObj.District_ID = districtObj._id.toString();
+                userObj.DistrictId = districtObj._id.toString();
+              }
+            }
+          } catch (error) {
+            // If resolution fails, continue without province/district (non-critical)
+            console.warn(`[listUsersByCapability] Failed to resolve province/district for user ${u._id}:`, error.message);
+          }
+        }
+        
         // Ensure organizations array is included (for stakeholders, should have one organization)
         // Organizations are already embedded in user document as: [{ organizationId, organizationName, organizationType, ... }]
         
         return userObj;
-      });
+      }));
 
       return res.status(200).json({
         success: true,

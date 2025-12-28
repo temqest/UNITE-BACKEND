@@ -265,6 +265,19 @@ router.get('/users/:userId/capabilities', authenticate, requirePermission('user'
 });
 
 /**
+ * @route   GET /api/users/:userId/edit-context
+ * @desc    Get user edit context (complete, consistent data for editing)
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/edit-context', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await userController.getUserEditContext(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/users/:userId/diagnostics
  * @desc    Get comprehensive diagnostic information for a user
  * @access  Private (requires user.read permission or viewing own diagnostics)

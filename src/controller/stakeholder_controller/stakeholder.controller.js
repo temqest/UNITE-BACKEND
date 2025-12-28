@@ -67,20 +67,46 @@ class StakeholderController {
         }
       }
 
-      // Use context as single source of truth - all data already resolved
-      let municipalities = context.municipalities || [];
-      let organizations = context.organizations || [];
+      // For system admins, return ALL municipalities and organizations
+      // For coordinators, use context as single source of truth - all data already resolved
+      let municipalities = [];
+      let organizations = [];
       
-      // Fallback: If context doesn't have organizations, try to get them directly
-      if (!isSystemAdmin && organizations.length === 0) {
-        console.log('[DIAG] getCreationContext - No organizations in context, trying fallback');
-        organizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(userId);
-      }
-      
-      // Fallback: If context doesn't have municipalities, try to get them directly
-      if (!isSystemAdmin && municipalities.length === 0 && context.coverageAreas.length > 0) {
-        console.log('[DIAG] getCreationContext - No municipalities in context, trying fallback');
-        municipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(userId);
+      if (isSystemAdmin) {
+        // System admin gets ALL active municipalities and organizations
+        const { Location, Organization } = require('../../models');
+        
+        // Get all active municipalities
+        municipalities = await Location.find({
+          type: 'municipality',
+          isActive: true
+        }).populate('parent', 'name type').populate('province', 'name').sort({ name: 1 });
+        
+        // Get all active organizations
+        organizations = await Organization.find({
+          isActive: true
+        }).sort({ name: 1 });
+        
+        console.log('[DIAG] getCreationContext - System admin: returning all municipalities and organizations', {
+          municipalitiesCount: municipalities.length,
+          organizationsCount: organizations.length
+        });
+      } else {
+        // For coordinators, use context data
+        municipalities = context.municipalities || [];
+        organizations = context.organizations || [];
+        
+        // Fallback: If context doesn't have organizations, try to get them directly
+        if (organizations.length === 0) {
+          console.log('[DIAG] getCreationContext - No organizations in context, trying fallback');
+          organizations = await jurisdictionService.getAllowedOrganizationsForStakeholderCreation(userId);
+        }
+        
+        // Fallback: If context doesn't have municipalities, try to get them directly
+        if (municipalities.length === 0 && context.coverageAreas.length > 0) {
+          console.log('[DIAG] getCreationContext - No municipalities in context, trying fallback');
+          municipalities = await jurisdictionService.getMunicipalitiesForStakeholderCreation(userId);
+        }
       }
       
       // Get stakeholder roles that creator can assign (authority-based)
