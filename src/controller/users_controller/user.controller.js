@@ -1564,9 +1564,17 @@ class UserController {
         });
       }
 
-      // Get user roles and permissions from database (single source of truth)
+      // OPTIMIZATION: Use embedded data first (fast path for new users)
+      // New stakeholders have embedded roles, permissions can be calculated from embedded roles
+      // This avoids expensive database queries for users with embedded data
+      
+      // Get user roles - permissionService already optimized to use embedded roles first
       const roles = await permissionService.getUserRoles(user._id);
+      
+      // Get permissions - permissionService already optimized to use embedded roles first
       const permissions = await permissionService.getUserPermissions(user._id);
+      
+      // Get locations - locationService now optimized to use embedded locations first
       const locations = await locationService.getUserLocations(user._id);
 
       // Prepare user response
@@ -1735,7 +1743,8 @@ class UserController {
         });
       }
 
-      // Get user roles and permissions
+      // OPTIMIZATION: Use embedded data first (fast path for new users)
+      // permissionService already optimized to use embedded roles first
       const roles = await permissionService.getUserRoles(user._id);
       const permissions = await permissionService.getUserPermissions(user._id);
       
@@ -2794,6 +2803,201 @@ class UserController {
       return res.status(500).json({
         success: false,
         message: error.message || 'Failed to get user diagnostics'
+      });
+    }
+  }
+
+  /**
+   * Resolve coordinator(s) for a stakeholder
+   * Finds all coordinators who manage this stakeholder based on organization and location matching
+   * @route GET /api/users/:userId/coordinator
+   */
+  async resolveCoordinatorForStakeholder(req, res) {
+    try {
+      const { userId } = req.params;
+      const mongoose = require('mongoose');
+      
+      console.log('[resolveCoordinatorForStakeholder] Resolving coordinator for stakeholder:', {
+        userId,
+        timestamp: new Date().toISOString()
+      });
+
+      // Find stakeholder
+      const stakeholder = await User.findById(userId);
+      if (!stakeholder) {
+        return res.status(404).json({
+          success: false,
+          message: 'Stakeholder not found'
+        });
+      }
+
+      // Check if user is actually a stakeholder (authority < 60)
+      const authorityService = require('../../services/users_services/authority.service');
+      const stakeholderAuthority = stakeholder.authority || await authorityService.calculateUserAuthority(userId);
+      
+      if (stakeholderAuthority >= 60) {
+        return res.status(400).json({
+          success: false,
+          message: 'User is not a stakeholder'
+        });
+      }
+
+      const coordinators = [];
+
+      // Method 1: Check organizations for assignedBy (coordinator who assigned the organization)
+      // OPTIMIZATION: Batch query all assignedBy IDs instead of individual queries
+      if (stakeholder.organizations && stakeholder.organizations.length > 0) {
+        const assignedByIds = stakeholder.organizations
+          .map(org => org.assignedBy)
+          .filter(Boolean)
+          .filter((id, index, self) => self.indexOf(id) === index); // Remove duplicates
+        
+        if (assignedByIds.length > 0) {
+          // Single batch query instead of loop
+          const potentialCoordinators = await User.find({
+            _id: { $in: assignedByIds },
+            isActive: true,
+            authority: { $gte: 60, $lt: 80 }
+          }).select('_id firstName lastName email authority').lean();
+          
+          for (const coordinator of potentialCoordinators) {
+            coordinators.push({
+              _id: coordinator._id,
+              firstName: coordinator.firstName,
+              lastName: coordinator.lastName,
+              email: coordinator.email,
+              fullName: `${coordinator.firstName} ${coordinator.lastName}`,
+              source: 'organization_assignment'
+            });
+          }
+        }
+      }
+
+      // Method 2: Check if stakeholder's location matches a coordinator's coverage area
+      if (stakeholder.locations && stakeholder.locations.municipalityId) {
+        const municipalityId = stakeholder.locations.municipalityId;
+        
+        // Find coordinators with this municipality in their coverage areas
+        const coordinatorsByLocation = await User.find({
+          authority: { $gte: 60, $lt: 80 },
+          isActive: true,
+          'coverageAreas.municipalityIds': municipalityId
+        }).select('_id firstName lastName email');
+
+        // Use Set for O(1) duplicate checking
+        const existingCoordIds = new Set(coordinators.map(c => c._id.toString()));
+        
+        for (const coord of coordinatorsByLocation) {
+          const coordIdStr = coord._id.toString();
+          if (!existingCoordIds.has(coordIdStr)) {
+            coordinators.push({
+              _id: coord._id,
+              firstName: coord.firstName,
+              lastName: coord.lastName,
+              email: coord.email,
+              fullName: `${coord.firstName} ${coord.lastName}`,
+              source: 'coverage_area_match'
+            });
+            existingCoordIds.add(coordIdStr);
+          }
+        }
+      }
+
+      // Method 3: Check if stakeholder's organization matches coordinator's organizations
+      // OPTIMIZATION: Use single query with embedded organizations array
+      if (stakeholder.organizations && stakeholder.organizations.length > 0) {
+        const stakeholderOrgIds = stakeholder.organizations
+          .map(org => org.organizationId)
+          .filter(Boolean)
+          .map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+
+        if (stakeholderOrgIds.length > 0) {
+          // Single optimized query using embedded organizations array
+          const coordinatorsByOrg = await User.find({
+            authority: { $gte: 60, $lt: 80 },
+            isActive: true,
+            'organizations.organizationId': { $in: stakeholderOrgIds },
+            'organizations.isActive': { $ne: false }
+          }).select('_id firstName lastName email').lean();
+
+          // Use Set for O(1) duplicate checking (reuse from Method 2)
+          const existingCoordIds = new Set(coordinators.map(c => c._id.toString()));
+          
+          for (const coord of coordinatorsByOrg) {
+            const coordIdStr = coord._id.toString();
+            if (!existingCoordIds.has(coordIdStr)) {
+              coordinators.push({
+                _id: coord._id,
+                firstName: coord.firstName,
+                lastName: coord.lastName,
+                email: coord.email,
+                fullName: `${coord.firstName} ${coord.lastName}`,
+                source: 'organization_match'
+              });
+              existingCoordIds.add(coordIdStr);
+            }
+          }
+        }
+      }
+
+      console.log('[resolveCoordinatorForStakeholder] Found coordinators:', {
+        stakeholderId: userId,
+        coordinatorsCount: coordinators.length,
+        coordinators: coordinators.map(c => ({ id: c._id, name: c.fullName, source: c.source }))
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          coordinators: coordinators.length > 0 ? coordinators : [],
+          primaryCoordinator: coordinators.length > 0 ? coordinators[0] : null
+        }
+      });
+    } catch (error) {
+      console.error('[resolveCoordinatorForStakeholder] Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to resolve coordinator for stakeholder'
+      });
+    }
+  }
+
+  /**
+   * Diagnostic endpoint for coordinator resolution
+   * @route GET /api/users/:userId/coordinator/diagnostic
+   */
+  async diagnoseCoordinatorResolution(req, res) {
+    try {
+      const { userId } = req.params;
+      const stakeholder = await User.findById(userId);
+      
+      if (!stakeholder) {
+        return res.status(404).json({
+          success: false,
+          message: 'Stakeholder not found'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          stakeholder: {
+            _id: stakeholder._id,
+            email: stakeholder.email,
+            firstName: stakeholder.firstName,
+            lastName: stakeholder.lastName,
+            authority: stakeholder.authority,
+            organizations: stakeholder.organizations || [],
+            locations: stakeholder.locations || {},
+            roles: stakeholder.roles || []
+          }
+        }
+      });
+    } catch (error) {
+      console.error('[diagnoseCoordinatorResolution] Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to diagnose coordinator resolution'
       });
     }
   }

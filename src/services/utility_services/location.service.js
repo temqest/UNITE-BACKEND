@@ -1,40 +1,67 @@
-const { Province, District, Municipality, SignUpRequest, Location, UserLocation, User } = require('../../models');
+const { SignUpRequest, Location, UserLocation, User, Role, Organization, UserRole } = require('../../models');
 const permissionService = require('../users_services/permission.service');
 const crypto = require('crypto');
 const { signToken, verifyToken } = require('../../utils/jwt');
+const jwt = require('jsonwebtoken');
 const emailService = require('./email.service');
 const bcrypt = require('bcrypt');
 
 class LocationService {
   async getProvinces() {
-    return Province.find().sort({ name: 1 });
+    return Location.find({ type: 'province' }).sort({ name: 1 });
   }
 
   async getDistrictsByProvince(provinceId) {
-    return District.find({ province: provinceId }).sort({ name: 1 });
+    return Location.find({ type: 'district', province: provinceId }).sort({ name: 1 });
   }
 
   async getMunicipalitiesByDistrict(districtId) {
-    return Municipality.find({ district: districtId }).sort({ name: 1 });
+    return Location.find({ type: 'municipality', parent: districtId }).sort({ name: 1 });
   }
 
   async getAllMunicipalities() {
-    return Municipality.find().sort({ name: 1 });
+    return Location.find({ type: 'municipality' }).sort({ name: 1 });
   }
 
   async sendVerificationEmail(data) {
     // Validate hierarchy: ensure province -> district -> municipality consistency
-    const province = await Province.findById(data.province);
+    // All locations use the unified Location model
+    const province = await Location.findById(data.province);
     if (!province) throw new Error('Province not found');
+    if (province.type !== 'province') throw new Error('Invalid province');
 
-    const district = await District.findOne({ _id: data.district, province: province._id });
+    // Districts are connected via parent field (or province field if denormalized)
+    const district = await Location.findOne({ 
+      _id: data.district, 
+      type: { $in: ['district', 'city'] },
+      $or: [
+        { parent: province._id },
+        { province: province._id }
+      ]
+    });
     if (!district) throw new Error('District not found or does not belong to province');
 
-    const municipality = await Municipality.findOne({ _id: data.municipality, district: district._id, province: province._id });
-    if (!municipality) throw new Error('Municipality not found or does not belong to district/province');
+    // Municipalities are connected via parent field (pointing to district)
+    const municipality = await Location.findOne({ 
+      _id: data.municipality, 
+      type: 'municipality', 
+      parent: district._id 
+    });
+    if (!municipality) throw new Error('Municipality not found or does not belong to district');
+
+    // Validate roleId - must have authority <= 59
+    if (!data.roleId) throw new Error('Role is required');
+    const role = await Role.findById(data.roleId);
+    if (!role) throw new Error('Role not found');
+    if (role.authority > 59) throw new Error('Invalid role: Only stakeholder-level roles (authority ≤ 59) are allowed');
+
+    // Validate organizationId - must exist and be active
+    if (!data.organizationId) throw new Error('Organization is required');
+    const organization = await Organization.findById(data.organizationId);
+    if (!organization) throw new Error('Organization not found');
+    if (!organization.isActive) throw new Error('Organization is not active');
 
     // find coordinator for the district (first match) - using User model with coordinator role
-    const { UserRole, Role, UserLocation } = require('../../models');
     const coordinatorRole = await Role.findOne({ code: 'coordinator' });
     let coordinator = null;
     if (coordinatorRole && district) {
@@ -60,14 +87,15 @@ class LocationService {
     // Generate 6-digit verification code
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Create signup request with verification code
+    // Create signup request with verification code (no password)
     const req = new SignUpRequest({
       firstName: data.firstName,
       middleName: data.middleName,
       lastName: data.lastName,
       email: data.email,
       phoneNumber: data.phoneNumber,
-      password: data.password,
+      roleId: role._id,
+      organizationId: organization._id,
       organization: data.organization,
       province: province._id,
       district: district._id,
@@ -86,9 +114,23 @@ class LocationService {
   }
 
   async approveRequest(requestId, approverId) {
-    const req = await SignUpRequest.findById(requestId);
+    const req = await SignUpRequest.findById(requestId).populate('roleId organizationId');
     if (!req) throw new Error('Sign up request not found');
-    if (req.status !== 'pending') throw new Error('Request has already been processed');
+    
+    // If already approved, check if we can resend the activation email
+    if (req.status === 'approved') {
+      // Check if user exists and hasn't activated yet
+      const existingUser = await User.findOne({ email: req.email.toLowerCase() });
+      if (existingUser && !existingUser.isActive && req.passwordActivationToken) {
+        // User exists but hasn't activated - resend the email
+        return await this.resendActivationEmail(requestId);
+      }
+      throw new Error('Request has already been processed');
+    }
+    
+    if (req.status !== 'pending') {
+      throw new Error('Request has already been processed');
+    }
 
     // Check if user with this email already exists
     const existingUser = await User.findOne({ email: req.email.toLowerCase() });
@@ -96,30 +138,121 @@ class LocationService {
 
     req.status = 'approved';
     req.decisionAt = new Date();
-    await req.save();
-
-    // Hash the password before creating user account
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(req.password, saltRounds);
-
-    // Create user account with stakeholder role
+    
+    // Create user account WITHOUT password (set temporary placeholder, will be replaced on activation)
+    // Set isActive to false - will be activated after password is set
+    const tempPassword = crypto.randomBytes(32).toString('hex'); // Temporary, will be replaced
     const user = new User({
       email: req.email.toLowerCase(),
       firstName: req.firstName,
       middleName: req.middleName || null,
       lastName: req.lastName,
       phoneNumber: req.phoneNumber || null,
-      password: hashedPassword,
-      organizationType: req.organizationType || null,
+      password: tempPassword, // Temporary password, user must set real password via activation
       organizationInstitution: req.organization || null,
-      isActive: true
+      isActive: false // Will be activated after password is set
     });
     await user.save();
 
-    // Assign stakeholder role
-    const stakeholderRole = await permissionService.getRoleByCode('stakeholder');
-    if (stakeholderRole) {
-      await permissionService.assignRole(user._id, stakeholderRole._id, [], null, null);
+    // Generate password activation token (JWT with 24 hour expiration)
+    // Use jwt.sign directly since we need custom fields (userId, signupRequestId) that signToken doesn't support
+    const activationTokenPayload = {
+      userId: user._id.toString(),
+      email: req.email,
+      signupRequestId: req._id.toString()
+    };
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const activationToken = jwt.sign(activationTokenPayload, JWT_SECRET, { expiresIn: '24h' });
+    
+    // Set activation token and expiration in signup request
+    req.passwordActivationToken = activationToken;
+    req.passwordActivationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    await req.save();
+
+    // Assign role from signup request
+    if (req.roleId) {
+      // Verify the role is actually a stakeholder role (authority < 60)
+      const role = req.roleId;
+      const roleAuthority = role.authority || 30;
+      
+      if (roleAuthority >= 60) {
+        throw new Error(`Cannot assign coordinator-level role (authority ${roleAuthority}) to stakeholder signup request`);
+      }
+      
+      // Remove any existing coordinator-level roles (authority >= 60) that might have been accidentally assigned
+      const { UserRole } = require('../../models');
+      const { Role } = require('../../models');
+      const coordinatorRoles = await Role.find({ authority: { $gte: 60 } }).select('_id');
+      const coordinatorRoleIds = coordinatorRoles.map(r => r._id);
+      
+      if (coordinatorRoleIds.length > 0) {
+        await UserRole.updateMany(
+          { userId: user._id, roleId: { $in: coordinatorRoleIds }, isActive: true },
+          { isActive: false }
+        );
+        console.log(`[approveRequest] Removed any existing coordinator roles for ${user.email}`);
+      }
+      
+      // Assign the stakeholder role
+      await permissionService.assignRole(user._id, req.roleId._id, [], approverId || null, null);
+      
+      // Sync the embedded roles array with UserRole collection
+      // This ensures the authority calculation uses the correct role
+      const userRoles = await UserRole.find({ userId: user._id, isActive: true })
+        .populate('roleId')
+        .sort({ assignedAt: -1 });
+      
+      // Filter out any coordinator roles (authority >= 60) from the embedded array
+      const stakeholderRoles = userRoles.filter(ur => {
+        const auth = ur.roleId?.authority || 20;
+        return auth < 60;
+      });
+      
+      // Update embedded roles array with only stakeholder roles
+      user.roles = stakeholderRoles.map(ur => ({
+        roleId: ur.roleId._id,
+        roleCode: ur.roleId.code,
+        roleAuthority: ur.roleId.authority || 20,
+        assignedAt: ur.assignedAt || new Date(),
+        assignedBy: ur.assignedBy || null,
+        isActive: ur.isActive !== false
+      }));
+      
+      // Save user document to persist roles before continuing with other assignments
+      // This ensures roles are available for authority calculation later
+      await user.save();
+      console.log(`[approveRequest] Synced and saved roles for ${user.email}:`, {
+        rolesCount: user.roles.length,
+        roles: user.roles.map(r => ({ code: r.roleCode, authority: r.roleAuthority, isActive: r.isActive }))
+      });
+    }
+
+    // Assign organization from signup request
+    if (req.organizationId) {
+      const { UserOrganization } = require('../../models');
+      const organization = req.organizationId;
+      await UserOrganization.create({
+        userId: user._id,
+        organizationId: organization._id,
+        isPrimary: true,
+        assignedBy: approverId || null
+      });
+      
+      // Also update user's embedded organizations array
+      user.organizations = [{
+        organizationId: organization._id,
+        organizationName: organization.name,
+        organizationType: organization.type,
+        isPrimary: true,
+        assignedAt: new Date(),
+        assignedBy: approverId || null
+      }];
+      await user.save();
+      console.log(`[approveRequest] Assigned organization to ${user.email}:`, {
+        organizationId: organization._id.toString(),
+        organizationName: organization.name,
+        assignedBy: approverId ? approverId.toString() : null
+      });
     }
 
     // Assign locations if provided
@@ -127,57 +260,74 @@ class LocationService {
       await this.assignUserToLocation(user._id, req.district, 'exact', { isPrimary: true });
     }
     if (req.province) {
-      await this.assignUserToLocation(user._id, req.province, 'hierarchical', { isPrimary: false });
+      await this.assignUserToLocation(user._id, req.province, 'descendants', { isPrimary: false });
     }
     if (req.municipality) {
       await this.assignUserToLocation(user._id, req.municipality, 'exact', { isPrimary: false });
     }
 
-    // Send acceptance email (with error handling to prevent blocking)
-    const acceptanceMessage = `
-  Dear ${req.firstName} ${req.lastName},
+    // Update embedded locations field (CRITICAL: Required for jurisdiction filtering)
+    // This must match the manual creation pattern in user.controller.js
+    if (req.municipality) {
+      const municipality = await Location.findById(req.municipality);
+      if (municipality) {
+        user.locations = {
+          municipalityId: municipality._id,
+          municipalityName: municipality.name,
+          barangayId: null,
+          barangayName: null
+        };
+        // Note: SignUpRequest model doesn't currently have barangay field
+        // If added in future, update here: user.locations.barangayId = req.barangay, etc.
+        await user.save();
+        console.log(`[approveRequest] Set embedded locations for ${user.email}:`, {
+          municipalityId: municipality._id.toString(),
+          municipalityName: municipality.name
+        });
+      } else {
+        console.warn(`[approveRequest] Municipality ${req.municipality} not found for ${user.email}`);
+      }
+    }
 
-  Congratulations! Your stakeholder registration request for the UNITE Blood Bank System has been approved.
+    // Recalculate and update user's authority AFTER all assignments are complete
+    // This ensures authority calculation sees all roles, organizations, and locations
+    if (req.roleId) {
+      const authorityService = require('../users_services/authority.service');
+      // Reload user to ensure we have latest data including roles and locations
+      await user.populate('roles');
+      const newAuthority = await authorityService.calculateUserAuthority(user._id);
+      user.authority = newAuthority;
+      await user.save();
+      console.log(`[approveRequest] Final authority calculation for ${user.email}:`, {
+        authority: newAuthority,
+        roles: user.roles.map(r => ({ code: r.roleCode, authority: r.roleAuthority })),
+        hasLocations: !!user.locations?.municipalityId,
+        hasOrganizations: user.organizations && user.organizations.length > 0
+      });
+      
+      // Validation: Ensure authority is correct for stakeholder
+      if (newAuthority >= 60) {
+        console.error(`[approveRequest] WARNING: Stakeholder ${user.email} has incorrect authority ${newAuthority} (expected < 60)`);
+      }
+      if (newAuthority !== 30 && user.roles.length > 0) {
+        const expectedAuthority = Math.max(...user.roles.map(r => r.roleAuthority || 20));
+        if (newAuthority !== expectedAuthority) {
+          console.warn(`[approveRequest] Authority mismatch for ${user.email}: calculated=${newAuthority}, expected=${expectedAuthority}`);
+        }
+      }
+    }
 
-  Your account has been created with the following details:
-  - Email: ${req.email}
-
-  You can now log in to the system using your registered email and password.
-
-  If you have any questions, please contact your assigned coordinator.
-
-  Best regards,
-  UNITE Blood Bank Team
-    `.trim();
+    // Send password activation email
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const activationLink = `${frontendUrl}/auth/activate-account?token=${encodeURIComponent(activationToken)}`;
+    const userName = `${req.firstName} ${req.lastName}`;
 
     try {
-      await emailService.sendEmail(req.email, 'UNITE - Registration Approved', acceptanceMessage, `
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-  <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
-    <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
-    <p style="margin: 5px 0 0 0; color: #666;">Registration Approved</p>
-  </div>
-  <div style="padding: 30px 20px; background-color: white;">
-    <h3>Dear ${req.firstName} ${req.lastName},</h3>
-    <p style="color: #28a745; font-weight: bold;">Congratulations! Your stakeholder registration request for the UNITE Blood Bank System has been approved.</p>
-    <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 5px;">
-      <p style="margin: 0; font-weight: bold;">Your account has been created with the following details:</p>
-      <ul style="margin: 10px 0 0 20px;">
-        <li><strong>Email:</strong> ${req.email}</li>
-      </ul>
-    </div>
-    <p>You can now log in to the system using your registered email and password.</p>
-    <p>If you have any questions, please contact your assigned coordinator.</p>
-    
-  </div>
-  <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
-    <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
-  </div>
-</div>`);
-      console.log(`Approval email sent successfully to ${req.email}`);
+      await emailService.sendPasswordActivationEmail(req.email, activationLink, userName);
+      console.log(`Password activation email sent successfully to ${req.email}`);
     } catch (emailError) {
       // Log error but don't fail the approval process
-      console.error(`Failed to send approval email to ${req.email}:`, emailError.message);
+      console.error(`Failed to send password activation email to ${req.email}:`, emailError.message);
     }
 
     // Create notification for the new stakeholder
@@ -190,6 +340,50 @@ class LocationService {
     );
 
     return req;
+  }
+
+  async resendActivationEmail(requestId) {
+    const req = await SignUpRequest.findById(requestId).populate('roleId organizationId');
+    if (!req) throw new Error('Sign up request not found');
+    if (req.status !== 'approved') throw new Error('Request is not in approved status');
+
+    const user = await User.findOne({ email: req.email.toLowerCase() });
+    if (!user) throw new Error('User not found for this approved request');
+    if (user.isActive) throw new Error('Account is already activated');
+
+    // Check if existing token is still valid, if not, generate a new one
+    let activationToken = req.passwordActivationToken;
+    let activationLink;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    if (!activationToken || !req.passwordActivationExpires || new Date() > req.passwordActivationExpires) {
+      // Token expired or missing, generate a new one
+      const activationTokenPayload = {
+        userId: user._id.toString(),
+        email: req.email,
+        signupRequestId: req._id.toString()
+      };
+      const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+      activationToken = jwt.sign(activationTokenPayload, JWT_SECRET, { expiresIn: '24h' });
+      req.passwordActivationToken = activationToken;
+      req.passwordActivationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      await req.save();
+      console.log(`[resendActivationEmail] Generated new activation token for ${req.email}`);
+    } else {
+      console.log(`[resendActivationEmail] Using existing valid activation token for ${req.email}`);
+    }
+
+    activationLink = `${frontendUrl}/auth/activate-account?token=${encodeURIComponent(activationToken)}`;
+    const userName = `${req.firstName} ${req.lastName}`;
+
+    try {
+      await emailService.sendPasswordActivationEmail(req.email, activationLink, userName);
+      console.log(`[resendActivationEmail] Password activation email resent successfully to ${req.email}`);
+      return { message: 'Activation email resent successfully' };
+    } catch (emailError) {
+      console.error(`[resendActivationEmail] Failed to resend password activation email to ${req.email}:`, emailError.message);
+      throw new Error('Failed to resend password activation email');
+    }
   }
 
   async rejectRequest(requestId, approverId, reason) {
@@ -252,6 +446,189 @@ class LocationService {
     return { message: 'Request rejected and deleted successfully' };
   }
 
+  async verifyActivationToken(token) {
+    try {
+      // Verify JWT token
+      const decoded = verifyToken(token);
+      
+      // Check if token has required fields (new format)
+      if (!decoded.userId || !decoded.email || !decoded.signupRequestId) {
+        // Token might be in old format - try to find by email and stored token
+        console.log('[verifyActivationToken] Token missing required fields, trying to find by email and stored token');
+        
+        // Try to find signup request by matching the token directly
+        const req = await SignUpRequest.findOne({ 
+          passwordActivationToken: token,
+          status: 'approved'
+        }).populate('roleId organizationId');
+        
+        if (!req) {
+          throw new Error('Invalid activation token. Please request a new activation email.');
+        }
+        
+        // Check expiration
+        if (req.passwordActivationExpires && new Date() > req.passwordActivationExpires) {
+          throw new Error('Activation token has expired. Please request a new activation email.');
+        }
+        
+        // Find user by email
+        const user = await User.findOne({ email: req.email.toLowerCase() });
+        if (!user) {
+          throw new Error('User account not found for this activation token');
+        }
+        if (user.isActive) {
+          throw new Error('Account is already activated');
+        }
+        
+        return {
+          userId: user._id.toString(),
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          fullName: `${user.firstName} ${user.lastName}`
+        };
+      }
+
+      // New token format - proceed with normal verification
+      // Check if signup request exists and token matches
+      const req = await SignUpRequest.findById(decoded.signupRequestId);
+      if (!req) throw new Error('Signup request not found');
+      if (req.passwordActivationToken !== token) {
+        throw new Error('Invalid activation token');
+      }
+      if (req.passwordActivationExpires && new Date() > req.passwordActivationExpires) {
+        throw new Error('Activation token has expired');
+      }
+      if (req.status !== 'approved') {
+        throw new Error('Signup request has not been approved');
+      }
+
+      // Get user info
+      const user = await User.findById(decoded.userId);
+      if (!user) throw new Error('User not found');
+      if (user.isActive) {
+        throw new Error('Account is already activated');
+      }
+
+      return {
+        userId: user._id.toString(),
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: `${user.firstName} ${user.lastName}`
+      };
+    } catch (error) {
+      if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+        throw new Error('Invalid or expired activation token. Please request a new activation email.');
+      }
+      throw error;
+    }
+  }
+
+  async activateAccount(token, password) {
+    try {
+      // Verify token first
+      const decoded = verifyToken(token);
+      
+      let req;
+      let user;
+      
+      // Check if token has required fields (new format)
+      if (!decoded.userId || !decoded.email || !decoded.signupRequestId) {
+        // Token might be in old format - try to find by stored token
+        console.log('[activateAccount] Token missing required fields, trying to find by stored token');
+        
+        // Try to find signup request by matching the token directly
+        req = await SignUpRequest.findOne({ 
+          passwordActivationToken: token,
+          status: 'approved'
+        });
+        
+        if (!req) {
+          throw new Error('Invalid activation token. Please request a new activation email.');
+        }
+        
+        // Check expiration
+        if (req.passwordActivationExpires && new Date() > req.passwordActivationExpires) {
+          throw new Error('Activation token has expired. Please request a new activation email.');
+        }
+        
+        // Find user by email
+        user = await User.findOne({ email: req.email.toLowerCase() });
+        if (!user) {
+          throw new Error('User account not found for this activation token');
+        }
+        if (user.isActive) {
+          throw new Error('Account is already activated');
+        }
+      } else {
+        // New token format - proceed with normal verification
+        // Check if signup request exists and token matches
+        req = await SignUpRequest.findById(decoded.signupRequestId);
+        if (!req) throw new Error('Signup request not found');
+        if (req.passwordActivationToken !== token) {
+          throw new Error('Invalid activation token');
+        }
+        if (req.passwordActivationExpires && new Date() > req.passwordActivationExpires) {
+          throw new Error('Activation token has expired');
+        }
+        if (req.status !== 'approved') {
+          throw new Error('Signup request has not been approved');
+        }
+
+        // Get user
+        user = await User.findById(decoded.userId);
+        if (!user) throw new Error('User not found');
+        if (user.isActive) {
+          throw new Error('Account is already activated');
+        }
+      }
+
+      // Validate password
+      if (!password || password.length < 8) {
+        throw new Error('Password must be at least 8 characters');
+      }
+
+      // Hash password
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+      // Update user: set password and activate account
+      // IMPORTANT: Only update password and isActive - preserve roles, locations, and organizations
+      user.password = hashedPassword;
+      user.isActive = true;
+      
+      // Recalculate and update user's authority after activation (in case it wasn't set correctly)
+      // This ensures authority is correct even if it was miscalculated during approval
+      const authorityService = require('../users_services/authority.service');
+      const newAuthority = await authorityService.calculateUserAuthority(user._id);
+      user.authority = newAuthority;
+      await user.save();
+      console.log(`[activateAccount] Activated account for ${user.email}:`, {
+        authority: newAuthority,
+        hasRoles: user.roles && user.roles.length > 0,
+        hasLocations: !!user.locations?.municipalityId,
+        hasOrganizations: user.organizations && user.organizations.length > 0
+      });
+
+      // Invalidate activation token
+      req.passwordActivationToken = null;
+      req.passwordActivationExpires = null;
+      await req.save();
+
+      return {
+        message: 'Account activated successfully',
+        userId: user._id.toString(),
+        email: user.email
+      };
+    } catch (error) {
+      if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+        throw new Error('Invalid or expired activation token');
+      }
+      throw error;
+    }
+  }
+
   async getSignUpRequests(user) {
     // Check permissions instead of roles
     const permissionService = require('../users_services/permission.service');
@@ -259,24 +636,167 @@ class LocationService {
     const canManageLocations = await permissionService.checkPermission(user.id, 'location', 'read', {});
     
     if (user.isSystemAdmin || hasFullAccess) {
-      return SignUpRequest.find({ status: 'pending', emailVerified: true }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
+      // Show both pending requests AND approved requests where user hasn't activated yet
+      // This allows resending activation emails for approved but not-yet-activated accounts
+      const pendingRequests = await SignUpRequest.find({ status: 'pending', emailVerified: true })
+        .populate('province district municipality')
+        .populate({ path: 'assignedCoordinator', model: 'User' })
+        .populate({ path: 'roleId', model: 'Role' })
+        .populate({ path: 'organizationId', model: 'Organization' })
+        .sort({ submittedAt: -1 });
+      
+      // Also get approved requests where the user account exists but is not activated
+      const approvedRequests = await SignUpRequest.find({ status: 'approved', emailVerified: true })
+        .populate('province district municipality')
+        .populate({ path: 'assignedCoordinator', model: 'User' })
+        .populate({ path: 'roleId', model: 'Role' })
+        .populate({ path: 'organizationId', model: 'Organization' })
+        .sort({ submittedAt: -1 });
+      
+      // Filter approved requests to only include those where user hasn't activated
+      const approvedButNotActivated = [];
+      for (const req of approvedRequests) {
+        const userAccount = await User.findOne({ email: req.email.toLowerCase() });
+        if (userAccount && !userAccount.isActive) {
+          approvedButNotActivated.push(req);
+        }
+      }
+      
+      // Combine and return both pending and approved-but-not-activated requests
+      return [...pendingRequests, ...approvedButNotActivated].sort((a, b) => {
+        // Sort by submittedAt descending (most recent first)
+        return new Date(b.submittedAt || b.createdAt) - new Date(a.submittedAt || a.createdAt);
+      });
     } else if (canManageLocations) {
-      // Find coordinator user to get their locations
+      // Find coordinator user to get their locations and organizations
       const coordinatorUser = await User.findById(user.id);
       if (!coordinatorUser) return [];
+      
+      // Get location IDs from both UserLocation assignments and coverageAreas
+      const mongoose = require('mongoose');
       const locationService = require('./location.service');
       const locations = await locationService.getUserLocations(coordinatorUser._id);
-      const locationIds = locations.map(loc => loc.locationId);
-      // Show all pending requests in the coordinator's locations
-      return SignUpRequest.find({ 
-        $or: [
-          { district: { $in: locationIds } },
-          { province: { $in: locationIds } },
-          { municipality: { $in: locationIds } }
-        ],
+      const locationIdsFromAssignments = locations
+        .map(loc => loc.locationId)
+        .filter(Boolean)
+        .map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+      
+      // Also get location IDs from coverageAreas (coordinators use this)
+      const locationIdsFromCoverage = [];
+      if (coordinatorUser.coverageAreas && coordinatorUser.coverageAreas.length > 0) {
+        for (const coverageArea of coordinatorUser.coverageAreas) {
+          if (coverageArea.districtIds && Array.isArray(coverageArea.districtIds)) {
+            locationIdsFromCoverage.push(...coverageArea.districtIds
+              .filter(id => id)
+              .map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id));
+          }
+          if (coverageArea.municipalityIds && Array.isArray(coverageArea.municipalityIds)) {
+            locationIdsFromCoverage.push(...coverageArea.municipalityIds
+              .filter(id => id)
+              .map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id));
+          }
+        }
+      }
+      
+      // Combine all location IDs (convert to ObjectIds for proper comparison)
+      const allLocationIds = [...new Set([
+        ...locationIdsFromAssignments.map(id => id.toString()),
+        ...locationIdsFromCoverage.map(id => id.toString())
+      ])].map(id => new mongoose.Types.ObjectId(id));
+      
+      // Get organization IDs from coordinator's organizations
+      const organizationIds = [];
+      if (coordinatorUser.organizations && coordinatorUser.organizations.length > 0) {
+        organizationIds.push(...coordinatorUser.organizations
+          .map(org => org.organizationId)
+          .filter(Boolean)
+          .map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id));
+      }
+      
+      // Build query: Show requests that match:
+      // 1. Location match (district, province, or municipality in coordinator's locations)
+      // 2. AND organization match (if coordinator has organizations assigned)
+      // Show both pending AND approved-but-not-activated requests
+      const pendingQuery = {
         status: 'pending', 
         emailVerified: true 
-      }).populate('province district municipality assignedCoordinator').sort({ submittedAt: -1 });
+      };
+      
+      const approvedQuery = {
+        status: 'approved', 
+        emailVerified: true 
+      };
+      
+      // Location filter: district, province, or municipality must be in coordinator's locations
+      if (allLocationIds.length > 0) {
+        pendingQuery.$or = [
+          { district: { $in: allLocationIds } },
+          { province: { $in: allLocationIds } },
+          { municipality: { $in: allLocationIds } }
+        ];
+        approvedQuery.$or = [
+          { district: { $in: allLocationIds } },
+          { province: { $in: allLocationIds } },
+          { municipality: { $in: allLocationIds } }
+        ];
+      } else {
+        // If no locations, return empty (coordinator has no coverage)
+        console.log('[getSignUpRequests] Coordinator has no locations, returning empty');
+        return [];
+      }
+      
+      // Organization filter: if coordinator has organizations, only show requests with matching organizations
+      if (organizationIds.length > 0) {
+        pendingQuery.organizationId = { $in: organizationIds };
+        approvedQuery.organizationId = { $in: organizationIds };
+      } else {
+        // If coordinator has no organizations, they can't see any requests
+        console.log('[getSignUpRequests] Coordinator has no organizations, returning empty');
+        return [];
+      }
+      
+      console.log('[getSignUpRequests] Coordinator filter:', {
+        coordinatorId: coordinatorUser._id.toString(),
+        locationIdsCount: allLocationIds.length,
+        organizationIdsCount: organizationIds.length,
+        locationIds: allLocationIds.slice(0, 5).map(id => id.toString()),
+        organizationIds: organizationIds.map(id => id.toString()),
+        hasCoverageAreas: !!coordinatorUser.coverageAreas,
+        coverageAreasCount: coordinatorUser.coverageAreas?.length || 0,
+        hasOrganizations: !!coordinatorUser.organizations,
+        organizationsCount: coordinatorUser.organizations?.length || 0
+      });
+      
+      // Get pending requests
+      const pendingRequests = await SignUpRequest.find(pendingQuery)
+        .populate('province district municipality')
+        .populate({ path: 'assignedCoordinator', model: 'User' })
+        .populate({ path: 'roleId', model: 'Role' })
+        .populate({ path: 'organizationId', model: 'Organization' })
+        .sort({ submittedAt: -1 });
+      
+      // Get approved requests
+      const approvedRequests = await SignUpRequest.find(approvedQuery)
+        .populate('province district municipality')
+        .populate({ path: 'assignedCoordinator', model: 'User' })
+        .populate({ path: 'roleId', model: 'Role' })
+        .populate({ path: 'organizationId', model: 'Organization' })
+        .sort({ submittedAt: -1 });
+      
+      // Filter approved requests to only include those where user hasn't activated
+      const approvedButNotActivated = [];
+      for (const req of approvedRequests) {
+        const userAccount = await User.findOne({ email: req.email.toLowerCase() });
+        if (userAccount && !userAccount.isActive) {
+          approvedButNotActivated.push(req);
+        }
+      }
+      
+      // Combine and return both pending and approved-but-not-activated requests
+      return [...pendingRequests, ...approvedButNotActivated].sort((a, b) => {
+        // Sort by submittedAt descending (most recent first)
+        return new Date(b.submittedAt || b.createdAt) - new Date(a.submittedAt || a.createdAt);
+      });
     }
     return [];
   }
@@ -626,6 +1146,37 @@ class LocationService {
         onlyActiveAssignments = true 
       } = options;
 
+      // OPTIMIZATION: Check embedded locations first (fast path for new users)
+      // New stakeholders created via signup have embedded locations field
+      const user = await User.findById(userId).select('locations').lean();
+      if (user && user.locations && user.locations.municipalityId) {
+        // Fast path: Use embedded locations
+        const locationIds = [
+          user.locations.municipalityId,
+          user.locations.barangayId
+        ].filter(Boolean);
+        
+        if (locationIds.length > 0) {
+          const locationDocs = await Location.find({ _id: { $in: locationIds } }).lean();
+          const locations = locationDocs.map(loc => ({
+            _id: loc._id,
+            locationId: loc._id,
+            locationName: loc.name,
+            locationType: loc.type,
+            scope: 'exact',
+            isPrimary: loc._id.toString() === user.locations.municipalityId?.toString(),
+            assignedAt: new Date(), // Approximate
+            isActive: true
+          }));
+          
+          console.log(`[getUserLocations] Using embedded locations (fast path): ${locations.length} locations for user ${userId}`);
+          return locations;
+        }
+      }
+
+      // Slow path: Query UserLocation collection (for users without embedded locations)
+      console.log(`[getUserLocations] No embedded locations, querying UserLocation collection (slow path) for user ${userId}`);
+      
       // Get all user location assignments
       const query = { userId };
       if (onlyActiveAssignments) {

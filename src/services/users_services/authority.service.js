@@ -56,27 +56,28 @@ class AuthorityService {
       }
       
       // Use persisted authority field if available and valid
+      // OPTIMIZATION: For new users, authority should already be set during creation
       if (user.authority && user.authority !== 20) {
         return user.authority;
       }
       
-      // Fallback: Calculate from roles (for backward compatibility during migration)
+      // Fallback: Calculate from embedded roles (fast path - no database query needed)
       // This should only happen if authority field is missing or default
-      console.log(`[AUTH] User ${user.email} has no persisted authority, calculating from roles...`);
-      
-      // Get user's roles from embedded array
       if (user.roles && user.roles.length > 0) {
-        const maxAuthority = Math.max(...user.roles
-          .filter(r => r.isActive)
-          .map(r => r.roleAuthority || 20)
-        );
-        return maxAuthority;
+        const activeRoles = user.roles.filter(r => r.isActive !== false);
+        if (activeRoles.length > 0) {
+          const maxAuthority = Math.max(...activeRoles.map(r => r.roleAuthority || 20));
+          console.log(`[AUTH] Calculated authority ${maxAuthority} from ${activeRoles.length} embedded roles for ${user.email} (fast path)`);
+          return maxAuthority;
+        }
       }
       
-      // Last resort: calculate from permissions (legacy method)
-      return await this._calculateFromPermissions(userId);
-
-      // Default to basic user if all else fails
+      // Only log if we need to calculate from permissions (slow path)
+      console.log(`[AUTH] User ${user.email} has no persisted authority or embedded roles, calculating from permissions (slow path)...`);
+      
+      // If roles array is empty or has no active roles, default to BASIC_USER (20)
+      // Do NOT calculate from permissions for new users - this can incorrectly assign coordinator authority (60)
+      console.log(`[AUTH] User ${user.email} has no active roles, defaulting to BASIC_USER (20)`);
       return AuthorityService.AUTHORITY_TIERS.BASIC_USER;
     } catch (error) {
       console.error('[AUTH] Error calculating user authority:', error.message);

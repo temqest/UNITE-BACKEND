@@ -81,5 +81,56 @@ router.post('/logout', async (req, res, next) => {
   }
 });
 
+// Password activation endpoints
+const locationService = require('../services/utility_services/location.service');
+
+/**
+ * @route GET /api/auth/activate-account
+ * @desc  Verify activation token and return user info
+ * @access Public
+ */
+router.get('/activate-account', async (req, res, next) => {
+  try {
+    const { token } = req.query;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Activation token is required' });
+    }
+    
+    const result = await locationService.verifyActivationToken(token);
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * @route POST /api/auth/activate-account
+ * @desc  Set password and activate account
+ * @access Public
+ */
+router.post('/activate-account', async (req, res, next) => {
+  try {
+    const { token, password, confirmPassword } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Activation token is required' });
+    }
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'Password is required' });
+    }
+    if (password !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+    }
+    
+    const result = await locationService.activateAccount(token, password);
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
 

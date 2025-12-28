@@ -300,37 +300,11 @@ class PermissionService {
         console.log(`[DIAG] userId is string format: ${actualUserId}`);
       }
       
-      console.log(`[DIAG] Querying UserRole.find({ userId: ${actualUserId}, isActive: true })`);
-
-      let userRoles = await UserRole.find({ 
-        userId: actualUserId, 
-        isActive: true,
-        $or: [
-          { expiresAt: { $exists: false } },
-          { expiresAt: null },
-          { expiresAt: { $gt: new Date() } }
-        ]
-      }).populate('roleId');
-      
-      console.log(`[DIAG] Found ${userRoles.length} active role assignments from UserRole collection`);
-      
-      // Fallback: if no roles found and userId was converted to ObjectId, try original string format
-      if (userRoles.length === 0 && userIdIsObjectId && typeof userId === 'string') {
-        console.log(`[DIAG] No roles found with ObjectId, trying string format: ${userId}`);
-        userRoles = await UserRole.find({ 
-          userId: userId, 
-          isActive: true,
-          $or: [
-            { expiresAt: { $exists: false } },
-            { expiresAt: null },
-            { expiresAt: { $gt: new Date() } }
-          ]
-        }).populate('roleId');
-        console.log(`[DIAG] Found ${userRoles.length} active role assignments with string format`);
-      }
-
-      // Also check embedded roles in User model (for consistency with checkPermission)
+      // OPTIMIZATION: Check embedded roles FIRST (much faster, single query)
+      // This is especially important for new users where embedded roles are already synced
+      let userRoles = [];
       const user = await User.findById(actualUserId).select('roles').lean();
+      
       if (user && user.roles && user.roles.length > 0) {
         const activeEmbeddedRoles = user.roles.filter(r => r.isActive !== false);
         if (activeEmbeddedRoles.length > 0) {
@@ -339,26 +313,54 @@ class PermissionService {
             .filter(Boolean);
           
           if (embeddedRoleIds.length > 0) {
+            // Fetch roles in parallel (single query)
             const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } });
-            console.log(`[DIAG] Found ${embeddedRoles.length} embedded roles in User model`);
+            console.log(`[DIAG] Found ${embeddedRoles.length} embedded roles in User model (fast path)`);
             
             // Convert to same format as UserRole (with roleId populated)
-            const embeddedUserRoles = embeddedRoles.map(role => ({
+            userRoles = embeddedRoles.map(role => ({
               roleId: role,
               userId: actualUserId,
-              isActive: true
+              isActive: true,
+              assignedAt: activeEmbeddedRoles.find(r => r.roleId?.toString() === role._id.toString())?.assignedAt || new Date()
             }));
             
-            // Merge with UserRole results (avoid duplicates)
-            const existingRoleIds = new Set(userRoles.map(ur => ur.roleId?._id?.toString() || ur.roleId?.toString()));
-            embeddedUserRoles.forEach(eur => {
-              const roleIdStr = eur.roleId._id.toString();
-              if (!existingRoleIds.has(roleIdStr)) {
-                userRoles.push(eur);
-                console.log(`[DIAG] Added embedded role: ${eur.roleId.code}`);
-              }
-            });
+            console.log(`[DIAG] Using embedded roles (fast path), skipping UserRole collection query`);
           }
+        }
+      }
+      
+      // Fallback: Query UserRole collection only if embedded roles are missing
+      // This ensures backward compatibility for users without embedded roles
+      if (userRoles.length === 0) {
+        console.log(`[DIAG] No embedded roles found, querying UserRole collection (slow path)`);
+        console.log(`[DIAG] Querying UserRole.find({ userId: ${actualUserId}, isActive: true })`);
+
+        userRoles = await UserRole.find({ 
+          userId: actualUserId, 
+          isActive: true,
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: new Date() } }
+          ]
+        }).populate('roleId');
+        
+        console.log(`[DIAG] Found ${userRoles.length} active role assignments from UserRole collection`);
+        
+        // Fallback: if no roles found and userId was converted to ObjectId, try original string format
+        if (userRoles.length === 0 && userIdIsObjectId && typeof userId === 'string') {
+          console.log(`[DIAG] No roles found with ObjectId, trying string format: ${userId}`);
+          userRoles = await UserRole.find({ 
+            userId: userId, 
+            isActive: true,
+            $or: [
+              { expiresAt: { $exists: false } },
+              { expiresAt: null },
+              { expiresAt: { $gt: new Date() } }
+            ]
+          }).populate('roleId');
+          console.log(`[DIAG] Found ${userRoles.length} active role assignments with string format`);
         }
       }
       

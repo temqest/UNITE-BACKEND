@@ -470,10 +470,10 @@ router.post('/signup-requests', async (req, res, next) => {
 
 /**
  * @route   PUT /api/signup-requests/:id/approve
- * @desc    Approve a signup request (requires user.create permission)
+ * @desc    Approve a signup request (requires staff.create permission and authority >= 60, checked in controller)
  * @access  Private
  */
-router.put('/signup-requests/:id/approve', authenticate, requirePermission('user', 'create'), async (req, res, next) => {
+router.put('/signup-requests/:id/approve', authenticate, async (req, res, next) => {
   try {
     await locationController.approveRequest(req, res);
   } catch (error) {
@@ -483,10 +483,10 @@ router.put('/signup-requests/:id/approve', authenticate, requirePermission('user
 
 /**
  * @route   PUT /api/signup-requests/:id/reject
- * @desc    Reject a signup request (requires user.create permission)
+ * @desc    Reject a signup request (requires staff.create permission and authority >= 60, checked in controller)
  * @access  Private
  */
-router.put('/signup-requests/:id/reject', authenticate, requirePermission('user', 'create'), async (req, res, next) => {
+router.put('/signup-requests/:id/reject', authenticate, async (req, res, next) => {
   try {
     await locationController.rejectRequest(req, res);
   } catch (error) {
@@ -515,6 +515,34 @@ router.get('/signup-requests', authenticate, requirePermission('user', 'read'), 
 router.get('/signup-requests/verify-email', async (req, res, next) => {
   try {
     await locationController.verifyEmail(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== PUBLIC ENDPOINTS FOR SIGNUP ====================
+
+/**
+ * @route   GET /api/public/roles/stakeholder
+ * @desc    Get stakeholder roles (authority <= 59) for signup
+ * @access  Public
+ */
+router.get('/public/roles/stakeholder', async (req, res, next) => {
+  try {
+    await locationController.getStakeholderRoles(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/public/organizations
+ * @desc    Get active organizations for signup
+ * @access  Public
+ */
+router.get('/public/organizations', async (req, res, next) => {
+  try {
+    await locationController.getPublicOrganizations(req, res);
   } catch (error) {
     next(error);
   }
