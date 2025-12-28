@@ -265,6 +265,55 @@ const updateUserSchema = Joi.object({
   isActive: Joi.boolean()
     .messages({
       'boolean.base': 'isActive must be a boolean'
+    }),
+
+  // Email update (optional)
+  email: Joi.string()
+    .email()
+    .trim()
+    .lowercase()
+    .messages({
+      'string.email': 'Email must be a valid email address',
+      'string.empty': 'Email cannot be empty'
+    }),
+
+  // Password update (optional)
+  password: Joi.string()
+    .min(6)
+    .max(128)
+    .messages({
+      'string.min': 'Password must be at least 6 characters long',
+      'string.max': 'Password must not exceed 128 characters'
+    }),
+
+  // Organization assignment (optional)
+  organizationId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Organization ID cannot be empty'
+    }),
+
+  // Location assignments (for stakeholders)
+  municipalityId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Municipality ID cannot be empty'
+    }),
+
+  barangayId: Joi.string()
+    .trim()
+    .allow(null, '')
+    .messages({
+      'string.empty': 'Barangay ID cannot be empty'
+    }),
+
+  // Role assignment (optional - array of role IDs)
+  roles: Joi.array()
+    .items(Joi.string().trim())
+    .messages({
+      'array.base': 'Roles must be an array'
     })
 }).min(1).messages({
   'object.min': 'At least one field must be provided for update'

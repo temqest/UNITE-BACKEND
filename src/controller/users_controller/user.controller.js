@@ -1007,29 +1007,240 @@ class UserController {
    * PUT /api/users/:userId
    */
   async updateUser(req, res) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
     try {
       const { userId } = req.params;
       const updateData = req.validatedData || req.body;
+      const requesterId = req.user?.id || req.user?._id;
+      
+      // Extract complex fields that need special handling
+      const { 
+        password, 
+        email, 
+        roles, 
+        organizationId, 
+        municipalityId, 
+        barangayId,
+        ...simpleFields 
+      } = updateData;
 
       // Find user
       let user = null;
-      if (require('mongoose').Types.ObjectId.isValid(userId)) {
-        user = await User.findById(userId);
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId).session(session);
       }
       if (!user) {
-        user = await User.findByLegacyId(userId);
+        user = await User.findByLegacyId(userId).session(session);
       }
 
       if (!user) {
+        await session.abortTransaction();
         return res.status(404).json({
           success: false,
           message: 'User not found'
         });
       }
 
-      // Update user
-      Object.assign(user, updateData);
-      await user.save();
+      // Check email uniqueness if email is being updated
+      if (email && email !== user.email) {
+        const existingUser = await User.findOne({ email: email }).session(session);
+        if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: 'Email already exists'
+          });
+        }
+        user.email = email;
+      }
+
+      // Hash password if provided
+      if (password) {
+        const saltRounds = 10;
+        user.password = await bcrypt.hash(password, saltRounds);
+      }
+
+      // Update simple fields (firstName, middleName, lastName, phoneNumber, etc.)
+      Object.assign(user, simpleFields);
+
+      // Handle role updates
+      if (roles !== undefined && Array.isArray(roles)) {
+        const { Role } = require('../../models');
+        const authorityService = require('../../services/users_services/authority.service');
+        
+        // Revoke all existing active roles
+        await permissionService.revokeRole(user._id);
+        user.roles = [];
+        
+        // Assign new roles
+        let maxAuthority = 20;
+        for (const roleIdentifier of roles) {
+          let role = null;
+          
+          // Try to find role by ID first
+          if (mongoose.Types.ObjectId.isValid(roleIdentifier)) {
+            role = await Role.findById(roleIdentifier).session(session);
+          }
+          
+          // If not found by ID, try by code
+          if (!role) {
+            role = await permissionService.getRoleByCode(roleIdentifier);
+          }
+          
+          if (!role) {
+            throw new Error(`Role not found: ${roleIdentifier}`);
+          }
+          
+          // Get role authority
+          const roleAuthority = role.authority || await authorityService.calculateRoleAuthority(role._id);
+          maxAuthority = Math.max(maxAuthority, roleAuthority);
+          
+          // Assign role via UserRole collection
+          await permissionService.assignRole(
+            user._id,
+            role._id,
+            [],
+            requesterId || null,
+            null,
+            [],
+            session
+          );
+          
+          // Add to embedded roles array
+          user.roles.push({
+            roleId: role._id,
+            roleCode: role.code,
+            roleAuthority: roleAuthority,
+            assignedAt: new Date(),
+            assignedBy: requesterId || null,
+            isActive: true
+          });
+        }
+        
+        // Update user authority from roles
+        user.authority = maxAuthority;
+      }
+
+      // Handle organization update
+      if (organizationId !== undefined) {
+        const { UserOrganization, Organization } = require('../../models');
+        
+        // Get organization
+        const org = await Organization.findById(organizationId).session(session);
+        if (!org || !org.isActive) {
+          throw new Error(`Organization not found or inactive: ${organizationId}`);
+        }
+        
+        // Determine roleInOrg based on user's role
+        let roleInOrg = 'member';
+        if (user.roles && user.roles.length > 0) {
+          const firstRoleCode = user.roles[0].roleCode || '';
+          if (firstRoleCode.toLowerCase() === 'coordinator') {
+            roleInOrg = 'coordinator';
+          }
+        }
+        
+        // Revoke all existing organizations for this user
+        await UserOrganization.updateMany(
+          { userId: user._id },
+          { isActive: false }
+        ).session(session);
+        
+        // Assign new organization
+        await UserOrganization.assignOrganization(
+          user._id,
+          organizationId,
+          {
+            roleInOrg: roleInOrg,
+            isPrimary: true,
+            assignedBy: requesterId || null,
+            session
+          }
+        );
+        
+        // Update embedded organizations array
+        user.organizations = [{
+          organizationId: org._id,
+          organizationName: org.name,
+          organizationType: org.type,
+          isPrimary: true,
+          assignedAt: new Date(),
+          assignedBy: requesterId || null
+        }];
+      }
+
+      // Handle location updates (municipality/barangay for stakeholders)
+      if (municipalityId !== undefined || barangayId !== undefined) {
+        const { Location } = require('../../models');
+        
+        // Update municipality if provided
+        if (municipalityId) {
+          const municipality = await Location.findById(municipalityId).session(session);
+          if (!municipality) {
+            throw new Error(`Municipality not found: ${municipalityId}`);
+          }
+          
+          // Assign municipality location
+          await locationService.assignUserToLocation(
+            user._id,
+            municipalityId,
+            'exact',
+            {
+              isPrimary: true,
+              assignedBy: requesterId || null,
+              session
+            }
+          );
+          
+          // Update embedded locations
+          if (!user.locations) {
+            user.locations = {};
+          }
+          user.locations.municipalityId = municipality._id;
+          user.locations.municipalityName = municipality.name;
+        }
+        
+        // Update barangay if provided
+        if (barangayId) {
+          const barangay = await Location.findById(barangayId).session(session);
+          if (!barangay) {
+            throw new Error(`Barangay not found: ${barangayId}`);
+          }
+          
+          // Assign barangay location
+          await locationService.assignUserToLocation(
+            user._id,
+            barangayId,
+            'exact',
+            {
+              isPrimary: false,
+              assignedBy: requesterId || null,
+              session
+            }
+          );
+          
+          // Update embedded locations
+          if (!user.locations) {
+            user.locations = {};
+          }
+          user.locations.barangayId = barangay._id;
+          user.locations.barangayName = barangay.name;
+        } else if (barangayId === null || barangayId === '') {
+          // Clear barangay if explicitly set to null/empty
+          if (user.locations) {
+            user.locations.barangayId = null;
+            user.locations.barangayName = null;
+          }
+        }
+      }
+
+      // Save user with all updates
+      await user.save({ session });
+
+      // Commit transaction
+      await session.commitTransaction();
 
       // Remove password from response
       const userResponse = user.toObject();
@@ -1041,10 +1252,24 @@ class UserController {
         data: userResponse
       });
     } catch (error) {
+      // Abort transaction on error
+      try {
+        await session.abortTransaction();
+      } catch (abortError) {
+        console.error('[UserController] Error aborting transaction:', abortError);
+      }
+      
       return res.status(400).json({
         success: false,
         message: error.message || 'Failed to update user'
       });
+    } finally {
+      // End session
+      try {
+        session.endSession();
+      } catch (endError) {
+        console.error('[UserController] Error ending session:', endError);
+      }
     }
   }
 
