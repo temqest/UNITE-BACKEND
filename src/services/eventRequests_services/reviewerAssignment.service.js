@@ -129,6 +129,25 @@ class ReviewerAssignmentService {
       }
 
       const selectedReviewer = qualifiedReviewers[0];
+      
+      // Safety check: Ensure selected reviewer is not the requester (prevent self-review)
+      const requesterIdStr = requester._id?.toString() || requesterId?.toString();
+      const reviewerIdStr = selectedReviewer._id?.toString();
+      if (requesterIdStr === reviewerIdStr) {
+        console.warn(`[REVIEWER ASSIGNMENT] Selected reviewer is the requester! Removing from candidates and selecting next reviewer.`);
+        // Remove requester from candidates and select next reviewer
+        qualifiedReviewers = qualifiedReviewers.filter(r => r._id.toString() !== requesterIdStr);
+        if (qualifiedReviewers.length === 0) {
+          // No other candidates, use fallback
+          console.log(`[REVIEWER ASSIGNMENT] No other candidates after removing requester, using fallback reviewer`);
+          return await this._assignFallbackReviewer(requester, assignmentRule);
+        }
+        // Select next reviewer
+        const nextReviewer = qualifiedReviewers[0];
+        console.log(`[REVIEWER ASSIGNMENT] Selected reviewer: ${nextReviewer._id} (authority: ${nextReviewer.authority || 'unknown'}, name: ${nextReviewer.firstName || ''} ${nextReviewer.lastName || ''})`);
+        return await this._formatReviewer(nextReviewer, assignmentRule);
+      }
+      
       console.log(`[REVIEWER ASSIGNMENT] Selected reviewer: ${selectedReviewer._id} (authority: ${selectedReviewer.authority || 'unknown'}, name: ${selectedReviewer.firstName || ''} ${selectedReviewer.lastName || ''})`);
       
       return await this._formatReviewer(selectedReviewer, assignmentRule);
@@ -334,51 +353,60 @@ class ReviewerAssignmentService {
     console.log(`[REVIEWER ASSIGNMENT] No users with request.review permission found, trying system-admin role`);
     const { Role } = require('../../models/index');
     const { UserRole } = require('../../models/index');
+    const requesterIdStr = requester._id?.toString();
 
     const systemAdminRole = await Role.findOne({ code: 'system-admin' });
     if (!systemAdminRole) {
-      // Last resort: find any active user with high authority
+      // Last resort: find any active user with high authority (but not the requester)
       console.log(`[REVIEWER ASSIGNMENT] System admin role not found, finding any user with authority >= 80`);
       const highAuthorityUser = await User.findOne({
         authority: { $gte: AUTHORITY_TIERS.OPERATIONAL_ADMIN },
-        isActive: true
+        isActive: true,
+        _id: { $ne: requester._id } // Exclude requester
       }).select('_id firstName lastName email authority roles organizations coverageAreas locations').lean();
       
-      if (highAuthorityUser) {
+      if (highAuthorityUser && highAuthorityUser._id.toString() !== requesterIdStr) {
         console.log(`[REVIEWER ASSIGNMENT] Using high authority user as fallback: ${highAuthorityUser._id}`);
         return await this._formatReviewer(highAuthorityUser, assignmentRule);
       }
       
-      throw new Error('System admin role not found and no high authority users available. Cannot assign fallback reviewer.');
+      throw new Error('System admin role not found and no high authority users available (excluding requester). Cannot assign fallback reviewer.');
     }
 
     const userRole = await UserRole.findOne({
       roleId: systemAdminRole._id,
-      isActive: true
+      isActive: true,
+      userId: { $ne: requester._id } // Exclude requester
     }).limit(1);
 
     if (!userRole) {
-      // Try to find any user with system admin role in embedded roles
+      // Try to find any user with system admin role in embedded roles (but not the requester)
       const systemAdminUser = await User.findOne({
         'roles.roleCode': 'system-admin',
         'roles.isActive': true,
-        isActive: true
+        isActive: true,
+        _id: { $ne: requester._id } // Exclude requester
       }).select('_id firstName lastName email authority roles organizations coverageAreas locations').lean();
       
-      if (systemAdminUser) {
+      if (systemAdminUser && systemAdminUser._id.toString() !== requesterIdStr) {
         console.log(`[REVIEWER ASSIGNMENT] Using system admin from embedded roles: ${systemAdminUser._id}`);
         return await this._formatReviewer(systemAdminUser, assignmentRule);
       }
       
-      throw new Error('No active system admin found. Cannot assign fallback reviewer.');
+      throw new Error('No active system admin found (excluding requester). Cannot assign fallback reviewer.');
     }
 
     const user = await User.findById(userRole.userId)
       .select('_id firstName lastName email authority roles organizations coverageAreas locations')
       .lean();
-      
+    
     if (!user) {
       throw new Error('System admin user not found.');
+    }
+    
+    // Safety check: Ensure fallback reviewer is not the requester
+    if (user._id.toString() === requesterIdStr) {
+      throw new Error('Fallback reviewer cannot be the requester. Cannot assign fallback reviewer.');
     }
     
     // Verify the fallback reviewer has request.review permission

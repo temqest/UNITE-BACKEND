@@ -65,7 +65,45 @@ class ActionValidatorService {
       // 2. Special cases for requesters in review-rescheduled state
       const isRequester = this._isRequester(userId, request);
       
-      // 2a. Special handling for CONFIRM action - requester can always confirm reschedule proposals
+      // 2a. Prevent requesters from self-reviewing their own requests
+      // No one (admin, coordinator, or stakeholder) can approve, reject, reschedule, or edit their own requests
+      if (isRequester) {
+        const actor = await User.findById(userId).select('authority').lean();
+        if (actor) {
+          const actorAuthority = actor.authority || 20;
+          
+          // Admins (authority >= 80) - restrict actions
+          if (actorAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+            // Admin requester - restrict actions
+            // Allow view (always allowed) and cancel (if they have permission)
+            // Block accept, reject, reschedule, and edit
+            if ([REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.RESCHEDULE, REQUEST_ACTIONS.EDIT].includes(action)) {
+              return {
+                valid: false,
+                reason: 'Admins cannot approve, reject, reschedule, or edit their own requests'
+              };
+            }
+            // Note: CONFIRM is still allowed for admins in review-rescheduled state (they can respond to coordinator proposals)
+            // CANCEL is allowed if they have permission (checked later)
+          }
+          
+          // Coordinators (authority 60-79) - prevent self-review
+          if (actorAuthority >= AUTHORITY_TIERS.COORDINATOR && actorAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+            // Coordinator requester - cannot review their own requests
+            // Block accept, reject, reschedule, and edit
+            if ([REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.RESCHEDULE, REQUEST_ACTIONS.EDIT].includes(action)) {
+              return {
+                valid: false,
+                reason: 'Coordinators cannot approve, reject, reschedule, or edit their own requests'
+              };
+            }
+            // Note: CONFIRM is still allowed for coordinators in review-rescheduled state (they can respond to admin proposals)
+            // CANCEL is allowed if they have permission (checked later)
+          }
+        }
+      }
+      
+      // 2b. Special handling for CONFIRM action - requester can always confirm reschedule proposals
       // This must be checked BEFORE permission check to allow requester to confirm without confirm permission
       if (action === REQUEST_ACTIONS.CONFIRM && isRequester) {
         const normalizedState = RequestStateService.normalizeState(currentState);
@@ -89,7 +127,26 @@ class ActionValidatorService {
       
       if (currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
         // Requester can reschedule (counter-reschedule) without reschedule permission
+        // BUT: Admins and coordinators cannot reschedule their own requests
         if (action === REQUEST_ACTIONS.RESCHEDULE && isRequester) {
+          // Check if requester is admin or coordinator - they cannot reschedule their own requests
+          const actor = await User.findById(userId).select('authority').lean();
+          if (actor) {
+            const actorAuthority = actor.authority || 20;
+            if (actorAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+              return {
+                valid: false,
+                reason: 'Admins cannot reschedule their own requests'
+              };
+            }
+            if (actorAuthority >= AUTHORITY_TIERS.COORDINATOR && actorAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+              return {
+                valid: false,
+                reason: 'Coordinators cannot reschedule their own requests'
+              };
+            }
+          }
+          
           const locationId = this._extractLocationId(request, context);
           
           // Requester can counter-reschedule without reschedule permission
@@ -411,6 +468,55 @@ class ActionValidatorService {
 
     const currentState = request.status || request.Status;
     const normalizedState = RequestStateService.normalizeState(currentState);
+    
+    // Check if user is requester - prevent self-review for admins and coordinators
+    // Admins and coordinators can only view, cancel, and confirm (for reschedule proposals) their own requests
+    const isRequester = this._isRequester(userId, request);
+    let isAdminRequester = false;
+    let isCoordinatorRequester = false;
+    if (isRequester) {
+      try {
+        const actor = await User.findById(userId).select('authority').lean();
+        if (actor) {
+          const actorAuthority = actor.authority || 20;
+          
+          // Admin requester (authority >= 80)
+          if (actorAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+            isAdminRequester = true;
+            // Admin requester - allow view, cancel (if they have permission), and confirm (for reschedule proposals)
+            const cancelValidation = await this.validateAction(userId, REQUEST_ACTIONS.CANCEL, request, context);
+            if (cancelValidation.valid) {
+              available.push(REQUEST_ACTIONS.CANCEL);
+            }
+            // For review-rescheduled state, admins can confirm reschedule proposals
+            // This will be handled in the state-specific logic below
+            // For all other states, return early - admins cannot perform other actions on their own requests
+            if (normalizedState !== REQUEST_STATES.REVIEW_RESCHEDULED) {
+              return available;
+            }
+          }
+          
+          // Coordinator requester (authority 60-79)
+          if (actorAuthority >= AUTHORITY_TIERS.COORDINATOR && actorAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+            isCoordinatorRequester = true;
+            // Coordinator requester - allow view, cancel (if they have permission), and confirm (for reschedule proposals)
+            const cancelValidation = await this.validateAction(userId, REQUEST_ACTIONS.CANCEL, request, context);
+            if (cancelValidation.valid) {
+              available.push(REQUEST_ACTIONS.CANCEL);
+            }
+            // For review-rescheduled state, coordinators can confirm reschedule proposals
+            // This will be handled in the state-specific logic below
+            // For all other states, return early - coordinators cannot perform other actions on their own requests
+            if (normalizedState !== REQUEST_STATES.REVIEW_RESCHEDULED) {
+              return available;
+            }
+          }
+        }
+      } catch (error) {
+        // If check fails, continue with normal flow
+        console.error(`[ACTION VALIDATOR] Error checking requester authority: ${error.message}`);
+      }
+    }
     
     // Special handling for pending-review state
     // In permission-based system: ANY user with request.review permission + appropriate authority can review

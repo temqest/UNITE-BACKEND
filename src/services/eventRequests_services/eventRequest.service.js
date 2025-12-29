@@ -108,11 +108,71 @@ class EventRequestService {
       }
 
       // 4. Assign reviewer based on requester authority
-      const reviewer = await reviewerAssignmentService.assignReviewer(requesterId, {
-        locationId: finalDistrict || finalMunicipalityId,
-        organizationId: requestData.organizationId,
-        coverageAreaId: requestData.coverageAreaId
-      });
+      // If admin (authority >= 80) provides coordinatorId, use it instead of auto-assignment
+      let reviewer;
+      const { AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
+      
+      if (requester.authority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && requestData.coordinatorId) {
+        // Admin is manually selecting a coordinator
+        const selectedCoordinatorId = requestData.coordinatorId;
+        const selectedCoordinator = await User.findById(selectedCoordinatorId);
+        
+        if (!selectedCoordinator) {
+          throw new Error('Selected coordinator not found');
+        }
+        
+        // Validate coordinator has appropriate authority (60-79)
+        const coordinatorAuthority = selectedCoordinator.authority || 20;
+        if (coordinatorAuthority < AUTHORITY_TIERS.COORDINATOR || coordinatorAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+          throw new Error(`Selected coordinator must have authority between ${AUTHORITY_TIERS.COORDINATOR} and ${AUTHORITY_TIERS.OPERATIONAL_ADMIN - 1}`);
+        }
+        
+        // Validate coordinator has request.review permission
+        const coordinatorLocationId = finalDistrict || finalMunicipalityId;
+        const hasReviewPermission = await permissionService.checkPermission(
+          selectedCoordinatorId,
+          'request',
+          'review',
+          coordinatorLocationId ? { locationId: coordinatorLocationId } : {}
+        );
+        
+        if (!hasReviewPermission) {
+          // Try global permission check as fallback
+          const hasGlobalPermission = await permissionService.checkPermission(
+            selectedCoordinatorId,
+            'request',
+            'review',
+            {}
+          );
+          
+          if (!hasGlobalPermission) {
+            throw new Error('Selected coordinator does not have request.review permission');
+          }
+        }
+        
+        // Get coordinator's roles for snapshot
+        const coordinatorRoles = await permissionService.getUserRoles(selectedCoordinatorId);
+        const primaryRole = coordinatorRoles[0];
+        
+        // Create reviewer object with selected coordinator
+        reviewer = {
+          userId: selectedCoordinator._id,
+          name: `${selectedCoordinator.firstName || ''} ${selectedCoordinator.lastName || ''}`.trim() || selectedCoordinator.email,
+          roleSnapshot: primaryRole?.code || null,
+          assignedAt: new Date(),
+          autoAssigned: false,
+          assignmentRule: 'manual'
+        };
+        
+        console.log(`[EVENT REQUEST SERVICE] Admin ${requesterId} manually selected coordinator ${selectedCoordinatorId} for request`);
+      } else {
+        // Use existing auto-assignment logic
+        reviewer = await reviewerAssignmentService.assignReviewer(requesterId, {
+          locationId: finalDistrict || finalMunicipalityId,
+          organizationId: requestData.organizationId,
+          coverageAreaId: requestData.coverageAreaId
+        });
+      }
 
       // 5. Create request document with all event details
       const request = new EventRequest({
