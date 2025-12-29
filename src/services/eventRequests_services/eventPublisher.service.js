@@ -6,6 +6,7 @@
 
 const { Event, BloodDrive, Training, Advocacy } = require('../../models/index');
 const { REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
+const notificationEngine = require('../utility_services/notificationEngine.service');
 
 class EventPublisherService {
   /**
@@ -21,9 +22,10 @@ class EventPublisherService {
   /**
    * Publish event when request is approved
    * @param {Object} request - Request document
+   * @param {Object} actor - Optional actor snapshot (for notifications)
    * @returns {Promise<Object>} Published event
    */
-  async publishEvent(request) {
+  async publishEvent(request, actor = null) {
     try {
       // Generate Event_ID if not present in request
       const eventId = request.Event_ID || this.generateEventId();
@@ -99,6 +101,33 @@ class EventPublisherService {
 
       // Save event
       await event.save();
+
+      // Trigger event published notification
+      // Note: This may also be triggered from executeAction, but we trigger it here
+      // for cases where publishEvent is called directly. Deduplication can be added later.
+      try {
+        // If actor not provided, try to get from request reviewer or requester
+        let notificationActor = actor;
+        if (!notificationActor && request.reviewer && request.reviewer.userId) {
+          const { User } = require('../../models/index');
+          const reviewer = await User.findById(request.reviewer.userId);
+          if (reviewer) {
+            notificationActor = {
+              userId: reviewer._id,
+              name: `${reviewer.firstName || ''} ${reviewer.lastName || ''}`.trim() || reviewer.email,
+              roleSnapshot: reviewer.roles?.[0]?.roleCode || null,
+              authoritySnapshot: reviewer.authority || 20
+            };
+          }
+        }
+        
+        if (notificationActor) {
+          await notificationEngine.notifyEventPublished(event, request, notificationActor);
+        }
+      } catch (notificationError) {
+        console.error(`[EVENT PUBLISHER] Error sending event published notification: ${notificationError.message}`);
+        // Don't fail event publishing if notification fails
+      }
 
       // Create category record if category is specified
       let categoryRecord = null;

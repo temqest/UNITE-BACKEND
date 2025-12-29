@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { userController } = require('../controller/users_controller');
+const { userController, notificationPreferencesController } = require('../controller/users_controller');
 
 const registrationCodeService = require('../services/users_services/registrationCode.service');
 const { Location } = require('../models/index');
@@ -481,6 +481,86 @@ router.get('/coverage-areas/:coverageAreaId/users',
   requirePermission('user', 'read'), 
   userCoverageAssignmentController.getUsersInCoverageArea.bind(userCoverageAssignmentController)
 );
+
+// ==================== NOTIFICATION PREFERENCES ROUTES ====================
+
+/**
+ * @route   GET /api/users/me/notification-preferences
+ * @desc    Get current user's notification preferences
+ * @access  Private (authenticated users only)
+ */
+router.get('/users/me/notification-preferences', authenticate, async (req, res, next) => {
+  try {
+    await notificationPreferencesController.getMyPreferences(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/users/:userId/notification-preferences
+ * @desc    Get user notification preferences
+ * @access  Private (self-read allowed, or requires user.read permission)
+ */
+router.get('/users/:userId/notification-preferences', authenticate, async (req, res, next) => {
+  try {
+    await notificationPreferencesController.getPreferences(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/users/me/notification-preferences
+ * @desc    Update current user's notification preferences
+ * @access  Private (authenticated users only)
+ */
+router.put('/users/me/notification-preferences', authenticate, async (req, res, next) => {
+  try {
+    await notificationPreferencesController.updateMyPreferences(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/users/:userId/notification-preferences
+ * @desc    Update user notification preferences
+ * @access  Private (self-update allowed, or requires user.update permission)
+ */
+router.put('/users/:userId/notification-preferences', authenticate, async (req, res, next) => {
+  try {
+    await notificationPreferencesController.updatePreferences(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/users/me/notification-preferences/mute
+ * @desc    Mute or unmute notifications for current user
+ * @access  Private (authenticated users only)
+ */
+router.post('/users/me/notification-preferences/mute', authenticate, async (req, res, next) => {
+  try {
+    await notificationPreferencesController.muteNotifications(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/users/:userId/notification-preferences/toggle-digest
+ * @desc    Toggle digest mode for user
+ * @access  Private (self-update only)
+ */
+router.post('/users/:userId/notification-preferences/toggle-digest', authenticate, async (req, res, next) => {
+  try {
+    await notificationPreferencesController.toggleDigestMode(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
 
 module.exports = router;
 

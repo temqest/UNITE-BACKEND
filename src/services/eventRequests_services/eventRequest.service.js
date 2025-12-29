@@ -12,6 +12,7 @@ const reviewerAssignmentService = require('./reviewerAssignment.service');
 const actionValidatorService = require('./actionValidator.service');
 const eventPublisherService = require('./eventPublisher.service');
 const permissionService = require('../users_services/permission.service');
+const notificationEngine = require('../utility_services/notificationEngine.service');
 const { REQUEST_STATES, REQUEST_ACTIONS } = require('../../utils/eventRequests/requestConstants');
 
 class EventRequestService {
@@ -161,6 +162,14 @@ class EventRequestService {
 
       // 7. Save request
       await request.save();
+
+      // 8. Trigger notification for reviewer
+      try {
+        await notificationEngine.notifyRequestCreated(request);
+      } catch (notificationError) {
+        console.error(`[EVENT REQUEST SERVICE] Error sending notification: ${notificationError.message}`);
+        // Don't fail request creation if notification fails
+      }
 
       return request;
     } catch (error) {
@@ -647,6 +656,14 @@ class EventRequestService {
             
             await event.save();
             console.log(`[EVENT REQUEST SERVICE] Updated event ${request.Event_ID} along with approved request ${requestId}`);
+            
+            // Trigger event edited notification
+            try {
+              await notificationEngine.notifyEventEdited(event, request, userId);
+            } catch (notificationError) {
+              console.error(`[EVENT REQUEST SERVICE] Error sending event edited notification: ${notificationError.message}`);
+              // Don't fail the update if notification fails
+            }
           } else {
             console.warn(`[EVENT REQUEST SERVICE] Event ${request.Event_ID} not found for approved request ${requestId}`);
           }
@@ -710,6 +727,19 @@ class EventRequestService {
         authoritySnapshot: actor.authority || 20
       };
 
+      // Capture original event date for reschedule notifications
+      let originalEventDate = null;
+      if (action === REQUEST_ACTIONS.RESCHEDULE && request.Event_ID) {
+        try {
+          const event = await Event.findOne({ Event_ID: request.Event_ID });
+          if (event && event.Start_Date) {
+            originalEventDate = new Date(event.Start_Date);
+          }
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+
       // 4. Get next state
       const currentState = request.status;
       const nextState = RequestStateService.getNextState(currentState, action);
@@ -725,7 +755,7 @@ class EventRequestService {
         
         // Accept action always goes directly to approved and publishes event
         if (nextState === REQUEST_STATES.APPROVED) {
-          await eventPublisherService.publishEvent(request);
+          await eventPublisherService.publishEvent(request, actorSnapshot);
         }
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
@@ -750,10 +780,32 @@ class EventRequestService {
         
         // Auto-publish event if approved (from review-accepted or review-rescheduled)
         if (nextState === REQUEST_STATES.APPROVED) {
-          await eventPublisherService.publishEvent(request);
+          await eventPublisherService.publishEvent(request, actorSnapshot);
         }
       } else if (action === REQUEST_ACTIONS.CANCEL) {
         request.status = nextState;
+        
+        // If request is approved (has published event), also cancel the event and notify
+        if (currentState === REQUEST_STATES.APPROVED && request.Event_ID) {
+          try {
+            const event = await Event.findOne({ Event_ID: request.Event_ID });
+            if (event) {
+              event.Status = 'Cancelled';
+              await event.save();
+              
+              // Trigger event cancelled notification
+              await notificationEngine.notifyEventCancelled(
+                event,
+                request,
+                actorSnapshot,
+                actionData.notes || null
+              );
+            }
+          } catch (eventError) {
+            console.error(`[EVENT REQUEST SERVICE] Error cancelling event: ${eventError.message}`);
+            // Don't fail request cancellation if event cancellation fails
+          }
+        }
       }
 
       // 6. Add status history
@@ -761,6 +813,29 @@ class EventRequestService {
 
       // 7. Save request
       await request.save();
+
+      // 8. Trigger notifications for state changes
+      try {
+        // Prepare action data for notification
+        const notificationActionData = {
+          notes: actionData.notes || null,
+          proposedDate: actionData.proposedDate || null,
+          originalDate: originalEventDate
+        };
+
+        await notificationEngine.notifyRequestStateChange(
+          request,
+          action,
+          actorSnapshot,
+          notificationActionData
+        );
+
+        // Note: Event published notification is already triggered in eventPublisherService.publishEvent()
+        // No need to trigger it again here to avoid duplicates
+      } catch (notificationError) {
+        console.error(`[EVENT REQUEST SERVICE] Error sending notification: ${notificationError.message}`);
+        // Don't fail action execution if notification fails
+      }
 
       // Re-populate location references before returning
       await request.populate('province', 'name code type');
@@ -834,6 +909,32 @@ class EventRequestService {
       // Only allow deletion of cancelled or rejected requests
       if (![REQUEST_STATES.CANCELLED, REQUEST_STATES.REJECTED].includes(request.status)) {
         throw new Error('Only cancelled or rejected requests can be deleted');
+      }
+
+      // Get actor details for notification
+      const actor = await User.findById(userId);
+      const actorSnapshot = actor ? {
+        userId: actor._id,
+        name: `${actor.firstName || ''} ${actor.lastName || ''}`.trim() || actor.email,
+        roleSnapshot: actor.roles?.[0]?.roleCode || null,
+        authoritySnapshot: actor.authority || 20
+      } : null;
+
+      // If request has an associated event, delete it and notify
+      if (request.Event_ID) {
+        try {
+          const event = await Event.findOne({ Event_ID: request.Event_ID });
+          if (event) {
+            // Trigger event deleted notification before deleting
+            await notificationEngine.notifyEventDeleted(event, request, actorSnapshot);
+            
+            // Delete the event
+            await Event.deleteOne({ Event_ID: request.Event_ID });
+          }
+        } catch (eventError) {
+          console.error(`[EVENT REQUEST SERVICE] Error deleting event: ${eventError.message}`);
+          // Continue with request deletion even if event deletion fails
+        }
       }
 
       await EventRequest.deleteOne({ Request_ID: requestId });
@@ -948,6 +1049,16 @@ class EventRequestService {
         console.log(`[EVENT REQUEST SERVICE] Updated request StaffAssignmentID: ${staffAssignmentId}`);
       } else {
         console.warn(`[EVENT REQUEST SERVICE] Request ${requestId} not found, skipping request update`);
+      }
+
+      // Trigger notification if new staff was added
+      if (newStaffCount > 0) {
+        try {
+          await notificationEngine.notifyStaffAdded(event, request, userId, newStaffCount);
+        } catch (notificationError) {
+          console.error(`[EVENT REQUEST SERVICE] Error sending staff added notification: ${notificationError.message}`);
+          // Don't fail staff assignment if notification fails
+        }
       }
 
       const result = {

@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 // USER MODELS
 // ============================================
 const User = require('./users_models/user.model'); // Unified User model
+const UserNotificationPreferences = require('./users_models/userNotificationPreferences.model');
 
 // ============================================
 // RBAC MODELS
@@ -44,6 +45,7 @@ const RegistrationCode = require('./utility_models/registrationCode.model');
 const SystemSettings = require('./utility_models/systemSettings.model');
 const SignUpRequest = require('./utility_models/signupRequest.model');
 const BloodBag = require('./utility_models/bloodbag.model');
+const EmailDailyLimit = require('./utility_models/emailDailyLimit.model');
 
 // ============================================
 // CHAT MODELS
@@ -165,6 +167,7 @@ const validateUser = async (userId) => {
 module.exports = {
   // User Models
   User, // Unified User model
+  UserNotificationPreferences,
   
   // RBAC Models
   Role,
@@ -195,6 +198,7 @@ module.exports = {
   SystemSettings,
   SignUpRequest,
   BloodBag,
+  EmailDailyLimit,
   
   // CHAT MODELS
   Message,

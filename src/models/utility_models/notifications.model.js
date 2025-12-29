@@ -7,26 +7,46 @@ const notificationSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  
+  // NEW: ObjectId reference to User model (primary)
+  recipientUserId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false, // Optional during migration, will be required for new notifications
+    index: true
+  },
+  
+  // DEPRECATED: Legacy string ID (keep for migration)
   Recipient_ID: {
     type: String,
-    required: true,
-    trim: true
+    required: false, // Make optional for new notifications
+    trim: true,
+    index: true
   },
+  
+  // DEPRECATED: Legacy role enum (keep for migration)
   RecipientType: {
     type: String,
     enum: ['Admin', 'Coordinator', 'Stakeholder'],
-    required: true
+    required: false // Make optional for new notifications
   },
+  
+  // Request reference (ObjectId if available, else String)
   Request_ID: {
     type: String,
-    required: true,
+    required: false, // Make optional (event-only notifications)
     trim: true,
-    ref: 'EventRequest'
+    ref: 'EventRequest',
+    index: true
   },
+  
+  // Event reference
   Event_ID: {
     type: String,
+    required: false, // Make optional (request-only notifications)
     trim: true,
-    ref: 'Event'
+    ref: 'Event',
+    index: true
   },
   Title: {
     type: String,
@@ -41,6 +61,21 @@ const notificationSchema = new mongoose.Schema({
   NotificationType: {
     type: String,
     enum: [
+      // Request notifications (new)
+      'request.pending-review',      // New request created
+      'request.approved',             // Request approved
+      'request.rejected',             // Request rejected
+      'request.rescheduled',          // Request rescheduled
+      'request.cancelled',             // Request cancelled
+      
+      // Event lifecycle notifications (new)
+      'event.published',               // Event published/live
+      'event.edited',                  // Event edited
+      'event.staff-added',             // Staff added to event
+      'event.cancelled',               // Event cancelled
+      'event.deleted',                 // Event deleted
+      
+      // Legacy types (for backward compatibility)
       'NewRequest',           // New request created by coordinator
       'AdminAccepted',        // Admin accepted the request
       'AdminRescheduled',     // Admin rescheduled the request
@@ -59,7 +94,8 @@ const notificationSchema = new mongoose.Schema({
       'NewMessage',           // New chat message received
       'MessageRead'           // Message marked as read
     ],
-    required: true
+    required: true,
+    index: true
   },
   IsRead: {
     type: Boolean,
@@ -83,7 +119,33 @@ const notificationSchema = new mongoose.Schema({
   OriginalDate: {
     type: Date
   },
-  // Chat-specific fields
+  
+  // Actor information (who triggered the notification)
+  actor: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    name: { type: String, trim: true },
+    roleSnapshot: { type: String, trim: true },
+    authoritySnapshot: { type: Number }
+  },
+  
+  // Delivery tracking
+  deliveryStatus: {
+    inApp: { type: Boolean, default: true },
+    email: { type: Boolean, default: false },
+    emailSentAt: { type: Date },
+    emailError: { type: String },
+    queuedForDigest: { type: Boolean, default: false },
+    queuedAt: { type: Date }
+  },
+  
+  // Batching metadata
+  batchId: {
+    type: String,
+    trim: true,
+    index: true
+  },
+  
+  // Chat-specific fields (keep for backward compatibility)
   Message_ID: {
     type: String,
     trim: true
@@ -100,9 +162,21 @@ const notificationSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for efficient querying of unread notifications by recipient
+// Indexes for efficient querying
+// Legacy indexes (for backward compatibility)
 notificationSchema.index({ Recipient_ID: 1, RecipientType: 1, IsRead: 1 });
 notificationSchema.index({ Request_ID: 1 });
+
+// New indexes for modern notification system
+notificationSchema.index({ recipientUserId: 1, IsRead: 1, createdAt: -1 });
+notificationSchema.index({ NotificationType: 1, createdAt: -1 });
+notificationSchema.index({ batchId: 1 });
+notificationSchema.index({ Request_ID: 1, NotificationType: 1 });
+notificationSchema.index({ Event_ID: 1, NotificationType: 1 });
+
+// Deduplication indexes (for checking duplicates within time window)
+notificationSchema.index({ recipientUserId: 1, NotificationType: 1, Request_ID: 1, createdAt: -1 });
+notificationSchema.index({ recipientUserId: 1, NotificationType: 1, Event_ID: 1, createdAt: -1 });
 
 // Method to mark notification as read
 notificationSchema.methods.markAsRead = function() {

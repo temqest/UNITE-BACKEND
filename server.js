@@ -543,6 +543,16 @@ const startServer = async () => {
   try {
     // Connect to database first
     await connectDB();
+    
+    // Initialize notification scheduler
+    try {
+      const notificationScheduler = require('./src/services/utility_services/notificationScheduler.service');
+      notificationScheduler.start();
+      console.log('✅ Notification scheduler started');
+    } catch (schedulerError) {
+      console.warn('⚠️  Failed to start notification scheduler:', schedulerError.message);
+      // Don't fail server startup if scheduler fails
+    }
     // Check AWS S3 connectivity (non-blocking failures)
     try {
       const s3Util = require('./src/utils/s3');
@@ -562,6 +572,61 @@ const startServer = async () => {
       }
     } catch (err) {
       console.warn('⚠️  Failed to initialize S3 connectivity check:', err && err.message ? err.message : err);
+    }
+
+    // Check AWS SES connectivity (non-blocking failures)
+    try {
+      const emailService = require('./src/services/utility_services/email.service');
+      const { SESClient, GetSendQuotaCommand } = require('@aws-sdk/client-ses');
+      
+      // Check if credentials are configured
+      if (!process.env.AWS_ACCESS_KEY_EMAIL_ID || !process.env.AWS_SECRET_ACCESS_KEY_EMAIL) {
+        console.warn('⚠️  AWS SES credentials not configured (AWS_ACCESS_KEY_EMAIL_ID or AWS_SECRET_ACCESS_KEY_EMAIL missing)');
+        console.warn('⚠️  Email sending will be disabled');
+      } else if (!process.env.EMAIL_USER) {
+        console.warn('⚠️  EMAIL_USER not configured; email sending will fail');
+      } else {
+        console.log('📧 Checking AWS SES connectivity...');
+        
+        // Create a test SES client
+        const testSESClient = new SESClient({
+          region: process.env.AWS_REGION || 'us-east-1',
+          credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_EMAIL_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY_EMAIL
+          }
+        });
+
+        // Test connection by getting send quota (lightweight API call)
+        testSESClient.send(new GetSendQuotaCommand({}))
+          .then(result => {
+            console.log('✅ AWS SES connected successfully');
+            console.log(`   📊 Send Quota: ${result.Max24HourSend || 'N/A'} emails/day`);
+            console.log(`   📊 Send Rate: ${result.MaxSendRate || 'N/A'} emails/second`);
+            console.log(`   📊 Sent (24h): ${result.SentLast24Hours || 0} emails`);
+            console.log(`   📧 From Address: ${process.env.EMAIL_USER}`);
+            
+            // Check daily email limit configuration
+            const dailyLimit = process.env.DAILY_EMAIL_LIMIT;
+            if (dailyLimit) {
+              console.log(`   ⚙️  Daily Email Limit: ${dailyLimit} emails/day`);
+            } else {
+              console.warn('   ⚠️  DAILY_EMAIL_LIMIT not set; using default 200');
+            }
+          })
+          .catch(err => {
+            console.error('❌ AWS SES connection failed:', err.message || err.toString());
+            if (err.name === 'InvalidClientTokenId' || err.name === 'SignatureDoesNotMatch') {
+              console.error('   💡 Check your AWS_ACCESS_KEY_EMAIL_ID and AWS_SECRET_ACCESS_KEY_EMAIL credentials');
+            } else if (err.name === 'AccessDenied') {
+              console.error('   💡 AWS credentials lack SES permissions');
+            } else {
+              console.error('   💡 Verify AWS credentials and SES service availability');
+            }
+          });
+      }
+    } catch (err) {
+      console.warn('⚠️  Failed to initialize AWS SES connectivity check:', err && err.message ? err.message : err);
     }
 
     // Start listening

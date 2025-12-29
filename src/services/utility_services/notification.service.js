@@ -13,6 +13,7 @@ class NotificationService {
 
   /**
    * Create a new notification
+   * Supports both new (recipientUserId) and legacy (Recipient_ID + RecipientType) formats
    * @param {Object} notificationData 
    * @returns {Object} Created notification
    */
@@ -20,6 +21,52 @@ class NotificationService {
     try {
       if (!notificationData.Notification_ID) {
         notificationData.Notification_ID = this.generateNotificationID();
+      }
+
+      // If recipientUserId is provided, ensure legacy fields are also set for backward compatibility
+      if (notificationData.recipientUserId && !notificationData.Recipient_ID) {
+        try {
+          const user = await User.findById(notificationData.recipientUserId);
+          if (user) {
+            notificationData.Recipient_ID = user.userId || user._id.toString();
+            if (!notificationData.RecipientType) {
+              // Infer recipient type from user
+              if (user.isSystemAdmin || user.authority >= 100) {
+                notificationData.RecipientType = 'Admin';
+              } else if (user.authority >= 60) {
+                notificationData.RecipientType = 'Coordinator';
+              } else {
+                notificationData.RecipientType = 'Stakeholder';
+              }
+            }
+          }
+        } catch (userError) {
+          console.warn('[NOTIFICATION SERVICE] Could not resolve user for legacy fields:', userError.message);
+        }
+      }
+
+      // If only legacy fields are provided, try to resolve recipientUserId
+      if (!notificationData.recipientUserId && notificationData.Recipient_ID) {
+        try {
+          // Try to find user by legacy userId field or _id
+          let user = await User.findOne({ userId: notificationData.Recipient_ID });
+          if (!user && notificationData.Recipient_ID.match(/^[0-9a-fA-F]{24}$/)) {
+            user = await User.findById(notificationData.Recipient_ID);
+          }
+          if (user) {
+            notificationData.recipientUserId = user._id;
+          }
+        } catch (userError) {
+          console.warn('[NOTIFICATION SERVICE] Could not resolve recipientUserId from legacy fields:', userError.message);
+        }
+      }
+
+      // Set default delivery status if not provided
+      if (!notificationData.deliveryStatus) {
+        notificationData.deliveryStatus = {
+          inApp: true,
+          email: false
+        };
       }
 
       const notification = new Notification(notificationData);
@@ -37,9 +84,10 @@ class NotificationService {
   }
 
   /**
-   * Get notifications for a user (Admin or Coordinator)
-   * @param {string} recipientId 
-   * @param {string} recipientType 
+   * Get notifications for a user
+   * Supports both new (recipientUserId) and legacy (Recipient_ID + RecipientType) query formats
+   * @param {string|ObjectId} recipientId - User ID (ObjectId) or legacy Recipient_ID (string)
+   * @param {string} recipientType - Legacy RecipientType (optional if using recipientUserId)
    * @param {Object} filters 
    * @param {Object} options 
    * @returns {Object} Notifications list
@@ -55,11 +103,45 @@ class NotificationService {
 
       const skip = (page - 1) * limit;
 
-      // Build query
+      // Build query - support both new and legacy formats
       const query = {
-        Recipient_ID: recipientId,
-        RecipientType: recipientType
+        $or: []
       };
+
+      // Try to resolve recipientUserId if recipientId looks like an ObjectId
+      let recipientUserId = null;
+      if (recipientId && typeof recipientId === 'string' && recipientId.match(/^[0-9a-fA-F]{24}$/)) {
+        try {
+          const user = await User.findById(recipientId);
+          if (user) {
+            recipientUserId = user._id;
+            query.$or.push({ recipientUserId: user._id });
+          }
+        } catch (e) {
+          // Not a valid ObjectId or user not found
+        }
+      }
+
+      // Legacy query support
+      if (recipientId) {
+        query.$or.push({ Recipient_ID: recipientId });
+        if (recipientType) {
+          query.$or.push({ RecipientType: recipientType });
+        }
+      }
+
+      // If no $or conditions, fall back to legacy format
+      if (query.$or.length === 0) {
+        query.Recipient_ID = recipientId;
+        if (recipientType) {
+          query.RecipientType = recipientType;
+        }
+        delete query.$or;
+      } else if (query.$or.length === 1) {
+        // Only one condition, simplify query
+        Object.assign(query, query.$or[0]);
+        delete query.$or;
+      }
 
       // Read status filter
       if (filters.isRead !== undefined) {
@@ -160,17 +242,52 @@ class NotificationService {
 
   /**
    * Get unread notifications count
-   * @param {string} recipientId 
+   * Supports both new (recipientUserId) and legacy (Recipient_ID + RecipientType) formats
+   * @param {string|ObjectId} recipientId 
    * @param {string} recipientType 
    * @returns {Object} Unread count
    */
   async getUnreadCount(recipientId, recipientType) {
     try {
-      const count = await Notification.countDocuments({
-        Recipient_ID: recipientId,
-        RecipientType: recipientType,
-        IsRead: false
-      });
+      // Build query - support both new and legacy formats
+      const query = {
+        IsRead: false,
+        $or: []
+      };
+
+      // Try to resolve recipientUserId
+      if (recipientId && typeof recipientId === 'string' && recipientId.match(/^[0-9a-fA-F]{24}$/)) {
+        try {
+          const user = await User.findById(recipientId);
+          if (user) {
+            query.$or.push({ recipientUserId: user._id });
+          }
+        } catch (e) {}
+      }
+
+      // Legacy query
+      if (recipientId) {
+        const legacyQuery = { Recipient_ID: recipientId };
+        if (recipientType) {
+          legacyQuery.RecipientType = recipientType;
+        }
+        query.$or.push(legacyQuery);
+      }
+
+      // Simplify query if only one condition
+      if (query.$or.length === 1) {
+        Object.assign(query, query.$or[0]);
+        delete query.$or;
+      } else if (query.$or.length === 0) {
+        // Fallback to legacy
+        query.Recipient_ID = recipientId;
+        if (recipientType) {
+          query.RecipientType = recipientType;
+        }
+        delete query.$or;
+      }
+
+      const count = await Notification.countDocuments(query);
 
       return {
         success: true,
@@ -184,8 +301,9 @@ class NotificationService {
 
   /**
    * Mark notification as read
+   * Supports both new (recipientUserId) and legacy (Recipient_ID) formats
    * @param {string} notificationId 
-   * @param {string} recipientId 
+   * @param {string|ObjectId} recipientId 
    * @returns {Object} Updated notification
    */
   async markAsRead(notificationId, recipientId) {
@@ -196,8 +314,10 @@ class NotificationService {
         throw new Error('Notification not found');
       }
 
-      // Verify recipient owns this notification
-      if (notification.Recipient_ID !== recipientId) {
+      // Verify recipient owns this notification (support both new and legacy formats)
+      const isOwner = (notification.recipientUserId && notification.recipientUserId.toString() === recipientId.toString()) ||
+                     (notification.Recipient_ID && notification.Recipient_ID === recipientId);
+      if (!isOwner) {
         throw new Error('Unauthorized: Notification does not belong to this user');
       }
 
@@ -223,12 +343,34 @@ class NotificationService {
    */
   async markMultipleAsRead(notificationIds, recipientId) {
     try {
+      // Build query - support both new and legacy formats
+      const query = {
+        Notification_ID: { $in: notificationIds },
+        IsRead: false,
+        $or: []
+      };
+
+      // Try recipientUserId
+      if (recipientId && typeof recipientId === 'string' && recipientId.match(/^[0-9a-fA-F]{24}$/)) {
+        try {
+          const user = await User.findById(recipientId);
+          if (user) {
+            query.$or.push({ recipientUserId: user._id });
+          }
+        } catch (e) {}
+      }
+
+      // Legacy format
+      query.$or.push({ Recipient_ID: recipientId });
+
+      // Simplify if only one condition
+      if (query.$or.length === 1) {
+        Object.assign(query, query.$or[0]);
+        delete query.$or;
+      }
+
       const result = await Notification.updateMany(
-        {
-          Notification_ID: { $in: notificationIds },
-          Recipient_ID: recipientId,
-          IsRead: false
-        },
+        query,
         {
           IsRead: true,
           ReadAt: new Date()
@@ -254,12 +396,44 @@ class NotificationService {
    */
   async markAllAsRead(recipientId, recipientType) {
     try {
+      // Build query - support both new and legacy formats
+      const query = {
+        IsRead: false,
+        $or: []
+      };
+
+      // Try recipientUserId
+      if (recipientId && typeof recipientId === 'string' && recipientId.match(/^[0-9a-fA-F]{24}$/)) {
+        try {
+          const user = await User.findById(recipientId);
+          if (user) {
+            query.$or.push({ recipientUserId: user._id });
+          }
+        } catch (e) {}
+      }
+
+      // Legacy format
+      const legacyQuery = { Recipient_ID: recipientId };
+      if (recipientType) {
+        legacyQuery.RecipientType = recipientType;
+      }
+      query.$or.push(legacyQuery);
+
+      // Simplify if only one condition
+      if (query.$or.length === 1) {
+        Object.assign(query, query.$or[0]);
+        delete query.$or;
+      } else if (query.$or.length === 0) {
+        // Fallback
+        query.Recipient_ID = recipientId;
+        if (recipientType) {
+          query.RecipientType = recipientType;
+        }
+        delete query.$or;
+      }
+
       const result = await Notification.updateMany(
-        {
-          Recipient_ID: recipientId,
-          RecipientType: recipientType,
-          IsRead: false
-        },
+        query,
         {
           IsRead: true,
           ReadAt: new Date()
@@ -349,8 +523,10 @@ class NotificationService {
         throw new Error('Notification not found');
       }
 
-      // Verify recipient owns this notification
-      if (notification.Recipient_ID !== recipientId) {
+      // Verify recipient owns this notification (support both new and legacy formats)
+      const isOwner = notification.recipientUserId && notification.recipientUserId.toString() === recipientId.toString() ||
+                     notification.Recipient_ID === recipientId;
+      if (!isOwner) {
         throw new Error('Unauthorized: Notification does not belong to this user');
       }
 
@@ -374,26 +550,49 @@ class NotificationService {
    */
   async getNotificationStatistics(recipientId, recipientType) {
     try {
-      const total = await Notification.countDocuments({
-        Recipient_ID: recipientId,
-        RecipientType: recipientType
-      });
+      // Build query - support both new and legacy formats
+      const baseQuery = {
+        $or: []
+      };
 
-      const unread = await Notification.countDocuments({
-        Recipient_ID: recipientId,
-        RecipientType: recipientType,
-        IsRead: false
-      });
+      // Try recipientUserId
+      if (recipientId && typeof recipientId === 'string' && recipientId.match(/^[0-9a-fA-F]{24}$/)) {
+        try {
+          const user = await User.findById(recipientId);
+          if (user) {
+            baseQuery.$or.push({ recipientUserId: user._id });
+          }
+        } catch (e) {}
+      }
+
+      // Legacy format
+      const legacyQuery = { Recipient_ID: recipientId };
+      if (recipientType) {
+        legacyQuery.RecipientType = recipientType;
+      }
+      baseQuery.$or.push(legacyQuery);
+
+      // Simplify query
+      let query = {};
+      if (baseQuery.$or.length === 1) {
+        query = baseQuery.$or[0];
+      } else if (baseQuery.$or.length > 1) {
+        query = baseQuery;
+      } else {
+        query = legacyQuery;
+      }
+
+      const total = await Notification.countDocuments(query);
+
+      const unreadQuery = { ...query, IsRead: false };
+      const unread = await Notification.countDocuments(unreadQuery);
 
       const read = total - unread;
 
       // Group by type
       const byType = await Notification.aggregate([
         {
-          $match: {
-            Recipient_ID: recipientId,
-            RecipientType: recipientType
-          }
+          $match: query
         },
         {
           $group: {
@@ -415,11 +614,8 @@ class NotificationService {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-      const recentCount = await Notification.countDocuments({
-        Recipient_ID: recipientId,
-        RecipientType: recipientType,
-        createdAt: { $gte: sevenDaysAgo }
-      });
+      const recentQuery = { ...query, createdAt: { $gte: sevenDaysAgo } };
+      const recentCount = await Notification.countDocuments(recentQuery);
 
       return {
         success: true,
@@ -451,10 +647,39 @@ class NotificationService {
    */
   async getLatestNotifications(recipientId, recipientType, limit = 10) {
     try {
-      const notifications = await Notification.find({
-        Recipient_ID: recipientId,
-        RecipientType: recipientType
-      })
+      // Build query - support both new and legacy formats
+      const query = {
+        $or: []
+      };
+
+      // Try recipientUserId
+      if (recipientId && typeof recipientId === 'string' && recipientId.match(/^[0-9a-fA-F]{24}$/)) {
+        try {
+          const user = await User.findById(recipientId);
+          if (user) {
+            query.$or.push({ recipientUserId: user._id });
+          }
+        } catch (e) {}
+      }
+
+      // Legacy format
+      const legacyQuery = { Recipient_ID: recipientId };
+      if (recipientType) {
+        legacyQuery.RecipientType = recipientType;
+      }
+      query.$or.push(legacyQuery);
+
+      // Simplify query
+      let finalQuery = {};
+      if (query.$or.length === 1) {
+        finalQuery = query.$or[0];
+      } else if (query.$or.length > 1) {
+        finalQuery = query;
+      } else {
+        finalQuery = legacyQuery;
+      }
+
+      const notifications = await Notification.find(finalQuery)
       .sort({ createdAt: -1 })
       .limit(limit);
 

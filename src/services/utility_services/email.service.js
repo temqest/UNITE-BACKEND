@@ -1,34 +1,173 @@
-const sgMail = require('@sendgrid/mail');
+const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
+const { EmailDailyLimit } = require('../../models/index');
 
 class EmailService {
   constructor() {
-    sgMail.setApiKey(process.env.EMAIL_PASS);
+    // Initialize AWS SES client
+    if (!process.env.AWS_ACCESS_KEY_EMAIL_ID || !process.env.AWS_SECRET_ACCESS_KEY_EMAIL) {
+      console.warn('[AWS SES] AWS credentials not found. Email sending will fail.');
+    }
 
-    // Note: SendGrid API doesn't require connection verification like SMTP
-    console.log('SendGrid API initialized');
+    this.sesClient = new SESClient({
+      region: process.env.AWS_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_EMAIL_ID || '',
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY_EMAIL || ''
+      }
+    });
+
+    this.fromEmail = process.env.EMAIL_USER;
+    if (!this.fromEmail) {
+      console.warn('[AWS SES] EMAIL_USER not set. Email sending will fail.');
+    }
+
+    console.log('[AWS SES] AWS SES client initialized');
   }
 
+  /**
+   * Get the daily email limit from environment variable
+   * @returns {number} Daily email limit
+   */
+  getDailyLimit() {
+    return EmailDailyLimit.getDailyLimit();
+  }
+
+  /**
+   * Check if daily email limit is reached
+   * @returns {Promise<{allowed: boolean, reason?: string, currentCount?: number, limit?: number}>}
+   */
+  async checkDailyLimit() {
+    try {
+      const limitDoc = await EmailDailyLimit.getOrCreateToday();
+      const dailyLimit = this.getDailyLimit();
+      const isReached = limitDoc.emailsSent >= dailyLimit;
+
+      if (isReached) {
+        return {
+          allowed: false,
+          reason: `Daily email limit reached: ${limitDoc.emailsSent}/${dailyLimit} emails sent`,
+          currentCount: limitDoc.emailsSent,
+          limit: dailyLimit
+        };
+      }
+
+      return {
+        allowed: true,
+        currentCount: limitDoc.emailsSent,
+        limit: dailyLimit
+      };
+    } catch (error) {
+      console.error('[AWS SES] Error checking daily limit:', error);
+      // On error, allow sending (fail open)
+      return {
+        allowed: true,
+        reason: 'Error checking limit, allowing send'
+      };
+    }
+  }
+
+  /**
+   * Handle AWS SES errors
+   * @param {Error} error - AWS SES error
+   * @throws {Error} Formatted error message
+   */
+  handleSESError(error) {
+    if (error.name === 'MessageRejected') {
+      throw new Error(`Email rejected: ${error.message}. Please verify sender and recipient addresses.`);
+    } else if (error.name === 'MailFromDomainNotVerifiedException') {
+      throw new Error(`Sender domain not verified in AWS SES: ${error.message}`);
+    } else if (error.name === 'Throttling' || error.name === 'ThrottlingException') {
+      throw new Error(`AWS SES rate limit exceeded: ${error.message}. Please try again later.`);
+    } else if (error.name === 'ServiceException' || error.name === 'ServiceUnavailableException') {
+      throw new Error(`AWS SES service error: ${error.message}. Please try again later.`);
+    } else {
+      throw new Error(`AWS SES error: ${error.message || error.toString()}`);
+    }
+  }
+
+  /**
+   * Send email via AWS SES
+   * @param {string} to - Recipient email address
+   * @param {string} subject - Email subject
+   * @param {string} text - Plain text content
+   * @param {string} html - HTML content
+   * @returns {Promise<void>}
+   */
+  async sendEmail(to, subject, text, html) {
+    // Check daily limit before sending
+    const limitCheck = await this.checkDailyLimit();
+    if (!limitCheck.allowed) {
+      const error = new Error(limitCheck.reason);
+      error.name = 'DailyLimitExceeded';
+      throw error;
+    }
+
+    if (!this.fromEmail) {
+      throw new Error('EMAIL_USER not configured. Cannot send email.');
+    }
+
+    const params = {
+      Source: `"UNITE Blood Bank" <${this.fromEmail}>`,
+      Destination: {
+        ToAddresses: [to]
+      },
+      Message: {
+        Subject: {
+          Data: subject,
+          Charset: 'UTF-8'
+        },
+        Body: {
+          Text: {
+            Data: text,
+            Charset: 'UTF-8'
+          },
+          Html: {
+            Data: html,
+            Charset: 'UTF-8'
+          }
+        }
+      }
+    };
+
+    try {
+      const command = new SendEmailCommand(params);
+      const response = await this.sesClient.send(command);
+      
+      // Increment email count after successful send
+      await EmailDailyLimit.incrementCount();
+      
+      console.log(`[AWS SES] Email sent to ${to}. MessageId: ${response.MessageId}`);
+    } catch (error) {
+      console.error(`[AWS SES] Error sending email to ${to}:`, error);
+      this.handleSESError(error);
+    }
+  }
+
+  /**
+   * Send verification code email
+   * @param {string} email - Recipient email address
+   * @param {string} code - Verification code
+   * @returns {Promise<void>}
+   */
   async sendVerificationCode(email, code) {
-    const msg = {
-      to: email,
-      from: `"UNITE Blood Bank" <${process.env.EMAIL_USER}>`,
-      subject: 'Verify Your UNITE Account - Email Verification Code',
-      text: `Hello,
+    const subject = 'Verify Your UNITE Account - Email Verification Code';
+    const text = `Hello,
 
-    Thank you for signing up with UNITE Blood Bank System.
+Thank you for signing up with UNITE Blood Bank System.
 
-    Your verification code is: ${code}
+Your verification code is: ${code}
 
-    Please enter this code in the signup form to complete your email verification.
+Please enter this code in the signup form to complete your email verification.
 
-    This code will expire in 24 hours.
+This code will expire in 24 hours.
 
-    If you did not request this verification, please ignore this email.
+If you did not request this verification, please ignore this email.
 
-    Best regards,
-    UNITE Blood Bank Team
-    unitehealth.tech`,
-      html: `
+Best regards,
+UNITE Blood Bank Team
+unitehealth.tech`;
+
+    const html = `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
     <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
@@ -36,7 +175,7 @@ class EmailService {
   </div>
   <div style="padding: 30px 20px; background-color: white;">
     <h3>Hello,</h3>
-      <p>Thank you for signing up with UNITE Blood Bank System.</p>
+    <p>Thank you for signing up with UNITE Blood Bank System.</p>
     <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; text-align: center; border-radius: 5px;">
       <p style="font-size: 18px; font-weight: bold; margin: 0; color: #dc3545;">Your verification code is:</p>
       <p style="font-size: 32px; font-weight: bold; margin: 10px 0; color: #333; letter-spacing: 3px;">${code}</p>
@@ -44,47 +183,33 @@ class EmailService {
     <p>Please enter this code in the signup form to complete your email verification.</p>
     <p style="color: #666; font-size: 14px;">This code will expire in 24 hours.</p>
     <p style="color: #666; font-size: 14px;">If you did not request this verification, please ignore this email.</p>
-    
   </div>
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
     <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
   </div>
-</div>`
-    };
+</div>`;
 
     try {
-      await sgMail.send(msg);
-      console.log(`Verification email sent to ${email}`);
+      await this.sendEmail(email, subject, text, html);
+      console.log(`[AWS SES] Verification email sent to ${email}`);
     } catch (error) {
-      console.error('Error sending email:', error);
+      if (error.name === 'DailyLimitExceeded') {
+        console.error(`[AWS SES] Failed to send verification email to ${email}: ${error.message}`);
+      }
       throw new Error('Failed to send verification email');
     }
   }
 
-  async sendEmail(email, subject, text, html) {
-    const msg = {
-      to: email,
-      from: process.env.EMAIL_USER,
-      subject,
-      text,
-      html
-    };
-
-    try {
-      await sgMail.send(msg);
-      console.log(`Email sent to ${email}`);
-    } catch (error) {
-      console.error('Error sending email:', error);
-      throw new Error('Failed to send email');
-    }
-  }
-
+  /**
+   * Send password activation email
+   * @param {string} email - Recipient email address
+   * @param {string} activationLink - Account activation link
+   * @param {string} userName - User's name
+   * @returns {Promise<void>}
+   */
   async sendPasswordActivationEmail(email, activationLink, userName) {
-    const msg = {
-      to: email,
-      from: `"UNITE Blood Bank" <${process.env.EMAIL_USER}>`,
-      subject: 'Activate Your UNITE Account - Set Your Password',
-      text: `Hello ${userName},
+    const subject = 'Activate Your UNITE Account - Set Your Password';
+    const text = `Hello ${userName},
 
 Your signup request for the UNITE Blood Bank System has been approved!
 
@@ -98,8 +223,9 @@ If you did not request this account, please ignore this email.
 
 Best regards,
 UNITE Blood Bank Team
-unitehealth.tech`,
-      html: `
+unitehealth.tech`;
+
+    const html = `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
     <h2 style="color: #dc3545; margin: 0;">UNITE Blood Bank</h2>
@@ -118,14 +244,15 @@ unitehealth.tech`,
   <div style="background-color: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px;">
     <p>Best regards,<br>UNITE Blood Bank Team<br><a href="https://unitehealth.tech" style="color: #dc3545;">unitehealth.tech</a></p>
   </div>
-</div>`
-    };
+</div>`;
 
     try {
-      await sgMail.send(msg);
-      console.log(`Password activation email sent to ${email}`);
+      await this.sendEmail(email, subject, text, html);
+      console.log(`[AWS SES] Password activation email sent to ${email}`);
     } catch (error) {
-      console.error('Error sending password activation email:', error);
+      if (error.name === 'DailyLimitExceeded') {
+        console.error(`[AWS SES] Failed to send password activation email to ${email}: ${error.message}`);
+      }
       throw new Error('Failed to send password activation email');
     }
   }
