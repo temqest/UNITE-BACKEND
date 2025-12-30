@@ -264,6 +264,17 @@ const eventRequestSchema = new mongoose.Schema({
   rescheduleProposal: rescheduleSchema,
   creatorConfirmation: confirmationSchema,
   finalResolution: finalResolutionSchema,
+  // Turn-based state tracking
+  activeResponder: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    relationship: { type: String, enum: ['requester', 'reviewer'] },
+    authority: { type: Number }
+  },
+  lastAction: {
+    action: { type: String, trim: true },
+    actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    timestamp: { type: Date }
+  },
   reviewSummary: {
     type: String,
     trim: true

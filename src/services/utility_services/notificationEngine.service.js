@@ -182,8 +182,8 @@ class NotificationEngine {
         notificationType = 'request.rejected';
         title = 'Your Event Request Rejected';
         const eventTitle = request.Event_Title || 'Your event request';
-        const reason = actionData.notes ? ` Reason: ${actionData.notes}` : '';
-        message = `Your event request "${eventTitle}" has been rejected.${reason}`;
+        // Keep message clean - ActionNote will be displayed separately
+        message = `Your event request "${eventTitle}" has been rejected.`;
       } else if (state === 'review-rescheduled') {
         notificationType = 'request.rescheduled';
         title = 'Your Event Request Rescheduled';
@@ -213,6 +213,7 @@ class NotificationEngine {
           } catch (e) {}
         }
         
+        // Keep date info in message - ActionNote will be displayed separately
         if (originalDateStr && newDateStr) {
           message = `Your event "${eventTitle}" scheduled on ${originalDateStr} has a proposed reschedule to ${newDateStr}.`;
         } else if (newDateStr) {
@@ -220,16 +221,12 @@ class NotificationEngine {
         } else {
           message = `Your event "${eventTitle}" has a proposed reschedule.`;
         }
-        
-        if (actionData.notes) {
-          message += ` Note: ${actionData.notes}`;
-        }
       } else if (state === 'cancelled') {
         notificationType = 'request.cancelled';
         title = 'Your Event Request Cancelled';
         const eventTitle = request.Event_Title || 'Your event request';
-        const reason = actionData.notes ? ` Reason: ${actionData.notes}` : '';
-        message = `Your event request "${eventTitle}" has been cancelled.${reason}`;
+        // Keep message clean - ActionNote will be displayed separately
+        message = `Your event request "${eventTitle}" has been cancelled.`;
       }
 
       if (!notificationType) {
@@ -242,6 +239,33 @@ class NotificationEngine {
       if (!requester) {
         console.warn('[NOTIFICATION ENGINE] Requester not found:', request.requester.userId);
         return;
+      }
+
+      // Retrieve note from actionData, with fallback to request history if needed
+      let actionNote = actionData.notes || null;
+      
+      // Fallback: If note is missing, try to retrieve from request history
+      if (!actionNote && (state === 'rejected' || state === 'review-rescheduled' || state === 'cancelled')) {
+        // Try to get note from latest decisionHistory entry
+        if (request.decisionHistory && request.decisionHistory.length > 0) {
+          const latestDecision = request.decisionHistory[request.decisionHistory.length - 1];
+          if (latestDecision && latestDecision.notes) {
+            actionNote = latestDecision.notes;
+          }
+        }
+        
+        // If still no note, try statusHistory
+        if (!actionNote && request.statusHistory && request.statusHistory.length > 0) {
+          const latestStatus = request.statusHistory[request.statusHistory.length - 1];
+          if (latestStatus && latestStatus.note) {
+            actionNote = latestStatus.note;
+          }
+        }
+        
+        // For rescheduled requests, also check rescheduleProposal
+        if (!actionNote && state === 'review-rescheduled' && request.rescheduleProposal && request.rescheduleProposal.reviewerNotes) {
+          actionNote = request.rescheduleProposal.reviewerNotes;
+        }
       }
 
       // Create notification
@@ -259,7 +283,7 @@ class NotificationEngine {
           authoritySnapshot: actor.authoritySnapshot
         },
         ActionTaken: action,
-        ActionNote: actionData.notes || null,
+        ActionNote: actionNote, // Always set (can be null if no note provided)
         RescheduledDate: actionData.proposedDate || null,
         OriginalDate: actionData.originalDate || null,
         // Legacy fields

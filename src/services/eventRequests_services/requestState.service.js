@@ -19,11 +19,6 @@ class RequestStateService {
       [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED, // Stakeholder decline (same as reject) - directly reject
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
     },
-    [REQUEST_STATES.REVIEW_ACCEPTED]: {
-      // Auto-transition to approved (handled by service, no user action needed)
-      // But allow confirm as explicit action
-      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED // Finalize acceptance
-    },
     [REQUEST_STATES.REVIEW_RESCHEDULED]: {
       [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED, // Stakeholder confirm → auto-publish on confirm
       [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Coordinator/Admin accept → directly approved and published
@@ -31,24 +26,26 @@ class RequestStateService {
       [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED, // Stakeholder decline → directly to rejected
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Loop allowed (both parties can counter-reschedule)
     },
-    [REQUEST_STATES.REVIEW_REJECTED]: {
-      // Legacy state - new rejections go directly to REJECTED
-      // This is kept for backward compatibility with existing data
-      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.REJECTED, // Finalize rejection
-      [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED // Alternative way to finalize
-    },
     [REQUEST_STATES.APPROVED]: {
       [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED,
       [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Allow rescheduling approved events
     },
     [REQUEST_STATES.REJECTED]: {
-      // No transitions from rejected
+      // No transitions from rejected (final state)
     },
     [REQUEST_STATES.CANCELLED]: {
-      // No transitions from cancelled
+      // No transitions from cancelled (final state)
     },
     [REQUEST_STATES.COMPLETED]: {
       // Final state, no transitions
+    },
+    // Legacy intermediate states (backward compatibility only)
+    [REQUEST_STATES.REVIEW_ACCEPTED]: {
+      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED // Finalize acceptance
+    },
+    [REQUEST_STATES.REVIEW_REJECTED]: {
+      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.REJECTED, // Finalize rejection
+      [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED // Alternative way to finalize
     }
   };
 
@@ -179,6 +176,172 @@ class RequestStateService {
       REQUEST_STATES.PENDING_REVIEW,
       REQUEST_STATES.APPROVED
     ].includes(normalizedState);
+  }
+
+  /**
+   * Get the active responder for a request
+   * Determines who should respond based on state and last action
+   * @param {Object} request - Request document
+   * @returns {Object|null} { userId, relationship, authority } or null if final state
+   */
+  static getActiveResponder(request) {
+    const normalizedState = this.normalizeState(request.status || request.Status);
+    
+    // Final states have no active responder
+    if (this.isFinalState(normalizedState)) {
+      return null;
+    }
+
+    // If activeResponder is already set, use it
+    if (request.activeResponder && request.activeResponder.userId) {
+      return request.activeResponder;
+    }
+
+    // Determine active responder based on state
+    if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+      // Initial state: reviewer is active responder
+      if (request.reviewer && request.reviewer.userId) {
+        return {
+          userId: request.reviewer.userId,
+          relationship: 'reviewer',
+          authority: request.reviewer.authoritySnapshot || null
+        };
+      }
+      return null; // No reviewer assigned
+    }
+
+    if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+      // Reschedule negotiation: receiver is active responder
+      // Receiver is the one who did NOT initiate the reschedule
+      if (request.lastAction && request.lastAction.actorId) {
+        const lastActorId = request.lastAction.actorId.toString();
+        const requesterId = request.requester?.userId?.toString();
+        const reviewerId = request.reviewer?.userId?.toString();
+
+        // If last actor was requester, reviewer is now active responder
+        if (lastActorId === requesterId && reviewerId) {
+          return {
+            userId: request.reviewer.userId,
+            relationship: 'reviewer',
+            authority: request.reviewer.authoritySnapshot || null
+          };
+        }
+        // If last actor was reviewer, requester is now active responder
+        if (lastActorId === reviewerId && requesterId) {
+          return {
+            userId: request.requester.userId,
+            relationship: 'requester',
+            authority: request.requester.authoritySnapshot || null
+          };
+        }
+      }
+
+      // Fallback: if rescheduleProposal exists, receiver is the other party
+      if (request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
+        const proposerId = request.rescheduleProposal.proposedBy.userId?.toString();
+        const requesterId = request.requester?.userId?.toString();
+        const reviewerId = request.reviewer?.userId?.toString();
+
+        // If requester proposed, reviewer is receiver
+        if (proposerId === requesterId && reviewerId) {
+          return {
+            userId: request.reviewer.userId,
+            relationship: 'reviewer',
+            authority: request.reviewer.authoritySnapshot || null
+          };
+        }
+        // If reviewer proposed, requester is receiver
+        if (proposerId === reviewerId && requesterId) {
+          return {
+            userId: request.requester.userId,
+            relationship: 'requester',
+            authority: request.requester.authoritySnapshot || null
+          };
+        }
+      }
+
+      // Default: if no lastAction, requester is receiver (reviewer initiated)
+      if (request.requester && request.requester.userId) {
+        return {
+          userId: request.requester.userId,
+          relationship: 'requester',
+          authority: request.requester.authoritySnapshot || null
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Update active responder after an action
+   * @param {Object} request - Request document (will be modified)
+   * @param {string} action - Action that was performed
+   * @param {string|ObjectId} actorId - User who performed the action
+   * @param {Object} context - Additional context { requesterId, reviewerId }
+   */
+  static updateActiveResponder(request, action, actorId, context = {}) {
+    const normalizedState = this.normalizeState(request.status || request.Status);
+    
+    // Update lastAction
+    request.lastAction = {
+      action: action,
+      actorId: actorId,
+      timestamp: new Date()
+    };
+
+    // Final states: no active responder
+    if (this.isFinalState(normalizedState)) {
+      request.activeResponder = null;
+      return;
+    }
+
+    // Get requester and reviewer IDs
+    const requesterId = context.requesterId || (request.requester?.userId?.toString());
+    const reviewerId = context.reviewerId || (request.reviewer?.userId?.toString());
+    const actorIdStr = actorId.toString();
+
+    // Determine if actor is requester or reviewer
+    const isRequester = requesterId && actorIdStr === requesterId;
+    const isReviewer = reviewerId && actorIdStr === reviewerId;
+
+    // Handle reschedule: receiver becomes active responder
+    if (action === REQUEST_ACTIONS.RESCHEDULE) {
+      if (isRequester && reviewerId) {
+        // Requester rescheduled, reviewer becomes active responder
+        request.activeResponder = {
+          userId: request.reviewer.userId,
+          relationship: 'reviewer',
+          authority: request.reviewer.authoritySnapshot || null
+        };
+      } else if (isReviewer && requesterId) {
+        // Reviewer rescheduled, requester becomes active responder
+        request.activeResponder = {
+          userId: request.requester.userId,
+          relationship: 'requester',
+          authority: request.requester.authoritySnapshot || null
+        };
+      }
+      return;
+    }
+
+    // Accept/Reject/Confirm/Decline: final states, no active responder
+    if ([REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.CONFIRM, REQUEST_ACTIONS.DECLINE].includes(action)) {
+      request.activeResponder = null;
+      return;
+    }
+
+    // For other actions, maintain current active responder or set based on state
+    if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+      // Reviewer should be active responder
+      if (reviewerId) {
+        request.activeResponder = {
+          userId: request.reviewer.userId,
+          relationship: 'reviewer',
+          authority: request.reviewer.authoritySnapshot || null
+        };
+      }
+    }
   }
 }
 

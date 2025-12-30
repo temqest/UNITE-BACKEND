@@ -250,10 +250,23 @@ class EventRequestService {
         authoritySnapshot: requester.authority || 20
       }, 'Request created');
 
-      // 7. Save request
+      // 9. Set initial active responder (reviewer is active responder in pending-review state)
+      if (reviewer && reviewer.userId) {
+        const reviewerUser = await User.findById(reviewer.userId);
+        if (reviewerUser) {
+          request.activeResponder = {
+            userId: reviewer.userId,
+            relationship: 'reviewer',
+            authority: reviewerUser.authority || 20
+          };
+        }
+      }
+      request.lastAction = null; // No action yet
+
+      // 10. Save request
       await request.save();
 
-      // 10. Trigger notification for reviewer
+      // 11. Trigger notification for reviewer
       try {
         await notificationEngine.notifyRequestCreated(request);
       } catch (notificationError) {
@@ -1056,7 +1069,17 @@ class EventRequestService {
       // 6. Add status history
       request.addStatusHistory(nextState, actorSnapshot, actionData.notes || '');
 
-      // 7. Save request and verify save completed
+      // 7. Update active responder and lastAction
+      const requesterId = request.requester?.userId?.toString();
+      const reviewerId = request.reviewer?.userId?.toString();
+      RequestStateService.updateActiveResponder(
+        request,
+        action,
+        userId,
+        { requesterId, reviewerId }
+      );
+
+      // 8. Save request and verify save completed
       await request.save();
       
       // Verify save completed by re-fetching the request
@@ -1075,7 +1098,7 @@ class EventRequestService {
         return savedRequest;
       }
 
-      // 8. Trigger notifications for state changes (non-blocking)
+      // 9. Trigger notifications for state changes (non-blocking)
       // Use setImmediate to ensure response is sent before notifications complete
       setImmediate(async () => {
         try {

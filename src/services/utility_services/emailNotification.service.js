@@ -370,7 +370,7 @@ class EmailNotificationService {
 
     let subject = Title || 'UNITE Notification';
     let text = Message || 'You have a new notification.';
-    let html = this.generateHtmlTemplate(Title || 'Notification', Message || 'You have a new notification.', actor, ActionNote);
+    let html = this.generateHtmlTemplate(Title || 'Notification', Message || 'You have a new notification.', actor, ActionNote, null, 'info');
 
     // Customize based on notification type
     switch (NotificationType) {
@@ -382,54 +382,63 @@ class EmailNotificationService {
           Message,
           actor,
           null,
+          null,
           'success'
         );
         break;
 
       case 'request.rejected':
         subject = 'Your Event Request Has Been Rejected - UNITE';
+        // Always include ActionNote in text with "Reason:" label when present
         text = `Your event request has been rejected.\n\n${Message}${ActionNote ? `\n\nReason: ${ActionNote}` : ''}`;
         html = this.generateHtmlTemplate(
           'Event Request Rejected',
           Message,
           actor,
           ActionNote,
+          'Reason', // Use "Reason" label for rejections
           'error'
         );
         break;
 
       case 'request.rescheduled':
         subject = 'Your Event Request Has Been Rescheduled - UNITE';
+        // Always include ActionNote in text with "Note:" label when present
         text = `Your event request has been rescheduled.\n\n${Message}${ActionNote ? `\n\nNote: ${ActionNote}` : ''}`;
         html = this.generateHtmlTemplate(
           'Event Request Rescheduled',
           Message,
           actor,
           ActionNote,
+          'Note', // Use "Note" label for reschedules
           'warning'
         );
         break;
 
       case 'request.cancelled':
         subject = 'Your Event Request Has Been Cancelled - UNITE';
+        // Always include ActionNote in text with "Reason:" label when present
         text = `Your event request has been cancelled.\n\n${Message}${ActionNote ? `\n\nReason: ${ActionNote}` : ''}`;
         html = this.generateHtmlTemplate(
           'Event Request Cancelled',
           Message,
           actor,
           ActionNote,
+          'Reason', // Use "Reason" label for cancellations
           'warning'
         );
         break;
 
       case 'event.cancelled':
         subject = 'Event Has Been Cancelled - UNITE';
+        // Always include ActionNote in text with "Reason:" label when present
         text = `An event has been cancelled.\n\n${Message}${ActionNote ? `\n\nReason: ${ActionNote}` : ''}`;
         html = this.generateHtmlTemplate(
           'Event Cancelled',
           Message,
           actor,
           ActionNote,
+          'Reason', // Use "Reason" label for cancellations
           'warning'
         );
         break;
@@ -441,6 +450,7 @@ class EmailNotificationService {
           'Event Deleted',
           Message,
           actor,
+          null,
           null,
           'error'
         );
@@ -456,10 +466,11 @@ class EmailNotificationService {
    * @param {string} message - Email message
    * @param {Object} actor - Actor information (optional)
    * @param {string} note - Additional note (optional)
+   * @param {string} noteLabel - Label for note ('Reason', 'Note', or null for default 'Note')
    * @param {string} type - Notification type ('success', 'error', 'warning', 'info')
    * @returns {string} HTML email content
    */
-  generateHtmlTemplate(title, message, actor = null, note = null, type = 'info') {
+  generateHtmlTemplate(title, message, actor = null, note = null, noteLabel = null, type = 'info') {
     const colors = {
       success: { primary: '#28a745', bg: '#d4edda', border: '#c3e6cb' },
       error: { primary: '#dc3545', bg: '#f8d7da', border: '#f5c6cb' },
@@ -469,6 +480,16 @@ class EmailNotificationService {
 
     const colorScheme = colors[type] || colors.info;
     const actorInfo = actor ? `<p style="color: #666; font-size: 14px; margin-top: 10px;"><strong>Action by:</strong> ${actor.name || 'System'}</p>` : '';
+    
+    // Determine note label - use provided label or default to "Note"
+    const label = noteLabel || 'Note';
+    
+    // Generate note section with prominent styling when note exists
+    const noteSection = note ? `
+      <div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; border-left: 3px solid ${colorScheme.primary};">
+        <p style="margin: 0; color: #333; font-weight: 600; font-size: 14px; margin-bottom: 8px;">${label}:</p>
+        <p style="margin: 0; color: #555; font-size: 14px; line-height: 1.6;">${note}</p>
+      </div>` : '';
 
     return `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -479,8 +500,8 @@ class EmailNotificationService {
   <div style="padding: 30px 20px; background-color: white;">
     <h3 style="color: ${colorScheme.primary}; margin-top: 0;">${title}</h3>
     <div style="background-color: ${colorScheme.bg}; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid ${colorScheme.primary};">
-      <p style="margin: 0; color: #333;">${message}</p>
-      ${note ? `<p style="margin: 15px 0 0 0; padding-top: 15px; border-top: 1px solid ${colorScheme.border};"><strong>Note:</strong> ${note}</p>` : ''}
+      <p style="margin: 0; color: #333; line-height: 1.6;">${message}</p>
+      ${noteSection}
     </div>
     ${actorInfo}
     <p style="color: #666; font-size: 14px; margin-top: 20px;">Please log in to your UNITE account to view more details.</p>
