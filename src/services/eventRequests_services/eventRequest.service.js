@@ -254,12 +254,24 @@ class EventRequestService {
       if (reviewer && reviewer.userId) {
         const reviewerUser = await User.findById(reviewer.userId);
         if (reviewerUser) {
+          // Ensure we store the ObjectId, not a reference
+          const reviewerUserId = reviewer.userId._id || reviewer.userId;
           request.activeResponder = {
-            userId: reviewer.userId,
+            userId: reviewerUserId,
             relationship: 'reviewer',
             authority: reviewerUser.authority || 20
           };
+          console.log(`[EVENT REQUEST SERVICE] Set activeResponder:`, {
+            requestId: request.Request_ID,
+            userId: reviewerUserId.toString(),
+            relationship: 'reviewer',
+            authority: reviewerUser.authority
+          });
+        } else {
+          console.warn(`[EVENT REQUEST SERVICE] Reviewer user not found: ${reviewer.userId}`);
         }
+      } else {
+        console.warn(`[EVENT REQUEST SERVICE] No reviewer assigned for request ${request.Request_ID}`);
       }
       request.lastAction = null; // No action yet
 

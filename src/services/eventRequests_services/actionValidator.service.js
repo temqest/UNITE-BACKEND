@@ -687,9 +687,16 @@ class ActionValidatorService {
     }
     
     // Check if user is the active responder
+    // Normalize userIds for comparison - handle both ObjectId and string cases
     const userIdStr = userId.toString();
-    const responderId = activeResponder.userId.toString();
-    const isActiveResponder = userIdStr === responderId;
+    const responderUserId = activeResponder.userId;
+    // Handle both populated ObjectId (_id property) and direct ObjectId
+    const responderId = responderUserId?._id 
+      ? responderUserId._id.toString() 
+      : responderUserId?.toString() || String(responderUserId);
+    
+    const isActiveResponder = userIdStr === responderId || 
+      (responderUserId && responderUserId.toString() === userIdStr);
     
     // If user is NOT active responder, only view
     if (!isActiveResponder) {

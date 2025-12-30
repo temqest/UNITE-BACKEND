@@ -356,6 +356,16 @@ class EventRequestController {
       rescheduleProposal: request.rescheduleProposal,
       statusHistory: request.statusHistory || [],
       decisionHistory: request.decisionHistory || [],
+      activeResponder: request.activeResponder ? {
+        userId: request.activeResponder.userId?._id || request.activeResponder.userId,
+        relationship: request.activeResponder.relationship,
+        authority: request.activeResponder.authority
+      } : null,
+      lastAction: request.lastAction ? {
+        action: request.lastAction.action,
+        actorId: request.lastAction.actorId?._id || request.lastAction.actorId,
+        timestamp: request.lastAction.timestamp
+      } : null,
       createdAt: request.createdAt,
       updatedAt: request.updatedAt
     };

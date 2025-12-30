@@ -192,17 +192,25 @@ class RequestStateService {
       return null;
     }
 
-    // If activeResponder is already set, use it
+    // If activeResponder is already set, use it (but normalize userId)
     if (request.activeResponder && request.activeResponder.userId) {
-      return request.activeResponder;
+      // Normalize userId - handle both populated and non-populated ObjectId
+      const normalizedUserId = request.activeResponder.userId._id || request.activeResponder.userId;
+      return {
+        userId: normalizedUserId,
+        relationship: request.activeResponder.relationship,
+        authority: request.activeResponder.authority
+      };
     }
 
     // Determine active responder based on state
     if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
       // Initial state: reviewer is active responder
       if (request.reviewer && request.reviewer.userId) {
+        // Handle both populated and non-populated cases
+        const reviewerUserId = request.reviewer.userId._id || request.reviewer.userId;
         return {
-          userId: request.reviewer.userId,
+          userId: reviewerUserId,
           relationship: 'reviewer',
           authority: request.reviewer.authoritySnapshot || null
         };
@@ -220,16 +228,18 @@ class RequestStateService {
 
         // If last actor was requester, reviewer is now active responder
         if (lastActorId === requesterId && reviewerId) {
+          const reviewerUserId = request.reviewer.userId._id || request.reviewer.userId;
           return {
-            userId: request.reviewer.userId,
+            userId: reviewerUserId,
             relationship: 'reviewer',
             authority: request.reviewer.authoritySnapshot || null
           };
         }
         // If last actor was reviewer, requester is now active responder
         if (lastActorId === reviewerId && requesterId) {
+          const requesterUserId = request.requester.userId._id || request.requester.userId;
           return {
-            userId: request.requester.userId,
+            userId: requesterUserId,
             relationship: 'requester',
             authority: request.requester.authoritySnapshot || null
           };
@@ -244,16 +254,18 @@ class RequestStateService {
 
         // If requester proposed, reviewer is receiver
         if (proposerId === requesterId && reviewerId) {
+          const reviewerUserId = request.reviewer.userId._id || request.reviewer.userId;
           return {
-            userId: request.reviewer.userId,
+            userId: reviewerUserId,
             relationship: 'reviewer',
             authority: request.reviewer.authoritySnapshot || null
           };
         }
         // If reviewer proposed, requester is receiver
         if (proposerId === reviewerId && requesterId) {
+          const requesterUserId = request.requester.userId._id || request.requester.userId;
           return {
-            userId: request.requester.userId,
+            userId: requesterUserId,
             relationship: 'requester',
             authority: request.requester.authoritySnapshot || null
           };
@@ -262,8 +274,9 @@ class RequestStateService {
 
       // Default: if no lastAction, requester is receiver (reviewer initiated)
       if (request.requester && request.requester.userId) {
+        const requesterUserId = request.requester.userId._id || request.requester.userId;
         return {
-          userId: request.requester.userId,
+          userId: requesterUserId,
           relationship: 'requester',
           authority: request.requester.authoritySnapshot || null
         };
@@ -309,15 +322,17 @@ class RequestStateService {
     if (action === REQUEST_ACTIONS.RESCHEDULE) {
       if (isRequester && reviewerId) {
         // Requester rescheduled, reviewer becomes active responder
+        const reviewerUserId = request.reviewer.userId._id || request.reviewer.userId;
         request.activeResponder = {
-          userId: request.reviewer.userId,
+          userId: reviewerUserId,
           relationship: 'reviewer',
           authority: request.reviewer.authoritySnapshot || null
         };
       } else if (isReviewer && requesterId) {
         // Reviewer rescheduled, requester becomes active responder
+        const requesterUserId = request.requester.userId._id || request.requester.userId;
         request.activeResponder = {
-          userId: request.requester.userId,
+          userId: requesterUserId,
           relationship: 'requester',
           authority: request.requester.authoritySnapshot || null
         };
@@ -334,9 +349,10 @@ class RequestStateService {
     // For other actions, maintain current active responder or set based on state
     if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
       // Reviewer should be active responder
-      if (reviewerId) {
+      if (reviewerId && request.reviewer && request.reviewer.userId) {
+        const reviewerUserId = request.reviewer.userId._id || request.reviewer.userId;
         request.activeResponder = {
-          userId: request.reviewer.userId,
+          userId: reviewerUserId,
           relationship: 'reviewer',
           authority: request.reviewer.authoritySnapshot || null
         };
