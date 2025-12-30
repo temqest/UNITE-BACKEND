@@ -478,16 +478,23 @@ class EventRequestService {
       };
       
       // Map status counts to tab categories
+      // IMPORTANT: Check rejected FIRST (including review-rejected) before checking review/pending
+      // This ensures review-rejected is counted as rejected, not pending
       statusCountsResult.forEach(item => {
         const status = String(item._id || '').toLowerCase();
         statusCounts.all += item.count;
         
-        if (status.includes('approv') || status.includes('complete') || status.includes('review-accepted')) {
-          statusCounts.approved += item.count;
-        } else if (status.includes('pending') || status.includes('review') || status.includes('rescheduled')) {
-          statusCounts.pending += item.count;
-        } else if (status.includes('reject')) {
+        // Check rejected first (including review-rejected, review_rejected, rejected)
+        if (status.includes('reject') || status === 'review-rejected' || status === 'review_rejected') {
           statusCounts.rejected += item.count;
+        } 
+        // Check approved (including review-accepted, completed, approved)
+        else if (status.includes('approv') || status.includes('complete') || status.includes('review-accepted') || status === 'review_accepted') {
+          statusCounts.approved += item.count;
+        } 
+        // Check pending (pending-review, review-rescheduled, but NOT review-rejected or review-accepted)
+        else if (status.includes('pending') || (status.includes('review') && !status.includes('reject') && !status.includes('accept')) || status.includes('rescheduled')) {
+          statusCounts.pending += item.count;
         }
       });
       

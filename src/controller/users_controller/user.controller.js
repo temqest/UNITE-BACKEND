@@ -86,13 +86,29 @@ class UserController {
         });
       }
 
-      // Check if email already exists
-      const existingUser = await User.findOne({ email: userData.email });
-      if (existingUser) {
+      // Check if email already exists (only check active users)
+      // Inactive/deleted users can be recreated with the same email
+      const existingActiveUser = await User.findOne({ 
+        email: userData.email,
+        isActive: true 
+      });
+      if (existingActiveUser) {
         return res.status(400).json({
           success: false,
           message: 'Email already exists'
         });
+      }
+
+      // Check if there's an inactive user with this email
+      // If so, we'll delete it before creating the new one (allows email reuse)
+      const existingInactiveUser = await User.findOne({ 
+        email: userData.email,
+        isActive: false 
+      });
+      if (existingInactiveUser) {
+        // Delete the inactive user to free up the email
+        // This allows recreating stakeholders with the same email after deletion
+        await User.deleteOne({ _id: existingInactiveUser._id });
       }
 
       // Validation: For coordinator creation (non-stakeholder), require at least one role
@@ -743,6 +759,29 @@ class UserController {
         } catch (abortError) {
           console.error('[RBAC] createUser - Error aborting transaction:', abortError);
         }
+        
+        // Handle MongoDB duplicate key error (E11000) for email
+        // This can happen if an inactive user exists but wasn't caught in the pre-check
+        // or due to a race condition
+        if (transactionError.code === 11000 && transactionError.keyPattern && transactionError.keyPattern.email) {
+          // Check if there's an inactive user with this email (outside transaction)
+          const inactiveUser = await User.findOne({ 
+            email: userData.email,
+            isActive: false 
+          });
+          
+          if (inactiveUser) {
+            // Delete the inactive user to free up the email
+            await User.deleteOne({ _id: inactiveUser._id });
+            
+            // Create a custom error to indicate retry is needed
+            const retryError = new Error('Email was previously used by a deleted account. The inactive account has been removed. Please try creating the stakeholder again.');
+            retryError.code = 'EMAIL_RECYCLED';
+            retryError.retry = true;
+            throw retryError;
+          }
+        }
+        
         if (pageContext === 'stakeholder-management') {
           console.error('[STAKEHOLDER] Stakeholder creation failed:', transactionError.message);
         }
@@ -766,6 +805,36 @@ class UserController {
         data: userResponse
       });
     } catch (error) {
+      // Handle special case: email recycled from inactive user
+      if (error.code === 'EMAIL_RECYCLED') {
+        return res.status(400).json({
+          success: false,
+          message: error.message || 'Email was previously used. Please try again.',
+          code: 'EMAIL_RECYCLED',
+          retry: true
+        });
+      }
+      
+      // Handle MongoDB duplicate key error that wasn't caught in transaction
+      if (error.code === 11000 && error.keyPattern && error.keyPattern.email) {
+        // Check if there's an inactive user with this email
+        const inactiveUser = await User.findOne({ 
+          email: userData.email,
+          isActive: false 
+        });
+        
+        if (inactiveUser) {
+          // Delete the inactive user to free up the email
+          await User.deleteOne({ _id: inactiveUser._id });
+          return res.status(400).json({
+            success: false,
+            message: 'Email was previously used by a deleted account. The inactive account has been removed. Please try creating the stakeholder again.',
+            code: 'EMAIL_RECYCLED',
+            retry: true
+          });
+        }
+      }
+      
       console.error('[RBAC] createUser - Error:', error);
       // Error response - transaction already aborted in catch block
       return res.status(400).json({
@@ -1046,7 +1115,11 @@ class UserController {
 
       // Check email uniqueness if email is being updated
       if (email && email !== user.email) {
-        const existingUser = await User.findOne({ email: email }).session(session);
+        // Check email uniqueness (only check active users)
+        const existingUser = await User.findOne({ 
+          email: email,
+          isActive: true 
+        }).session(session);
         if (existingUser && existingUser._id.toString() !== user._id.toString()) {
           await session.abortTransaction();
           return res.status(400).json({
