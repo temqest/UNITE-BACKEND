@@ -574,59 +574,121 @@ const startServer = async () => {
       console.warn('⚠️  Failed to initialize S3 connectivity check:', err && err.message ? err.message : err);
     }
 
-    // Check AWS SES connectivity (non-blocking failures)
+    // Check email provider connectivity (non-blocking failures)
     try {
-      const emailService = require('./src/services/utility_services/email.service');
-      const { SESClient, GetSendQuotaCommand } = require('@aws-sdk/client-ses');
+      const providerFactory = require('./src/services/utility_services/providers/EmailProviderFactory');
+      const emailSender = (process.env.EMAIL_SENDER || '').toLowerCase().trim();
       
-      // Check if credentials are configured
-      if (!process.env.AWS_ACCESS_KEY_EMAIL_ID || !process.env.AWS_SECRET_ACCESS_KEY_EMAIL) {
-        console.warn('⚠️  AWS SES credentials not configured (AWS_ACCESS_KEY_EMAIL_ID or AWS_SECRET_ACCESS_KEY_EMAIL missing)');
-        console.warn('⚠️  Email sending will be disabled');
-      } else if (!process.env.EMAIL_USER) {
-        console.warn('⚠️  EMAIL_USER not configured; email sending will fail');
-      } else {
-        console.log('📧 Checking AWS SES connectivity...');
-        
-        // Create a test SES client
-        const testSESClient = new SESClient({
-          region: process.env.AWS_REGION || 'us-east-1',
-          credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_EMAIL_ID,
-            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY_EMAIL
-          }
-        });
+      // Determine which provider to test
+      const isAWS = emailSender === 'aws' || !emailSender;
+      const isBrevo = emailSender === 'brevo';
 
-        // Test connection by getting send quota (lightweight API call)
-        testSESClient.send(new GetSendQuotaCommand({}))
-          .then(result => {
-            console.log('✅ AWS SES connected successfully');
-            console.log(`   📊 Send Quota: ${result.Max24HourSend || 'N/A'} emails/day`);
-            console.log(`   📊 Send Rate: ${result.MaxSendRate || 'N/A'} emails/second`);
-            console.log(`   📊 Sent (24h): ${result.SentLast24Hours || 0} emails`);
-            console.log(`   📧 From Address: ${process.env.EMAIL_USER}`);
-            
-            // Check daily email limit configuration
-            const dailyLimit = process.env.DAILY_EMAIL_LIMIT;
-            if (dailyLimit) {
-              console.log(`   ⚙️  Daily Email Limit: ${dailyLimit} emails/day`);
-            } else {
-              console.warn('   ⚠️  DAILY_EMAIL_LIMIT not set; using default 200');
-            }
-          })
-          .catch(err => {
-            console.error('❌ AWS SES connection failed:', err.message || err.toString());
-            if (err.name === 'InvalidClientTokenId' || err.name === 'SignatureDoesNotMatch') {
-              console.error('   💡 Check your AWS_ACCESS_KEY_EMAIL_ID and AWS_SECRET_ACCESS_KEY_EMAIL credentials');
-            } else if (err.name === 'AccessDenied') {
-              console.error('   💡 AWS credentials lack SES permissions');
-            } else {
-              console.error('   💡 Verify AWS credentials and SES service availability');
+      if (isAWS) {
+        // Check AWS SES connectivity
+        const { SESClient, GetSendQuotaCommand } = require('@aws-sdk/client-ses');
+        
+        // Check if credentials are configured
+        if (!process.env.AWS_ACCESS_KEY_EMAIL_ID || !process.env.AWS_SECRET_ACCESS_KEY_EMAIL) {
+          console.warn('⚠️  AWS SES credentials not configured (AWS_ACCESS_KEY_EMAIL_ID or AWS_SECRET_ACCESS_KEY_EMAIL missing)');
+          console.warn('⚠️  Email sending will be disabled');
+        } else if (!process.env.EMAIL_USER) {
+          console.warn('⚠️  EMAIL_USER not configured; email sending will fail');
+        } else {
+          console.log('📧 Checking AWS SES connectivity...');
+          
+          // Create a test SES client
+          const testSESClient = new SESClient({
+            region: process.env.AWS_REGION || 'us-east-1',
+            credentials: {
+              accessKeyId: process.env.AWS_ACCESS_KEY_EMAIL_ID,
+              secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY_EMAIL
             }
           });
+
+          // Test connection by getting send quota (lightweight API call)
+          testSESClient.send(new GetSendQuotaCommand({}))
+            .then(result => {
+              console.log('✅ AWS SES connected successfully');
+              console.log(`   📊 Send Quota: ${result.Max24HourSend || 'N/A'} emails/day`);
+              console.log(`   📊 Send Rate: ${result.MaxSendRate || 'N/A'} emails/second`);
+              console.log(`   📊 Sent (24h): ${result.SentLast24Hours || 0} emails`);
+              console.log(`   📧 From Address: ${process.env.EMAIL_USER}`);
+              
+              // Check daily email limit configuration
+              const dailyLimit = process.env.DAILY_EMAIL_LIMIT;
+              if (dailyLimit) {
+                console.log(`   ⚙️  Daily Email Limit: ${dailyLimit} emails/day`);
+              } else {
+                console.warn('   ⚠️  DAILY_EMAIL_LIMIT not set; using default 200');
+              }
+            })
+            .catch(err => {
+              console.error('❌ AWS SES connection failed:', err.message || err.toString());
+              if (err.name === 'InvalidClientTokenId' || err.name === 'SignatureDoesNotMatch') {
+                console.error('   💡 Check your AWS_ACCESS_KEY_EMAIL_ID and AWS_SECRET_ACCESS_KEY_EMAIL credentials');
+              } else if (err.name === 'AccessDenied') {
+                console.error('   💡 AWS credentials lack SES permissions');
+              } else {
+                console.error('   💡 Verify AWS credentials and SES service availability');
+              }
+            });
+        }
+      } else if (isBrevo) {
+        // Check Brevo API connectivity
+        // Support multiple variable name formats for API key
+        const apiKey = process.env.BREVO_EMAIL_API ||
+                       process.env.BREVO_API_KEY ||
+                       process.env.BREVO_API ||
+                       process.env.Brevo_API;
+        
+        if (!apiKey) {
+          console.warn('⚠️  Brevo API key not configured');
+          console.warn('⚠️  Looking for: BREVO_EMAIL_API, BREVO_API_KEY, BREVO_API, or Brevo_API');
+          console.warn('⚠️  Email sending will be disabled');
+        } else if (!process.env.EMAIL_USER) {
+          console.warn('⚠️  EMAIL_USER not configured; email sending will fail');
+        } else {
+          console.log('📧 Checking Brevo API connectivity...');
+          
+          // Test API connection
+          fetch('https://api.brevo.com/v3/account', {
+            method: 'GET',
+            headers: {
+              'api-key': apiKey,
+              'Accept': 'application/json'
+            }
+          })
+            .then(async (response) => {
+              if (response.ok) {
+                console.log('✅ Brevo API connected successfully');
+                console.log(`   📧 API Base URL: https://api.brevo.com/v3`);
+                console.log(`   📧 From Address: ${process.env.EMAIL_USER}`);
+                
+                // Check daily email limit configuration
+                const dailyLimit = process.env.DAILY_EMAIL_LIMIT;
+                if (dailyLimit) {
+                  console.log(`   ⚙️  Daily Email Limit: ${dailyLimit} emails/day`);
+                } else {
+                  console.warn('   ⚠️  DAILY_EMAIL_LIMIT not set; using default 200');
+                }
+              } else if (response.status === 401) {
+                console.error('❌ Brevo API authentication failed: Invalid API key');
+                console.error('   💡 Check your BREVO_EMAIL_API, BREVO_API_KEY, BREVO_API, or Brevo_API key');
+              } else {
+                console.warn(`⚠️  Brevo API connection test returned status ${response.status}`);
+                console.warn('   💡 Email sending may still work. Please verify your API key.');
+              }
+            })
+            .catch(err => {
+              console.error('❌ Brevo API connection failed:', err.message || err.toString());
+              console.error('   💡 Check your network connectivity and API key');
+            });
+        }
+      } else {
+        console.warn(`⚠️  Invalid EMAIL_SENDER value: "${emailSender}". Falling back to AWS SES.`);
       }
     } catch (err) {
-      console.warn('⚠️  Failed to initialize AWS SES connectivity check:', err && err.message ? err.message : err);
+      console.warn('⚠️  Failed to initialize email provider connectivity check:', err && err.message ? err.message : err);
     }
 
     // Start listening

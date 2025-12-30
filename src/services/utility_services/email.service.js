@@ -1,27 +1,22 @@
-const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
 const { EmailDailyLimit } = require('../../models/index');
+const providerFactory = require('./providers/EmailProviderFactory');
 
 class EmailService {
   constructor() {
-    // Initialize AWS SES client
-    if (!process.env.AWS_ACCESS_KEY_EMAIL_ID || !process.env.AWS_SECRET_ACCESS_KEY_EMAIL) {
-      console.warn('[AWS SES] AWS credentials not found. Email sending will fail.');
+    this.provider = null;
+    this.providerName = null;
+  }
+
+  /**
+   * Get the email provider instance (lazy initialization)
+   * @returns {Promise<EmailProvider>}
+   */
+  async getProvider() {
+    if (!this.provider) {
+      this.provider = await providerFactory.getProvider();
+      this.providerName = providerFactory.getProviderName();
     }
-
-    this.sesClient = new SESClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_EMAIL_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY_EMAIL || ''
-      }
-    });
-
-    this.fromEmail = process.env.EMAIL_USER;
-    if (!this.fromEmail) {
-      console.warn('[AWS SES] EMAIL_USER not set. Email sending will fail.');
-    }
-
-    console.log('[AWS SES] AWS SES client initialized');
+    return this.provider;
   }
 
   /**
@@ -57,7 +52,8 @@ class EmailService {
         limit: dailyLimit
       };
     } catch (error) {
-      console.error('[AWS SES] Error checking daily limit:', error);
+      const providerName = this.providerName || 'EMAIL';
+      console.error(`[${providerName}] Error checking daily limit:`, error);
       // On error, allow sending (fail open)
       return {
         allowed: true,
@@ -67,26 +63,7 @@ class EmailService {
   }
 
   /**
-   * Handle AWS SES errors
-   * @param {Error} error - AWS SES error
-   * @throws {Error} Formatted error message
-   */
-  handleSESError(error) {
-    if (error.name === 'MessageRejected') {
-      throw new Error(`Email rejected: ${error.message}. Please verify sender and recipient addresses.`);
-    } else if (error.name === 'MailFromDomainNotVerifiedException') {
-      throw new Error(`Sender domain not verified in AWS SES: ${error.message}`);
-    } else if (error.name === 'Throttling' || error.name === 'ThrottlingException') {
-      throw new Error(`AWS SES rate limit exceeded: ${error.message}. Please try again later.`);
-    } else if (error.name === 'ServiceException' || error.name === 'ServiceUnavailableException') {
-      throw new Error(`AWS SES service error: ${error.message}. Please try again later.`);
-    } else {
-      throw new Error(`AWS SES error: ${error.message || error.toString()}`);
-    }
-  }
-
-  /**
-   * Send email via AWS SES
+   * Send email via active provider
    * @param {string} to - Recipient email address
    * @param {string} subject - Email subject
    * @param {string} text - Plain text content
@@ -102,45 +79,22 @@ class EmailService {
       throw error;
     }
 
-    if (!this.fromEmail) {
-      throw new Error('EMAIL_USER not configured. Cannot send email.');
-    }
+    // Get provider instance (this will set providerName)
+    const provider = await this.getProvider();
+    const providerName = this.providerName || provider.getProviderName() || 'EMAIL';
 
-    const params = {
-      Source: `"UNITE Blood Bank" <${this.fromEmail}>`,
-      Destination: {
-        ToAddresses: [to]
-      },
-      Message: {
-        Subject: {
-          Data: subject,
-          Charset: 'UTF-8'
-        },
-        Body: {
-          Text: {
-            Data: text,
-            Charset: 'UTF-8'
-          },
-          Html: {
-            Data: html,
-            Charset: 'UTF-8'
-          }
-        }
+    // Send email via provider
+    const result = await provider.sendEmail(to, subject, text, html);
+
+    if (!result.success) {
+      if (result.error) {
+        throw result.error;
       }
-    };
-
-    try {
-      const command = new SendEmailCommand(params);
-      const response = await this.sesClient.send(command);
-      
-      // Increment email count after successful send
-      await EmailDailyLimit.incrementCount();
-      
-      console.log(`[AWS SES] Email sent to ${to}. MessageId: ${response.MessageId}`);
-    } catch (error) {
-      console.error(`[AWS SES] Error sending email to ${to}:`, error);
-      this.handleSESError(error);
+      throw new Error('Failed to send email');
     }
+
+    // Increment email count after successful send
+    await EmailDailyLimit.incrementCount();
   }
 
   /**
@@ -191,10 +145,13 @@ unitehealth.tech`;
 
     try {
       await this.sendEmail(email, subject, text, html);
-      console.log(`[AWS SES] Verification email sent to ${email}`);
+      // Provider name is set after sendEmail calls getProvider()
+      const providerName = this.providerName || providerFactory.getProviderName() || 'EMAIL';
+      console.log(`[${providerName}] Verification email sent to ${email}`);
     } catch (error) {
+      const providerName = this.providerName || providerFactory.getProviderName() || 'EMAIL';
       if (error.name === 'DailyLimitExceeded') {
-        console.error(`[AWS SES] Failed to send verification email to ${email}: ${error.message}`);
+        console.error(`[${providerName}] Failed to send verification email to ${email}: ${error.message}`);
       }
       throw new Error('Failed to send verification email');
     }
@@ -248,10 +205,13 @@ unitehealth.tech`;
 
     try {
       await this.sendEmail(email, subject, text, html);
-      console.log(`[AWS SES] Password activation email sent to ${email}`);
+      // Provider name is set after sendEmail calls getProvider()
+      const providerName = this.providerName || providerFactory.getProviderName() || 'EMAIL';
+      console.log(`[${providerName}] Password activation email sent to ${email}`);
     } catch (error) {
+      const providerName = this.providerName || providerFactory.getProviderName() || 'EMAIL';
       if (error.name === 'DailyLimitExceeded') {
-        console.error(`[AWS SES] Failed to send password activation email to ${email}: ${error.message}`);
+        console.error(`[${providerName}] Failed to send password activation email to ${email}: ${error.message}`);
       }
       throw new Error('Failed to send password activation email');
     }
