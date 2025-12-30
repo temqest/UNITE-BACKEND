@@ -25,6 +25,13 @@ async function createIndexes() {
     await EventRequest.collection.createIndex({ Status: 1 });
     await EventRequest.collection.createIndex({ createdAt: 1 });
     await EventRequest.collection.createIndex({ coordinator_id: 1 });
+    // Composite indexes for performance optimization
+    await EventRequest.collection.createIndex({ status: 1, createdAt: -1 });
+    await EventRequest.collection.createIndex({ status: 1, district: 1 });
+    await EventRequest.collection.createIndex({ status: 1, province: 1 });
+    await EventRequest.collection.createIndex({ Category: 1, status: 1 });
+    await EventRequest.collection.createIndex({ 'requester.userId': 1, status: 1 });
+    await EventRequest.collection.createIndex({ 'reviewer.userId': 1, status: 1 });
     console.log('EventRequest indexes created');
 
     // Create indexes for Message

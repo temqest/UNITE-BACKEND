@@ -20,6 +20,7 @@ class ActionValidatorService {
       [REQUEST_ACTIONS.REJECT]: { resource: 'request', action: 'review' },
       [REQUEST_ACTIONS.RESCHEDULE]: { resource: 'request', action: 'reschedule' },
       [REQUEST_ACTIONS.CONFIRM]: { resource: 'request', action: 'confirm' },
+      [REQUEST_ACTIONS.DECLINE]: { resource: 'request', action: 'decline' },
       [REQUEST_ACTIONS.CANCEL]: { resource: 'request', action: 'cancel' },
       [REQUEST_ACTIONS.DELETE]: { resource: 'request', action: 'delete' },
       [REQUEST_ACTIONS.EDIT]: { resource: 'request', action: 'update' },
@@ -64,10 +65,53 @@ class ActionValidatorService {
 
       // 2. Special cases for requesters in review-rescheduled state
       const isRequester = this._isRequester(userId, request);
+      const normalizedState = RequestStateService.normalizeState(currentState);
       
-      // 2a. Prevent requesters from self-reviewing their own requests
+      // 2a. Special handling for review-rescheduled state: receivers can respond to reschedule proposals
+      // In review-rescheduled state, if requester is NOT the reschedule initiator, they're the receiver and can respond
+      if (isRequester && normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+        const rescheduleProposal = request.rescheduleProposal;
+        if (rescheduleProposal?.proposedBy) {
+          const proposedByUserId = rescheduleProposal.proposedBy.userId;
+          // Handle populated object or ObjectId/string
+          let proposerId = null;
+          if (proposedByUserId && typeof proposedByUserId === 'object' && proposedByUserId._id) {
+            proposerId = proposedByUserId._id.toString();
+          } else {
+            proposerId = proposedByUserId?.toString();
+          }
+          
+          const userIdStr = userId.toString();
+          const isRescheduleInitiator = proposerId === userIdStr;
+          
+          // If requester is NOT the initiator, they're the receiver and can respond to the reschedule proposal
+          // Allow accept, reject, confirm, decline, and reschedule (counter-propose)
+          if (!isRescheduleInitiator && [
+            REQUEST_ACTIONS.ACCEPT, 
+            REQUEST_ACTIONS.REJECT, 
+            REQUEST_ACTIONS.CONFIRM, 
+            REQUEST_ACTIONS.DECLINE,
+            REQUEST_ACTIONS.RESCHEDULE
+          ].includes(action)) {
+            // Receiver can respond to reschedule proposal - this is a special case
+            // Skip normal self-review restriction and allow them to proceed
+            // We'll still check authority hierarchy but allow even without request.review permission
+            // This enables turn-based reschedule negotiation
+          } else if (isRescheduleInitiator) {
+            // Initiator can only view - block all actions except view
+            if (action !== REQUEST_ACTIONS.VIEW) {
+              return {
+                valid: false,
+                reason: 'Reschedule initiator can only view the request'
+              };
+            }
+          }
+        }
+      }
+      
+      // 2b. Prevent requesters from self-reviewing their own requests (except in review-rescheduled state where handled above)
       // No one (admin, coordinator, or stakeholder) can approve, reject, reschedule, or edit their own requests
-      if (isRequester) {
+      if (isRequester && normalizedState !== REQUEST_STATES.REVIEW_RESCHEDULED) {
         const actor = await User.findById(userId).select('authority').lean();
         if (actor) {
           const actorAuthority = actor.authority || 20;
@@ -127,9 +171,64 @@ class ActionValidatorService {
       
       if (currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
         // Requester can reschedule (counter-reschedule) without reschedule permission
-        // BUT: Admins and coordinators cannot reschedule their own requests
+        // BUT: Admins and coordinators cannot reschedule their own requests UNLESS they're the receiver
         if (action === REQUEST_ACTIONS.RESCHEDULE && isRequester) {
-          // Check if requester is admin or coordinator - they cannot reschedule their own requests
+          // Check if requester is the receiver (not the initiator) - receivers can always counter-reschedule
+          const rescheduleProposal = request.rescheduleProposal;
+          let isReceiver = false;
+          if (rescheduleProposal?.proposedBy) {
+            const proposedByUserId = rescheduleProposal.proposedBy.userId;
+            let proposerId = null;
+            if (proposedByUserId && typeof proposedByUserId === 'object' && proposedByUserId._id) {
+              proposerId = proposedByUserId._id.toString();
+            } else {
+              proposerId = proposedByUserId?.toString();
+            }
+            const userIdStr = userId.toString();
+            const isRescheduleInitiator = proposerId === userIdStr;
+            isReceiver = !isRescheduleInitiator;
+          }
+          
+          // If requester is the receiver, allow reschedule (counter-propose)
+          if (isReceiver) {
+            const locationId = this._extractLocationId(request, context);
+            
+            // Requester receiver can counter-reschedule without reschedule permission
+            // Still need basic read permission
+            let hasReadPermission = false;
+            
+            if (locationId) {
+              hasReadPermission = await permissionService.checkPermission(
+                userId,
+                'request',
+                'read',
+                { locationId }
+              );
+            }
+            
+            // Fallback to system-level permission check
+            if (!hasReadPermission) {
+              hasReadPermission = await permissionService.checkPermission(
+                userId,
+                'request',
+                'read',
+                {}
+              );
+            }
+            
+            if (!hasReadPermission) {
+              return {
+                valid: false,
+                reason: 'User does not have request.read permission'
+              };
+            }
+            
+            // Skip authority hierarchy check for requester receiver counter-reschedule
+            return { valid: true };
+          }
+          
+          // If requester is the initiator (not receiver), check if they're admin/coordinator
+          // Admins and coordinators cannot reschedule their own requests when they're the initiator
           const actor = await User.findById(userId).select('authority').lean();
           if (actor) {
             const actorAuthority = actor.authority || 20;
@@ -147,6 +246,7 @@ class ActionValidatorService {
             }
           }
           
+          // For other requesters (stakeholders), allow counter-reschedule
           const locationId = this._extractLocationId(request, context);
           
           // Requester can counter-reschedule without reschedule permission
@@ -194,6 +294,34 @@ class ActionValidatorService {
         };
       }
 
+      // Special case: In review-rescheduled state, receivers (non-initiators) can respond to reschedule proposals
+      // even without explicit request.review permission - this enables turn-based reschedule negotiation
+      let isReceiverInRescheduleNegotiation = false;
+      if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED && isRequester) {
+        const rescheduleProposal = request.rescheduleProposal;
+        if (rescheduleProposal?.proposedBy) {
+          const proposedByUserId = rescheduleProposal.proposedBy.userId;
+          let proposerId = null;
+          if (proposedByUserId && typeof proposedByUserId === 'object' && proposedByUserId._id) {
+            proposerId = proposedByUserId._id.toString();
+          } else {
+            proposerId = proposedByUserId?.toString();
+          }
+          const userIdStr = userId.toString();
+          const isRescheduleInitiator = proposerId === userIdStr;
+          
+          // If requester is NOT the initiator, they're the receiver
+          if (!isRescheduleInitiator && [
+            REQUEST_ACTIONS.ACCEPT, 
+            REQUEST_ACTIONS.REJECT, 
+            REQUEST_ACTIONS.CONFIRM, 
+            REQUEST_ACTIONS.DECLINE
+          ].includes(action)) {
+            isReceiverInRescheduleNegotiation = true;
+          }
+        }
+      }
+
       const locationId = this._extractLocationId(request, context);
       
       // Check permission with location context first, then fallback to system-level
@@ -219,7 +347,9 @@ class ActionValidatorService {
         );
       }
 
-      if (!hasPermission) {
+      // If receiver in reschedule negotiation, allow even without explicit permission
+      // They still need to pass authority hierarchy check
+      if (!hasPermission && !isReceiverInRescheduleNegotiation) {
         return {
           valid: false,
           reason: `User does not have ${permission.resource}.${permission.action} permission`
@@ -227,16 +357,17 @@ class ActionValidatorService {
       }
 
       // 4. Check authority hierarchy for review actions
-      if ([REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.RESCHEDULE].includes(action)) {
+      // Note: CONFIRM and DECLINE are stakeholder equivalents of ACCEPT and REJECT
+      if ([REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.CONFIRM, REQUEST_ACTIONS.DECLINE, REQUEST_ACTIONS.RESCHEDULE].includes(action)) {
         const authorityCheck = await this._checkAuthorityHierarchy(userId, request);
         if (!authorityCheck.valid) {
           return authorityCheck;
         }
       }
 
-      // 5. Special checks for confirm action (for non-requesters only)
+      // 5. Special checks for confirm action
       // Note: Requester confirm handling is done earlier (section 2a) before permission check
-      if (action === REQUEST_ACTIONS.CONFIRM && !isRequester) {
+      if (action === REQUEST_ACTIONS.CONFIRM) {
         const normalizedState = RequestStateService.normalizeState(currentState);
         
         // Confirm is NOT allowed for cancelled, rejected, or review-rejected states
@@ -250,13 +381,56 @@ class ActionValidatorService {
           };
         }
         
-        // For non-requesters, check if user can review (has permission and authority)
-        const canReview = await this._canReview(userId, request, context);
-        if (!canReview) {
+        // For non-requesters in pending-review state, confirm is used by stakeholders as reviewer
+        // Check if user is assigned reviewer or can review
+        if (!isRequester && normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+          const isReviewer = this._isReviewer(userId, request);
+          const canReview = await this._canReview(userId, request, context);
+          
+          // Allow if user is assigned reviewer (especially coordinator-to-stakeholder) or can review
+          if (!isReviewer && !canReview) {
+            return {
+              valid: false,
+              reason: 'Only assigned reviewer or qualified reviewer can confirm'
+            };
+          }
+        } else if (!isRequester) {
+          // For other states (review-rescheduled, etc.), check if user can review
+          const canReview = await this._canReview(userId, request, context);
+          if (!canReview) {
+            return {
+              valid: false,
+              reason: 'Only requester or qualified reviewer can confirm'
+            };
+          }
+        }
+      }
+      
+      // 6. Special checks for decline action (stakeholder equivalent of reject)
+      if (action === REQUEST_ACTIONS.DECLINE) {
+        const normalizedState = RequestStateService.normalizeState(currentState);
+        
+        // Decline is NOT allowed for cancelled, rejected states
+        if (normalizedState === REQUEST_STATES.CANCELLED || 
+            normalizedState === REQUEST_STATES.REJECTED) {
           return {
             valid: false,
-            reason: 'Only requester or qualified reviewer can confirm'
+            reason: 'Decline action is not allowed for cancelled or rejected requests'
           };
+        }
+        
+        // For non-requesters, check if user is assigned reviewer or can review
+        if (!isRequester) {
+          const isReviewer = this._isReviewer(userId, request);
+          const canReview = await this._canReview(userId, request, context);
+          
+          // Allow if user is assigned reviewer (especially coordinator-to-stakeholder) or can review
+          if (!isReviewer && !canReview) {
+            return {
+              valid: false,
+              reason: 'Only assigned reviewer or qualified reviewer can decline'
+            };
+          }
         }
       }
 
@@ -301,6 +475,16 @@ class ActionValidatorService {
           actorAuthority >= AUTHORITY_TIERS.COORDINATOR && 
           actorAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
         // Admin/System Admin requests can be reviewed by coordinators
+        return { valid: true };
+      }
+
+      // Special case: Coordinator (60-79) requests reviewed by Stakeholder (30-59)
+      // This is the coordinator-to-stakeholder workflow - allow it
+      if (requesterAuthority >= AUTHORITY_TIERS.COORDINATOR && 
+          requesterAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN &&
+          actorAuthority >= AUTHORITY_TIERS.STAKEHOLDER && 
+          actorAuthority < AUTHORITY_TIERS.COORDINATOR) {
+        // Coordinator requests can be reviewed by stakeholders (explicit assignment)
         return { valid: true };
       }
 
@@ -364,6 +548,132 @@ class ActionValidatorService {
   }
 
   /**
+   * Get user authority level
+   * @private
+   * @param {string|ObjectId} userId - User ID
+   * @returns {Promise<number>} User authority level
+   */
+  async _getUserAuthority(userId) {
+    try {
+      const actor = await User.findById(userId).select('authority').lean();
+      return actor?.authority || AUTHORITY_TIERS.BASIC_USER;
+    } catch (error) {
+      console.error(`[ACTION VALIDATOR] Error getting user authority: ${error.message}`);
+      return AUTHORITY_TIERS.BASIC_USER;
+    }
+  }
+
+  /**
+   * Check if user can perform action on approved event
+   * Capability-based: checks ownership (requester/reviewer) + permissions
+   * @private
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} request - Request document
+   * @param {string} action - Action to check
+   * @param {Object} context - Context { locationId }
+   * @returns {Promise<boolean>} True if user can perform action
+   */
+  async _canPerformActionOnApprovedEvent(userId, request, action, context = {}) {
+    const isRequester = this._isRequester(userId, request);
+    const isReviewer = this._isReviewer(userId, request);
+    const locationId = this._extractLocationId(request, context);
+    
+    // Requesters and reviewers have special access to approved events they're involved in
+    if (isRequester || isReviewer) {
+      // Check permission for the specific action
+      const permission = this.ACTION_PERMISSIONS[action];
+      if (!permission) {
+        return false;
+      }
+      
+      // Check permission with location context
+      let hasPermission = false;
+      if (locationId) {
+        hasPermission = await permissionService.checkPermission(
+          userId,
+          permission.resource,
+          permission.action,
+          { locationId }
+        );
+      }
+      
+      // Fallback to system-level permission
+      if (!hasPermission) {
+        hasPermission = await permissionService.checkPermission(
+          userId,
+          permission.resource,
+          permission.action,
+          {}
+        );
+      }
+      
+      return hasPermission;
+    }
+    
+    // For other users, require explicit event permissions
+    // (This maintains security while allowing requesters/reviewers access)
+    return false;
+  }
+
+  /**
+   * Get reschedule negotiation actions for a user
+   * Both requester and reviewer get all negotiation actions
+   * @private
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} request - Request document
+   * @param {Object} context - Context { locationId }
+   * @returns {Promise<string[]>} Array of available negotiation actions
+   */
+  async _getRescheduleNegotiationActions(userId, request, context = {}) {
+    const actions = [REQUEST_ACTIONS.VIEW]; // Always include view
+    
+    const isRequester = this._isRequester(userId, request);
+    const isReviewer = this._isReviewer(userId, request);
+    
+    // Only requester and reviewer can participate in negotiation
+    if (!isRequester && !isReviewer) {
+      return actions;
+    }
+    
+    // Get user authority to determine action names
+    const userAuthority = await this._getUserAuthority(userId);
+    const isStakeholder = userAuthority >= AUTHORITY_TIERS.STAKEHOLDER && userAuthority < AUTHORITY_TIERS.COORDINATOR;
+    
+    // All negotiation participants get: approve, reject, reschedule
+    if (isStakeholder) {
+      // Stakeholders use confirm/decline
+      const confirmValidation = await this.validateAction(userId, REQUEST_ACTIONS.CONFIRM, request, context);
+      if (confirmValidation.valid) {
+        actions.push(REQUEST_ACTIONS.CONFIRM);
+      }
+      
+      const declineValidation = await this.validateAction(userId, REQUEST_ACTIONS.DECLINE, request, context);
+      if (declineValidation.valid) {
+        actions.push(REQUEST_ACTIONS.DECLINE);
+      }
+    } else {
+      // Coordinators/Admins use accept/reject
+      const acceptValidation = await this.validateAction(userId, REQUEST_ACTIONS.ACCEPT, request, context);
+      if (acceptValidation.valid) {
+        actions.push(REQUEST_ACTIONS.ACCEPT);
+      }
+      
+      const rejectValidation = await this.validateAction(userId, REQUEST_ACTIONS.REJECT, request, context);
+      if (rejectValidation.valid) {
+        actions.push(REQUEST_ACTIONS.REJECT);
+      }
+    }
+    
+    // Reschedule is available to all negotiation participants
+    const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
+    if (rescheduleValidation.valid) {
+      actions.push(REQUEST_ACTIONS.RESCHEDULE);
+    }
+    
+    return actions;
+  }
+
+  /**
    * Extract locationId from request or context, handling populated objects
    * @private
    * @param {Object} request - Request document
@@ -418,6 +728,31 @@ class ActionValidatorService {
   async _canReview(userId, request, context = {}) {
     try {
       const locationId = this._extractLocationId(request, context);
+      
+      // Special case: If user is the assigned reviewer with coordinator-to-stakeholder assignment,
+      // allow them to review even without request.review permission
+      // This handles the Coordinator→Stakeholder workflow where stakeholders are explicitly assigned
+      const isReviewer = this._isReviewer(userId, request);
+      const assignmentRule = request.reviewer?.assignmentRule;
+      
+      if (isReviewer && assignmentRule === 'coordinator-to-stakeholder') {
+        console.log(`[ACTION VALIDATOR] User ${userId} is assigned reviewer with coordinator-to-stakeholder rule, allowing review`);
+        // Still check authority hierarchy to ensure stakeholder can review coordinator request
+        const authorityCheck = await this._checkAuthorityHierarchy(userId, request);
+        if (authorityCheck.valid) {
+          return true;
+        } else {
+          console.warn(`[ACTION VALIDATOR] Assigned reviewer ${userId} failed authority check: ${authorityCheck.reason}`);
+          // For coordinator-to-stakeholder, we're more lenient - allow if stakeholder authority is reasonable
+          const actor = await User.findById(userId).select('authority').lean();
+          const requesterAuthority = request.requester?.authoritySnapshot || AUTHORITY_TIERS.BASIC_USER;
+          if (actor && actor.authority >= AUTHORITY_TIERS.STAKEHOLDER && requesterAuthority >= AUTHORITY_TIERS.COORDINATOR) {
+            // Stakeholder reviewing coordinator request - this is the intended workflow
+            console.log(`[ACTION VALIDATOR] Allowing stakeholder (${actor.authority}) to review coordinator (${requesterAuthority}) request via coordinator-to-stakeholder assignment`);
+            return true;
+          }
+        }
+      }
       
       // Check if user has request.review permission
       // Try with locationId first, then fallback to without locationId if location-scoped check fails
@@ -520,9 +855,10 @@ class ActionValidatorService {
     
     // Special handling for pending-review state
     // In permission-based system: ANY user with request.review permission + appropriate authority can review
-    // Not just the assigned reviewer
+    // OR assigned reviewer (especially for coordinator-to-stakeholder workflow)
     if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
       const isRequester = this._isRequester(userId, request);
+      const isReviewer = this._isReviewer(userId, request);
       const canReview = await this._canReview(userId, request, context);
       
       // Requester-specific actions
@@ -541,77 +877,33 @@ class ActionValidatorService {
       }
       
       // Review actions: ANY qualified reviewer can act (not just assigned reviewer)
-      if (canReview) {
-        // Check each review action
-        const acceptValidation = await this.validateAction(userId, REQUEST_ACTIONS.ACCEPT, request, context);
-        if (acceptValidation.valid) {
-          available.push(REQUEST_ACTIONS.ACCEPT);
+      // OR assigned reviewer (for coordinator-to-stakeholder workflow)
+      if (canReview || (isReviewer && request.reviewer?.assignmentRule === 'coordinator-to-stakeholder')) {
+        // Check if user is a stakeholder (authority 30-59) - they use confirm/decline instead of accept/reject
+        let isStakeholder = false;
+        try {
+          const actor = await User.findById(userId).select('authority').lean();
+          if (actor) {
+            const actorAuthority = actor.authority || 20;
+            isStakeholder = actorAuthority >= AUTHORITY_TIERS.STAKEHOLDER && actorAuthority < AUTHORITY_TIERS.COORDINATOR;
+          }
+        } catch (error) {
+          console.error(`[ACTION VALIDATOR] Error checking user authority: ${error.message}`);
         }
         
-        const rejectValidation = await this.validateAction(userId, REQUEST_ACTIONS.REJECT, request, context);
-        if (rejectValidation.valid) {
-          available.push(REQUEST_ACTIONS.REJECT);
-        }
-        
-        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
-        if (rescheduleValidation.valid) {
-          available.push(REQUEST_ACTIONS.RESCHEDULE);
-        }
-      }
-      
-      return available;
-    }
-    
-    // Special handling for review-rescheduled state (reschedule loop)
-    if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-      const userIdStr = userId.toString();
-      const isRequester = this._isRequester(userId, request);
-      const isReviewer = this._isReviewer(userId, request);
-      
-      // Check who proposed the reschedule
-      const rescheduleProposal = request.rescheduleProposal;
-      let proposerId = null;
-      
-      if (rescheduleProposal?.proposedBy) {
-        const proposedByUserId = rescheduleProposal.proposedBy.userId;
-        // Handle populated object (has _id property)
-        if (proposedByUserId && typeof proposedByUserId === 'object' && proposedByUserId._id) {
-          proposerId = proposedByUserId._id.toString();
+        if (isStakeholder) {
+          // Stakeholders use confirm/decline instead of accept/reject
+          const confirmValidation = await this.validateAction(userId, REQUEST_ACTIONS.CONFIRM, request, context);
+          if (confirmValidation.valid) {
+            available.push(REQUEST_ACTIONS.CONFIRM);
+          }
+          
+          const declineValidation = await this.validateAction(userId, REQUEST_ACTIONS.DECLINE, request, context);
+          if (declineValidation.valid) {
+            available.push(REQUEST_ACTIONS.DECLINE);
+          }
         } else {
-          // Handle ObjectId or string
-          proposerId = proposedByUserId?.toString() || rescheduleProposal.proposedBy.id?.toString();
-        }
-      }
-      
-      const isRescheduleProposer = proposerId === userIdStr;
-      
-      // If user is the one who proposed the reschedule, they can only view
-      // (they already made their move, waiting for the other party to respond)
-      if (isRescheduleProposer) {
-        return [REQUEST_ACTIONS.VIEW];
-      }
-      
-      // If user is NOT the proposer, they are the "other party" and can respond
-      // The response actions depend on whether they are the requester or reviewer:
-      // - Requester (stakeholder/admin): confirm, reschedule, view
-      // - Reviewer (coordinator): accept, reject, reschedule, view
-      
-      if (isRequester) {
-        // Requester (stakeholder or admin) can confirm or counter-reschedule
-        const confirmValidation = await this.validateAction(userId, REQUEST_ACTIONS.CONFIRM, request, context);
-        if (confirmValidation.valid) {
-          available.push(REQUEST_ACTIONS.CONFIRM);
-        }
-        
-        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
-        if (rescheduleValidation.valid) {
-          available.push(REQUEST_ACTIONS.RESCHEDULE);
-        }
-      } else {
-        // For review-rescheduled state, check if user can review (permission-based, not just assigned reviewer)
-        const canReview = await this._canReview(userId, request, context);
-        if (canReview) {
-          // Any qualified reviewer can accept, reject, or counter-reschedule
+          // Coordinators/Admins use accept/reject
           const acceptValidation = await this.validateAction(userId, REQUEST_ACTIONS.ACCEPT, request, context);
           if (acceptValidation.valid) {
             available.push(REQUEST_ACTIONS.ACCEPT);
@@ -621,84 +913,180 @@ class ActionValidatorService {
           if (rejectValidation.valid) {
             available.push(REQUEST_ACTIONS.REJECT);
           }
-          
-          const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
-          if (rescheduleValidation.valid) {
-            available.push(REQUEST_ACTIONS.RESCHEDULE);
-          }
+        }
+        
+        // Reschedule is available to all reviewers
+        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
+        if (rescheduleValidation.valid) {
+          available.push(REQUEST_ACTIONS.RESCHEDULE);
         }
       }
       
       return available;
     }
+    
+    // Special handling for review-rescheduled state (reschedule negotiation loop)
+    // Turn-based negotiation: Initiator gets view only, receiver gets all negotiation actions
+    if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+      const isRequester = this._isRequester(userId, request);
+      const isReviewer = this._isReviewer(userId, request);
+      
+      // Only requester and reviewer participate in reschedule negotiation
+      // Others can only view
+      if (!isRequester && !isReviewer) {
+        return available; // Only view
+      }
+      
+      // Check who initiated the reschedule
+      const rescheduleProposal = request.rescheduleProposal;
+      if (rescheduleProposal?.proposedBy) {
+        const proposedByUserId = rescheduleProposal.proposedBy.userId;
+        // Handle populated object or ObjectId/string
+        let proposerId = null;
+        if (proposedByUserId && typeof proposedByUserId === 'object' && proposedByUserId._id) {
+          proposerId = proposedByUserId._id.toString();
+        } else {
+          proposerId = proposedByUserId?.toString();
+        }
+        
+        const userIdStr = userId.toString();
+        const isRescheduleInitiator = proposerId === userIdStr;
+        
+        // Initiator gets view only
+        if (isRescheduleInitiator) {
+          return [REQUEST_ACTIONS.VIEW];
+        }
+      }
+      
+      // Receiver gets all negotiation actions
+      // Use helper method to get appropriate actions based on authority
+      const negotiationActions = await this._getRescheduleNegotiationActions(userId, request, context);
+      return negotiationActions;
+    }
 
     // Special handling for approved state
-    // Approved events allow: view, edit, manage-staff, reschedule, cancel (based on permissions)
+    // Approved events allow: view, edit, manage-staff, reschedule, cancel (based on capabilities)
+    // Capability-based: requesters and reviewers have special access based on ownership + permissions
     if (normalizedState === REQUEST_STATES.APPROVED) {
-      // Edit action - for approved events, check event.update permission (not request.update)
-      // Approved events are published, so they use event permissions
       const locationId = this._extractLocationId(request, context);
-      let canEditEvent = false;
+      const isRequester = this._isRequester(userId, request);
+      const isReviewer = this._isReviewer(userId, request);
       
-      if (locationId) {
-        canEditEvent = await permissionService.checkPermission(
-          userId,
-          'event',
-          'update',
-          { locationId }
-        );
-      }
-      
-      if (!canEditEvent) {
-        canEditEvent = await permissionService.checkPermission(
-          userId,
-          'event',
-          'update',
-          {} // Fallback to system-level permission
-        );
-      }
-      
-      if (canEditEvent) {
-        available.push(REQUEST_ACTIONS.EDIT);
-      }
-      
-      // Manage staff action - requires event.manage-staff permission
-      // Reuse locationId from above
-      let canManageStaff = false;
-      
-      if (locationId) {
-        canManageStaff = await permissionService.checkPermission(
-          userId,
-          'event',
-          'manage-staff',
-          { locationId }
-        );
-      }
-      
-      if (!canManageStaff) {
-        canManageStaff = await permissionService.checkPermission(
-          userId,
-          'event',
-          'manage-staff',
-          {} // Fallback to system-level permission
-        );
-      }
-      
-      if (canManageStaff) {
-        available.push('manage-staff');
-      }
-      
-      // Reschedule action - requires request.reschedule permission
-      // Note: Reschedule from approved state goes to review-rescheduled state
-      const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
-      if (rescheduleValidation.valid) {
-        available.push(REQUEST_ACTIONS.RESCHEDULE);
-      }
-      
-      // Cancel action - requires request.cancel permission
-      const cancelValidation = await this.validateAction(userId, REQUEST_ACTIONS.CANCEL, request, context);
-      if (cancelValidation.valid) {
-        available.push(REQUEST_ACTIONS.CANCEL);
+      // Requesters and reviewers have special access to approved events they're involved in
+      // Others need explicit event permissions
+      if (isRequester || isReviewer) {
+        // Edit action - check event.update permission
+        let canEditEvent = false;
+        if (locationId) {
+          canEditEvent = await permissionService.checkPermission(
+            userId,
+            'event',
+            'update',
+            { locationId }
+          );
+        }
+        if (!canEditEvent) {
+          canEditEvent = await permissionService.checkPermission(
+            userId,
+            'event',
+            'update',
+            {}
+          );
+        }
+        if (canEditEvent) {
+          available.push(REQUEST_ACTIONS.EDIT);
+        }
+        
+        // Manage staff action - check event.manage-staff permission
+        let canManageStaff = false;
+        if (locationId) {
+          canManageStaff = await permissionService.checkPermission(
+            userId,
+            'event',
+            'manage-staff',
+            { locationId }
+          );
+        }
+        if (!canManageStaff) {
+          canManageStaff = await permissionService.checkPermission(
+            userId,
+            'event',
+            'manage-staff',
+            {}
+          );
+        }
+        if (canManageStaff) {
+          available.push('manage-staff');
+        }
+        
+        // Reschedule action - check request.reschedule permission
+        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
+        if (rescheduleValidation.valid) {
+          available.push(REQUEST_ACTIONS.RESCHEDULE);
+        }
+        
+        // Cancel action - check request.cancel permission
+        const cancelValidation = await this.validateAction(userId, REQUEST_ACTIONS.CANCEL, request, context);
+        if (cancelValidation.valid) {
+          available.push(REQUEST_ACTIONS.CANCEL);
+        }
+      } else {
+        // For other users, require explicit event permissions
+        // Edit action
+        let canEditEvent = false;
+        if (locationId) {
+          canEditEvent = await permissionService.checkPermission(
+            userId,
+            'event',
+            'update',
+            { locationId }
+          );
+        }
+        if (!canEditEvent) {
+          canEditEvent = await permissionService.checkPermission(
+            userId,
+            'event',
+            'update',
+            {}
+          );
+        }
+        if (canEditEvent) {
+          available.push(REQUEST_ACTIONS.EDIT);
+        }
+        
+        // Manage staff action
+        let canManageStaff = false;
+        if (locationId) {
+          canManageStaff = await permissionService.checkPermission(
+            userId,
+            'event',
+            'manage-staff',
+            { locationId }
+          );
+        }
+        if (!canManageStaff) {
+          canManageStaff = await permissionService.checkPermission(
+            userId,
+            'event',
+            'manage-staff',
+            {}
+          );
+        }
+        if (canManageStaff) {
+          available.push('manage-staff');
+        }
+        
+        // Reschedule - others can reschedule if they have permission
+        const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
+        if (rescheduleValidation.valid) {
+          available.push(REQUEST_ACTIONS.RESCHEDULE);
+        }
+        
+        // Cancel - others typically can't cancel, but check permission
+        const cancelValidation = await this.validateAction(userId, REQUEST_ACTIONS.CANCEL, request, context);
+        if (cancelValidation.valid) {
+          available.push(REQUEST_ACTIONS.CANCEL);
+        }
       }
       
       return available;

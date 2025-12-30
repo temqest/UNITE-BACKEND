@@ -17,6 +17,7 @@ const {
   validateRequestId
 } = require('../validators/eventRequests_validators/eventRequest.validators');
 const { validateExecuteAction } = require('../validators/eventRequests_validators/requestAction.validators');
+const { cacheMiddleware, invalidateCache } = require('../middleware/cacheMiddleware');
 
 /**
  * @route   POST /api/event-requests
@@ -31,6 +32,11 @@ router.post(
   async (req, res, next) => {
     try {
       await eventRequestController.createEventRequest(req, res);
+      // Invalidate cache for this user's requests
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+      }
     } catch (error) {
       next(error);
     }
@@ -46,6 +52,7 @@ router.get(
   '/event-requests',
   authenticate,
   requirePermission('request', 'read'),
+  cacheMiddleware({ ttl: 30 * 1000, etag: true }), // 30 second cache for list
   async (req, res, next) => {
     try {
       await eventRequestController.getEventRequests(req, res);
@@ -65,6 +72,7 @@ router.get(
   authenticate,
   validateRequestId,
   validateRequestAccess,
+  cacheMiddleware({ ttl: 5 * 60 * 1000, etag: true }), // 5 minute cache for detail
   async (req, res, next) => {
     try {
       await eventRequestController.getEventRequestById(req, res);
@@ -87,6 +95,12 @@ router.put(
   async (req, res, next) => {
     try {
       await eventRequestController.updateEventRequest(req, res);
+      // Invalidate cache for this user's requests and the specific request
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+        invalidateCache(new RegExp(`event-requests/${req.params.requestId}`));
+      }
     } catch (error) {
       next(error);
     }
@@ -107,6 +121,12 @@ router.post(
   async (req, res, next) => {
     try {
       await eventRequestController.executeAction(req, res);
+      // Invalidate cache for this user's requests and the specific request
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+        invalidateCache(new RegExp(`event-requests/${req.params.requestId}`));
+      }
     } catch (error) {
       next(error);
     }
@@ -145,6 +165,12 @@ router.delete(
   async (req, res, next) => {
     try {
       await eventRequestController.cancelRequest(req, res);
+      // Invalidate cache for this user's requests and the specific request
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+        invalidateCache(new RegExp(`event-requests/${req.params.requestId}`));
+      }
     } catch (error) {
       next(error);
     }
@@ -164,6 +190,12 @@ router.delete(
   async (req, res, next) => {
     try {
       await eventRequestController.deleteRequest(req, res);
+      // Invalidate cache for this user's requests and the specific request
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+        invalidateCache(new RegExp(`event-requests/${req.params.requestId}`));
+      }
     } catch (error) {
       next(error);
     }

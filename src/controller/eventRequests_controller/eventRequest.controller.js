@@ -33,7 +33,8 @@ class EventRequestController {
       console.error('[EVENT REQUEST CONTROLLER] Create error:', error);
       res.status(400).json({
         success: false,
-        message: error.message || 'Failed to create event request'
+        message: error.message || 'Failed to create event request',
+        code: 'VALIDATION_ERROR'
       });
     }
   }
@@ -63,12 +64,15 @@ class EventRequestController {
         skip: parseInt(req.query.skip) || 0
       };
 
+      // Check if actions should be included (default: false for list views for performance)
+      const includeActions = req.query.includeActions === 'true' || req.query.includeActions === true;
+
       const result = await eventRequestService.getRequests(userId, filters);
       const { requests, totalCount, statusCounts } = result;
 
-      // Compute allowedActions for each request in parallel
+      // Format requests - skip allowedActions computation for list views unless explicitly requested
       const formattedRequests = await Promise.all(
-        requests.map(r => this._formatRequest(r, userId))
+        requests.map(r => this._formatRequest(r, includeActions ? userId : null))
       );
 
       res.status(200).json({
@@ -88,7 +92,8 @@ class EventRequestController {
       console.error('[EVENT REQUEST CONTROLLER] Get requests error:', error);
       res.status(500).json({
         success: false,
-        message: error.message || 'Failed to get event requests'
+        message: error.message || 'Failed to get event requests',
+        code: 'INTERNAL_ERROR'
       });
     }
   }
@@ -120,11 +125,14 @@ class EventRequestController {
       });
     } catch (error) {
       console.error('[EVENT REQUEST CONTROLLER] Get by ID error:', error);
-      const statusCode = error.message.includes('not found') ? 404 : 
-                        error.message.includes('permission') ? 403 : 500;
+      const statusCode = error.message?.includes('not found') ? 404 : 
+                        error.message?.includes('permission') ? 403 : 500;
+      const errorCode = statusCode === 404 ? 'NOT_FOUND' : 
+                       statusCode === 403 ? 'FORBIDDEN' : 'INTERNAL_ERROR';
       res.status(statusCode).json({
         success: false,
-        message: error.message || 'Failed to get event request'
+        message: error.message || 'Failed to get event request',
+        code: errorCode
       });
     }
   }
@@ -150,11 +158,14 @@ class EventRequestController {
       });
     } catch (error) {
       console.error('[EVENT REQUEST CONTROLLER] Update error:', error);
-      const statusCode = error.message.includes('not found') ? 404 : 
-                        error.message.includes('permission') ? 403 : 400;
+      const statusCode = error.message?.includes('not found') ? 404 : 
+                        error.message?.includes('permission') ? 403 : 400;
+      const errorCode = statusCode === 404 ? 'NOT_FOUND' : 
+                       statusCode === 403 ? 'FORBIDDEN' : 'VALIDATION_ERROR';
       res.status(statusCode).json({
         success: false,
-        message: error.message || 'Failed to update event request'
+        message: error.message || 'Failed to update event request',
+        code: errorCode
       });
     }
   }
@@ -187,11 +198,14 @@ class EventRequestController {
       });
     } catch (error) {
       console.error('[EVENT REQUEST CONTROLLER] Execute action error:', error);
-      const statusCode = error.message.includes('not found') ? 404 : 
-                        error.message.includes('permission') || error.message.includes('not valid') ? 403 : 400;
+      const statusCode = error.message?.includes('not found') ? 404 : 
+                        error.message?.includes('permission') || error.message?.includes('not valid') ? 403 : 400;
+      const errorCode = statusCode === 404 ? 'NOT_FOUND' : 
+                       statusCode === 403 ? 'FORBIDDEN' : 'ACTION_ERROR';
       res.status(statusCode).json({
         success: false,
-        message: error.message || 'Failed to execute action'
+        message: error.message || 'Failed to execute action',
+        code: errorCode
       });
     }
   }
@@ -243,11 +257,14 @@ class EventRequestController {
       });
     } catch (error) {
       console.error('[EVENT REQUEST CONTROLLER] Cancel error:', error);
-      const statusCode = error.message.includes('not found') ? 404 : 
-                        error.message.includes('permission') ? 403 : 400;
+      const statusCode = error.message?.includes('not found') ? 404 : 
+                        error.message?.includes('permission') ? 403 : 400;
+      const errorCode = statusCode === 404 ? 'NOT_FOUND' : 
+                       statusCode === 403 ? 'FORBIDDEN' : 'CANCEL_ERROR';
       res.status(statusCode).json({
         success: false,
-        message: error.message || 'Failed to cancel request'
+        message: error.message || 'Failed to cancel request',
+        code: errorCode
       });
     }
   }
@@ -269,11 +286,14 @@ class EventRequestController {
       });
     } catch (error) {
       console.error('[EVENT REQUEST CONTROLLER] Delete error:', error);
-      const statusCode = error.message.includes('not found') ? 404 : 
-                        error.message.includes('permission') ? 403 : 400;
+      const statusCode = error.message?.includes('not found') ? 404 : 
+                        error.message?.includes('permission') ? 403 : 400;
+      const errorCode = statusCode === 404 ? 'NOT_FOUND' : 
+                       statusCode === 403 ? 'FORBIDDEN' : 'DELETE_ERROR';
       res.status(statusCode).json({
         success: false,
-        message: error.message || 'Failed to delete request'
+        message: error.message || 'Failed to delete request',
+        code: errorCode
       });
     }
   }

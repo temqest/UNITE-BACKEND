@@ -53,7 +53,7 @@ const reviewerSchema = new mongoose.Schema({
   assignmentRule: { 
     type: String, 
     trim: true,
-    enum: ['stakeholder-to-coordinator', 'coordinator-to-admin', 'admin-to-coordinator', 'auto-assigned', 'manual']
+    enum: ['stakeholder-to-coordinator', 'coordinator-to-admin', 'coordinator-to-stakeholder', 'admin-to-coordinator', 'auto-assigned', 'manual']
   },
   overriddenAt: { 
     type: Date 
@@ -359,6 +359,10 @@ eventRequestSchema.index({ organizationId: 1, status: 1 });
 eventRequestSchema.index({ coverageAreaId: 1, status: 1 });
 eventRequestSchema.index({ municipalityId: 1, status: 1 });
 eventRequestSchema.index({ status: 1, createdAt: -1 });
+// Additional composite indexes for performance optimization
+eventRequestSchema.index({ status: 1, district: 1 });
+eventRequestSchema.index({ status: 1, province: 1 });
+eventRequestSchema.index({ Category: 1, status: 1 });
 
 // Pre-save hook to ensure authoritySnapshot is set
 eventRequestSchema.pre('save', function(next) {

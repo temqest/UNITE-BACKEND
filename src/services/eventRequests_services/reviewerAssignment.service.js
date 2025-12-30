@@ -15,7 +15,7 @@ class ReviewerAssignmentService {
   /**
    * Assign reviewer based on requester authority and routing rules
    * @param {string|ObjectId} requesterId - Requester user ID
-   * @param {Object} context - Context { locationId, organizationId, coverageAreaId }
+   * @param {Object} context - Context { locationId, organizationId, coverageAreaId, stakeholderId }
    * @returns {Promise<Object>} Reviewer assignment object
    */
   async assignReviewer(requesterId, context = {}) {
@@ -28,9 +28,92 @@ class ReviewerAssignmentService {
 
       const requesterAuthority = requester.authority || AUTHORITY_TIERS.BASIC_USER;
       const locationId = context.locationId || context.district || context.municipalityId;
+      const stakeholderId = context.stakeholderId || context.stakeholder_id || context.Stakeholder_ID || null;
 
       // Log initial assignment context
-      console.log(`[REVIEWER ASSIGNMENT] Starting assignment for requester ${requesterId} (authority: ${requesterAuthority}, locationId: ${locationId || 'null'})`);
+      console.log(`[REVIEWER ASSIGNMENT] Starting assignment for requester ${requesterId} (authority: ${requesterAuthority}, locationId: ${locationId || 'null'}, stakeholderId: ${stakeholderId || 'null'})`);
+
+      // 1.5. Special case: Coordinator (60-79) creating request WITH Stakeholder → assign Stakeholder as reviewer
+      if (requesterAuthority >= AUTHORITY_TIERS.COORDINATOR && 
+          requesterAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN && 
+          stakeholderId) {
+        console.log(`[REVIEWER ASSIGNMENT] Coordinator creating request with Stakeholder - attempting to assign Stakeholder as reviewer`, {
+          requesterId,
+          requesterAuthority,
+          stakeholderId,
+          locationId
+        });
+        
+        // Get stakeholder user
+        const stakeholder = await this._getUser(stakeholderId);
+        if (!stakeholder) {
+          console.warn(`[REVIEWER ASSIGNMENT] Stakeholder ${stakeholderId} not found, falling back to auto-assignment`);
+          // Fall through to normal assignment logic
+        } else {
+          const stakeholderAuthority = stakeholder.authority || AUTHORITY_TIERS.BASIC_USER;
+          console.log(`[REVIEWER ASSIGNMENT] Found stakeholder:`, {
+            stakeholderId: stakeholder._id,
+            name: `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim(),
+            authority: stakeholderAuthority,
+            expectedRange: `${AUTHORITY_TIERS.STAKEHOLDER}-${AUTHORITY_TIERS.COORDINATOR - 1}`
+          });
+          
+          // Validate stakeholder is not the requester
+          const requesterIdStr = requester._id?.toString() || requesterId?.toString();
+          const stakeholderIdStr = stakeholder._id?.toString();
+          if (requesterIdStr === stakeholderIdStr) {
+            console.warn(`[REVIEWER ASSIGNMENT] Stakeholder ${stakeholderId} is the same as requester, falling back to auto-assignment`);
+            // Fall through to normal assignment logic
+          } else if (stakeholderAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+            // More lenient: assign if authority < 80 (not an admin)
+            // This handles cases where stakeholder might have coordinator-level authority but is still the intended reviewer
+            // Validate stakeholder has request.review permission
+            const hasReviewPermission = await permissionService.checkPermission(
+              stakeholder._id,
+              'request',
+              'review',
+              locationId ? { locationId } : {}
+            );
+            
+            console.log(`[REVIEWER ASSIGNMENT] Stakeholder permission check:`, {
+              stakeholderId: stakeholder._id,
+              hasReviewPermission,
+              locationId
+            });
+            
+            if (!hasReviewPermission) {
+              // Try global permission check
+              const hasGlobalPermission = await permissionService.checkPermission(
+                stakeholder._id,
+                'request',
+                'review',
+                {}
+              );
+              
+              console.log(`[REVIEWER ASSIGNMENT] Stakeholder global permission check:`, {
+                stakeholderId: stakeholder._id,
+                hasGlobalPermission
+              });
+              
+              if (!hasGlobalPermission) {
+                console.warn(`[REVIEWER ASSIGNMENT] Stakeholder ${stakeholderId} does not have request.review permission, but assigning anyway (Coordinator→Stakeholder workflow)`);
+                // Still assign them - Coordinator explicitly selected this stakeholder
+                // They'll need the permission to actually review, but we assign them as reviewer
+                return await this._formatReviewer(stakeholder, 'coordinator-to-stakeholder');
+              } else {
+                console.log(`[REVIEWER ASSIGNMENT] Assigning Stakeholder ${stakeholderId} as reviewer (has global request.review permission)`);
+                return await this._formatReviewer(stakeholder, 'coordinator-to-stakeholder');
+              }
+            } else {
+              console.log(`[REVIEWER ASSIGNMENT] Assigning Stakeholder ${stakeholderId} as reviewer (has request.review permission)`);
+              return await this._formatReviewer(stakeholder, 'coordinator-to-stakeholder');
+            }
+          } else {
+            console.warn(`[REVIEWER ASSIGNMENT] Stakeholder ${stakeholderId} has authority ${stakeholderAuthority} (>= ${AUTHORITY_TIERS.COORDINATOR}), not assigning as stakeholder reviewer. Falling back to auto-assignment`);
+            // Fall through to normal assignment logic
+          }
+        }
+      }
 
       // 2. Determine target reviewer authority tier based on routing rules
       let targetAuthorityMin = AUTHORITY_TIERS.BASIC_USER;

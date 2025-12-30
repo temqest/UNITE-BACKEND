@@ -4,6 +4,7 @@
  * Core business logic for event requests
  */
 
+const mongoose = require('mongoose');
 const EventRequest = require('../../models/eventRequests_models/eventRequest.model');
 const { Event } = require('../../models/index');
 const { User } = require('../../models/index');
@@ -107,7 +108,16 @@ class EventRequestService {
         }
       }
 
-      // 4. Assign reviewer based on requester authority
+      // 4. Extract stakeholderId from requestData (check multiple possible field names)
+      const stakeholderId = requestData.stakeholderId || 
+                            requestData.stakeholderReference?.userId || 
+                            requestData.stakeholder_id || 
+                            requestData.Stakeholder_ID || 
+                            requestData.MadeByStakeholderID || 
+                            null;
+      const stakeholderPresent = !!stakeholderId;
+
+      // 5. Assign reviewer based on requester authority
       // If admin (authority >= 80) provides coordinatorId, use it instead of auto-assignment
       let reviewer;
       const { AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
@@ -166,15 +176,33 @@ class EventRequestService {
         
         console.log(`[EVENT REQUEST SERVICE] Admin ${requesterId} manually selected coordinator ${selectedCoordinatorId} for request`);
       } else {
-        // Use existing auto-assignment logic
+        // Use existing auto-assignment logic (will handle Coordinator→Stakeholder case if stakeholderId provided)
         reviewer = await reviewerAssignmentService.assignReviewer(requesterId, {
           locationId: finalDistrict || finalMunicipalityId,
           organizationId: requestData.organizationId,
-          coverageAreaId: requestData.coverageAreaId
+          coverageAreaId: requestData.coverageAreaId,
+          stakeholderId: stakeholderId
         });
       }
 
-      // 5. Create request document with all event details
+      // 6. Prepare stakeholder reference if stakeholderId is provided
+      let stakeholderReference = null;
+      if (stakeholderId) {
+        try {
+          const stakeholder = await User.findById(stakeholderId) || await User.findByLegacyId(stakeholderId);
+          if (stakeholder) {
+            stakeholderReference = {
+              userId: stakeholder._id,
+              id: stakeholderId.toString(), // Legacy ID fallback
+              relationshipType: 'participant' // Default relationship type
+            };
+          }
+        } catch (error) {
+          console.warn(`[EVENT REQUEST SERVICE] Could not resolve stakeholder ${stakeholderId}: ${error.message}`);
+        }
+      }
+
+      // 7. Create request document with all event details
       const request = new EventRequest({
         Request_ID: this.generateRequestId(),
         Event_ID: requestData.Event_ID,
@@ -185,6 +213,8 @@ class EventRequestService {
           authoritySnapshot: requester.authority || 20
         },
         reviewer: reviewer,
+        stakeholderReference: stakeholderReference,
+        stakeholderPresent: stakeholderPresent,
         organizationId: requestData.organizationId,
         coverageAreaId: requestData.coverageAreaId,
         municipalityId: finalMunicipalityId,
@@ -212,7 +242,7 @@ class EventRequestService {
         notes: requestData.notes
       });
 
-      // 6. Add initial status history
+      // 8. Add initial status history
       request.addStatusHistory(REQUEST_STATES.PENDING_REVIEW, {
         userId: requester._id,
         name: `${requester.firstName || ''} ${requester.lastName || ''}`.trim() || requester.email,
@@ -223,7 +253,7 @@ class EventRequestService {
       // 7. Save request
       await request.save();
 
-      // 8. Trigger notification for reviewer
+      // 10. Trigger notification for reviewer
       try {
         await notificationEngine.notifyRequestCreated(request);
       } catch (notificationError) {
@@ -310,7 +340,7 @@ class EventRequestService {
       if (!isSystemAdmin) {
         // Non-admin users can only see:
         // 1. Requests they created
-        // 2. Requests assigned to them as reviewer
+        // 2. Requests assigned to them as reviewer (regardless of permissions - if assigned, they should see it)
         // 3. Requests in their jurisdiction (if they have review permission)
         
         const canReview = await permissionService.checkPermission(
@@ -320,18 +350,20 @@ class EventRequestService {
           {}
         );
 
-        if (canReview) {
-          // Reviewer can see requests in their jurisdiction
-          // This will be filtered by location/coverage in the query
-          // For now, include requests where user is reviewer
-          query.$or = [
-            { 'requester.userId': userId },
-            { 'reviewer.userId': userId }
-          ];
-        } else {
-          // Non-reviewer can only see their own requests
-          query['requester.userId'] = userId;
-        }
+        // Convert userId to ObjectId for proper comparison in aggregation
+        const userIdObjectId = mongoose.Types.ObjectId.isValid(userId) 
+          ? new mongoose.Types.ObjectId(userId) 
+          : userId;
+
+        // Always include requests where user is reviewer, even if they don't have review permission
+        // This handles cases where stakeholders are assigned as reviewers
+        query.$or = [
+          { 'requester.userId': userIdObjectId },
+          { 'reviewer.userId': userIdObjectId }
+        ];
+
+        // If user has review permission, they can also see requests in their jurisdiction
+        // (This is handled by location filters below, but we keep the $or structure)
       }
 
       // Apply additional filters
@@ -458,18 +490,162 @@ class EventRequestService {
         }
       }
 
-      // Calculate status counts using aggregation before pagination
-      const statusCountsPipeline = [
+      // Optimized: Use single aggregation pipeline with $facet to get counts and results in one query
+      const limit = filters.limit || 100;
+      const skip = filters.skip || 0;
+      
+      const aggregationPipeline = [
         { $match: query },
         {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 }
+          $facet: {
+            // Get status counts
+            statusCounts: [
+              {
+                $group: {
+                  _id: '$status',
+                  count: { $sum: 1 }
+                }
+              }
+            ],
+            // Get total count
+            totalCount: [
+              { $count: 'count' }
+            ],
+            // Get paginated results with populated references
+            requests: [
+              { $sort: { createdAt: -1 } },
+              { $skip: skip },
+              { $limit: limit },
+              // Populate requester.userId
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'requester.userId',
+                  foreignField: '_id',
+                  as: 'requesterUser',
+                  pipeline: [
+                    { $project: { firstName: 1, lastName: 1, email: 1 } }
+                  ]
+                }
+              },
+              {
+                $addFields: {
+                  'requester.userId': {
+                    $cond: {
+                      if: { $gt: [{ $size: '$requesterUser' }, 0] },
+                      then: { $arrayElemAt: ['$requesterUser', 0] },
+                      else: '$requester.userId'
+                    }
+                  }
+                }
+              },
+              { $unset: 'requesterUser' },
+              // Populate reviewer.userId
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'reviewer.userId',
+                  foreignField: '_id',
+                  as: 'reviewerUser',
+                  pipeline: [
+                    { $project: { firstName: 1, lastName: 1, email: 1 } }
+                  ]
+                }
+              },
+              {
+                $addFields: {
+                  'reviewer.userId': {
+                    $cond: {
+                      if: { $gt: [{ $size: '$reviewerUser' }, 0] },
+                      then: { $arrayElemAt: ['$reviewerUser', 0] },
+                      else: '$reviewer.userId'
+                    }
+                  }
+                }
+              },
+              { $unset: 'reviewerUser' },
+              // Populate province
+              {
+                $lookup: {
+                  from: 'locations',
+                  localField: 'province',
+                  foreignField: '_id',
+                  as: 'provinceData',
+                  pipeline: [
+                    { $project: { name: 1, code: 1, type: 1 } }
+                  ]
+                }
+              },
+              {
+                $addFields: {
+                  province: {
+                    $cond: {
+                      if: { $gt: [{ $size: '$provinceData' }, 0] },
+                      then: { $arrayElemAt: ['$provinceData', 0] },
+                      else: '$province'
+                    }
+                  }
+                }
+              },
+              { $unset: 'provinceData' },
+              // Populate district
+              {
+                $lookup: {
+                  from: 'locations',
+                  localField: 'district',
+                  foreignField: '_id',
+                  as: 'districtData',
+                  pipeline: [
+                    { $project: { name: 1, code: 1, type: 1, province: 1 } }
+                  ]
+                }
+              },
+              {
+                $addFields: {
+                  district: {
+                    $cond: {
+                      if: { $gt: [{ $size: '$districtData' }, 0] },
+                      then: { $arrayElemAt: ['$districtData', 0] },
+                      else: '$district'
+                    }
+                  }
+                }
+              },
+              { $unset: 'districtData' },
+              // Populate municipalityId
+              {
+                $lookup: {
+                  from: 'locations',
+                  localField: 'municipalityId',
+                  foreignField: '_id',
+                  as: 'municipalityData',
+                  pipeline: [
+                    { $project: { name: 1, code: 1, type: 1, district: 1, province: 1 } }
+                  ]
+                }
+              },
+              {
+                $addFields: {
+                  municipalityId: {
+                    $cond: {
+                      if: { $gt: [{ $size: '$municipalityData' }, 0] },
+                      then: { $arrayElemAt: ['$municipalityData', 0] },
+                      else: '$municipalityId'
+                    }
+                  }
+                }
+              },
+              { $unset: 'municipalityData' }
+            ]
           }
         }
       ];
       
-      const statusCountsResult = await EventRequest.aggregate(statusCountsPipeline);
+      const aggregationResult = await EventRequest.aggregate(aggregationPipeline);
+      const result = aggregationResult[0] || {};
+      
+      // Process status counts
+      const statusCountsResult = result.statusCounts || [];
       const statusCounts = {
         all: 0,
         approved: 0,
@@ -498,22 +674,14 @@ class EventRequestService {
         }
       });
       
-      // Set all count to total count
-      statusCounts.all = statusCounts.all || 0;
-
-      // Get total count before pagination
-      const totalCount = await EventRequest.countDocuments(query);
-
-      // Apply pagination
-      const requests = await EventRequest.find(query)
-        .populate('requester.userId', 'firstName lastName email')
-        .populate('reviewer.userId', 'firstName lastName email')
-        .populate('province', 'name code type')
-        .populate('district', 'name code type province')
-        .populate('municipalityId', 'name code type district province')
-        .sort({ createdAt: -1 })
-        .limit(filters.limit || 100)
-        .skip(filters.skip || 0);
+      // Get total count from aggregation result
+      const totalCount = result.totalCount?.[0]?.count || 0;
+      statusCounts.all = totalCount || statusCounts.all;
+      
+      // Get requests from aggregation result
+      // Aggregation returns plain objects, which is fine for our use case
+      // The controller will format them appropriately
+      const requests = result.requests || [];
 
       return { requests, totalCount, statusCounts };
     } catch (error) {
@@ -827,6 +995,23 @@ class EventRequestService {
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
         request.addDecisionHistory('reject', actorSnapshot, actionData.notes || '');
+      } else if (action === REQUEST_ACTIONS.CONFIRM) {
+        request.status = nextState;
+        // CONFIRM from pending-review or review-rescheduled is equivalent to ACCEPT - add decision history as accept
+        if (currentState === REQUEST_STATES.PENDING_REVIEW || currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+          request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
+        }
+        
+        // Auto-publish event if approved (from pending-review, review-accepted, or review-rescheduled)
+        if (nextState === REQUEST_STATES.APPROVED) {
+          await eventPublisherService.publishEvent(request, actorSnapshot);
+        }
+      } else if (action === REQUEST_ACTIONS.DECLINE) {
+        request.status = nextState;
+        // DECLINE from pending-review or review-rescheduled is equivalent to REJECT - add decision history as reject
+        if (currentState === REQUEST_STATES.PENDING_REVIEW || currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+          request.addDecisionHistory('reject', actorSnapshot, actionData.notes || '');
+        }
       } else if (action === REQUEST_ACTIONS.RESCHEDULE) {
         request.status = nextState;
         request.rescheduleProposal = {
@@ -842,13 +1027,6 @@ class EventRequestService {
           proposedStartTime: actionData.proposedStartTime,
           proposedEndTime: actionData.proposedEndTime
         });
-      } else if (action === REQUEST_ACTIONS.CONFIRM) {
-        request.status = nextState;
-        
-        // Auto-publish event if approved (from review-accepted or review-rescheduled)
-        if (nextState === REQUEST_STATES.APPROVED) {
-          await eventPublisherService.publishEvent(request, actorSnapshot);
-        }
       } else if (action === REQUEST_ACTIONS.CANCEL) {
         request.status = nextState;
         
@@ -878,38 +1056,57 @@ class EventRequestService {
       // 6. Add status history
       request.addStatusHistory(nextState, actorSnapshot, actionData.notes || '');
 
-      // 7. Save request
+      // 7. Save request and verify save completed
       await request.save();
-
-      // 8. Trigger notifications for state changes
-      try {
-        // Prepare action data for notification
-        const notificationActionData = {
-          notes: actionData.notes || null,
-          proposedDate: actionData.proposedDate || null,
-          originalDate: originalEventDate
-        };
-
-        await notificationEngine.notifyRequestStateChange(
-          request,
-          action,
-          actorSnapshot,
-          notificationActionData
-        );
-
-        // Note: Event published notification is already triggered in eventPublisherService.publishEvent()
-        // No need to trigger it again here to avoid duplicates
-      } catch (notificationError) {
-        console.error(`[EVENT REQUEST SERVICE] Error sending notification: ${notificationError.message}`);
-        // Don't fail action execution if notification fails
+      
+      // Verify save completed by re-fetching the request
+      const savedRequest = await EventRequest.findOne({ Request_ID: requestId });
+      if (!savedRequest) {
+        throw new Error('Request save verification failed - request not found after save');
+      }
+      
+      // Verify status was updated correctly
+      if (savedRequest.status !== nextState) {
+        console.warn(`[EVENT REQUEST SERVICE] Request status mismatch after save. Expected: ${nextState}, Got: ${savedRequest.status}`);
+        // Re-fetch to ensure we have latest data
+        await savedRequest.populate('province', 'name code type');
+        await savedRequest.populate('district', 'name code type province');
+        await savedRequest.populate('municipalityId', 'name code type district province');
+        return savedRequest;
       }
 
-      // Re-populate location references before returning
-      await request.populate('province', 'name code type');
-      await request.populate('district', 'name code type province');
-      await request.populate('municipalityId', 'name code type district province');
+      // 8. Trigger notifications for state changes (non-blocking)
+      // Use setImmediate to ensure response is sent before notifications complete
+      setImmediate(async () => {
+        try {
+          // Prepare action data for notification
+          const notificationActionData = {
+            notes: actionData.notes || null,
+            proposedDate: actionData.proposedDate || null,
+            originalDate: originalEventDate
+          };
 
-      return request;
+          await notificationEngine.notifyRequestStateChange(
+            savedRequest,
+            action,
+            actorSnapshot,
+            notificationActionData
+          );
+
+          // Note: Event published notification is already triggered in eventPublisherService.publishEvent()
+          // No need to trigger it again here to avoid duplicates
+        } catch (notificationError) {
+          console.error(`[EVENT REQUEST SERVICE] Error sending notification: ${notificationError.message}`);
+          // Don't fail action execution if notification fails
+        }
+      });
+
+      // Re-populate location references before returning
+      await savedRequest.populate('province', 'name code type');
+      await savedRequest.populate('district', 'name code type province');
+      await savedRequest.populate('municipalityId', 'name code type district province');
+
+      return savedRequest;
     } catch (error) {
       console.error(`[EVENT REQUEST SERVICE] Error executing action: ${error.message}`);
       throw new Error(`Failed to execute action: ${error.message}`);
