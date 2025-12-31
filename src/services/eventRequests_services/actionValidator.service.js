@@ -38,8 +38,20 @@ class ActionValidatorService {
    */
   async validateAction(userId, action, request, context = {}) {
     try {
+      // Ensure request is a plain object to avoid circular reference issues
+      // If it's a Mongoose document, convert to plain object
+      let requestObj = request;
+      if (request && typeof request.toObject === 'function') {
+        try {
+          requestObj = request.toObject({ virtuals: false, getters: false });
+        } catch (e) {
+          // If toObject fails, try to work with the document directly
+          requestObj = request;
+        }
+      }
+
       // 1. Check if action is valid for current state
-      const currentState = request.status || request.Status;
+      const currentState = requestObj.status || requestObj.Status;
       
       // Edit action doesn't change state - it's allowed on approved/pending requests
       // Skip transition check for edit action
@@ -64,12 +76,12 @@ class ActionValidatorService {
       }
 
       // 2. Check if user is active responder (simplified reschedule logic using lastAction)
-      const isRequester = this._isRequester(userId, request);
+      const isRequester = this._isRequester(userId, requestObj);
       const normalizedState = RequestStateService.normalizeState(currentState);
       
       // In review-rescheduled state, use active responder logic
       if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-        const activeResponder = RequestStateService.getActiveResponder(request);
+        const activeResponder = RequestStateService.getActiveResponder(requestObj);
         if (activeResponder && activeResponder.userId) {
           const userIdStr = userId.toString();
           const responderId = activeResponder.userId.toString();
@@ -173,24 +185,69 @@ class ActionValidatorService {
       // Check permission with location context first, then fallback to system-level
       let hasPermission = false;
       
-      if (locationId) {
-        hasPermission = await permissionService.checkPermission(
-          userId,
-          permission.resource,
-          permission.action,
-          { locationId }
-        );
-      }
-      
-      // If location-scoped check failed or no locationId, try without location scope
-      // This allows system-level permissions to work even if location doesn't match
-      if (!hasPermission) {
-        hasPermission = await permissionService.checkPermission(
-          userId,
-          permission.resource,
-          permission.action,
-          {} // No location context - check for system-level permissions
-        );
+      // Special handling for REJECT action: accept both request.review and request.decline permissions
+      // Coordinators typically have request.review, stakeholders have request.decline
+      if (action === REQUEST_ACTIONS.REJECT) {
+        // Try request.review first (for coordinators)
+        if (locationId) {
+          hasPermission = await permissionService.checkPermission(
+            userId,
+            permission.resource,
+            permission.action,
+            { locationId }
+          );
+        }
+        
+        if (!hasPermission) {
+          hasPermission = await permissionService.checkPermission(
+            userId,
+            permission.resource,
+            permission.action,
+            {} // No location context - check for system-level permissions
+          );
+        }
+        
+        // If request.review not found, try request.decline (for stakeholders)
+        if (!hasPermission) {
+          if (locationId) {
+            hasPermission = await permissionService.checkPermission(
+              userId,
+              'request',
+              'decline',
+              { locationId }
+            );
+          }
+          
+          if (!hasPermission) {
+            hasPermission = await permissionService.checkPermission(
+              userId,
+              'request',
+              'decline',
+              {} // No location context - check for system-level permissions
+            );
+          }
+        }
+      } else {
+        // For other actions, use standard permission check
+        if (locationId) {
+          hasPermission = await permissionService.checkPermission(
+            userId,
+            permission.resource,
+            permission.action,
+            { locationId }
+          );
+        }
+        
+        // If location-scoped check failed or no locationId, try without location scope
+        // This allows system-level permissions to work even if location doesn't match
+        if (!hasPermission) {
+          hasPermission = await permissionService.checkPermission(
+            userId,
+            permission.resource,
+            permission.action,
+            {} // No location context - check for system-level permissions
+          );
+        }
       }
 
       // If receiver in reschedule negotiation, allow even without explicit permission
@@ -198,7 +255,7 @@ class ActionValidatorService {
       if (!hasPermission && !isReceiverInRescheduleNegotiation) {
         return {
           valid: false,
-          reason: `User does not have ${permission.resource}.${permission.action} permission`
+          reason: `User does not have ${permission.resource}.${permission.action} permission${action === REQUEST_ACTIONS.REJECT ? ' or request.decline permission' : ''}`
         };
       }
 
@@ -227,28 +284,113 @@ class ActionValidatorService {
           };
         }
         
-        // For non-requesters in pending-review state, confirm is used by stakeholders as reviewer
-        // Check if user is assigned reviewer or can review
-        if (!isRequester && normalizedState === REQUEST_STATES.PENDING_REVIEW) {
-          const isReviewer = this._isReviewer(userId, request);
-          const canReview = await this._canReview(userId, request, context);
+        // Check state-specific confirm rules in order of priority
+        
+        // 1. PENDING_REVIEW state: Reviewers (stakeholders/coordinators/admins) can confirm
+        // This is the primary use case: reviewer confirms/accepts the request
+        if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+          // If user is requester, they can't confirm in pending-review (they're waiting for reviewer)
+          if (isRequester) {
+            return {
+              valid: false,
+              reason: 'Requesters cannot confirm requests in pending-review state. Please wait for reviewer decision.'
+            };
+          }
           
-          // Allow if user is assigned reviewer (explicit assignment) or can review
+          // Check if user is the assigned reviewer or can review
+          const isReviewer = this._isReviewer(userId, requestObj);
+          const canReview = await this._canReview(userId, requestObj, context);
+          
           if (!isReviewer && !canReview) {
+            console.warn(`[ACTION VALIDATOR] Confirm in pending-review: User is not reviewer`, {
+              userId: this._normalizeUserId(userId),
+              requestId: requestObj.Request_ID,
+              isRequester,
+              isReviewer,
+              canReview
+            });
             return {
               valid: false,
-              reason: 'Only assigned reviewer or qualified reviewer can confirm'
+              reason: 'Only the assigned reviewer can confirm requests in pending-review state'
             };
           }
-        } else if (!isRequester) {
-          // For other states (review-rescheduled, etc.), check if user can review
-          const canReview = await this._canReview(userId, request, context);
-          if (!canReview) {
+          
+          // Reviewer can confirm - permission check will be done below
+          console.debug(`[ACTION VALIDATOR] Confirm in pending-review: Reviewer can confirm`, {
+            userId: this._normalizeUserId(userId),
+            requestId: requestObj.Request_ID,
+            isReviewer,
+            canReview
+          });
+        }
+        // 2. REVIEW_RESCHEDULED state: Either requester or reviewer can confirm based on active responder
+        else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+          const activeResponder = RequestStateService.getActiveResponder(requestObj);
+          if (activeResponder && activeResponder.userId) {
+            const normalizedUserId = this._normalizeUserId(userId);
+            const responderId = this._normalizeUserId(activeResponder.userId);
+            
+            if (normalizedUserId !== responderId) {
+              return {
+                valid: false,
+                reason: 'Only the active responder can confirm rescheduled requests'
+              };
+            }
+          } else {
+            // Fallback: check if user can review
+            const canReview = await this._canReview(userId, requestObj, context);
+            if (!canReview && !isRequester) {
+              return {
+                valid: false,
+                reason: 'Only requester or qualified reviewer can confirm rescheduled requests'
+              };
+            }
+          }
+        }
+        // 3. APPROVED state: Only requester can confirm (acknowledgment)
+        else if (normalizedState === REQUEST_STATES.APPROVED) {
+          // Only requester (stakeholder) can confirm approved requests
+          // Re-check isRequester with normalized userId to ensure accurate comparison
+          const normalizedUserId = this._normalizeUserId(userId);
+          const requesterId = this._normalizeUserId(requestObj.requester?.userId);
+          
+          if (!normalizedUserId || !requesterId || normalizedUserId !== requesterId) {
+            // Check if user is the reviewer (who might have just confirmed it)
+            const reviewerId = this._normalizeUserId(requestObj.reviewer?.userId);
+            const isReviewer = normalizedUserId && reviewerId && normalizedUserId === reviewerId;
+            
+            console.warn(`[ACTION VALIDATOR] Confirm on approved: User is not requester`, {
+              userId: normalizedUserId,
+              requesterId,
+              reviewerId,
+              isReviewer,
+              requestId: requestObj.Request_ID,
+              requesterUserId: requestObj.requester?.userId,
+              reviewerUserId: requestObj.reviewer?.userId,
+              currentState: normalizedState
+            });
+            
+            // If user is the reviewer and request was just approved, provide helpful message
+            if (isReviewer) {
+              return {
+                valid: false,
+                reason: 'This request has already been confirmed and approved. Only the requester can acknowledge approved requests.'
+              };
+            }
+            
             return {
               valid: false,
-              reason: 'Only requester or qualified reviewer can confirm'
+              reason: 'Only the requester can confirm an approved request'
             };
           }
+          // Requester can confirm - permission check will be done below
+        }
+        // 4. Other states: Not allowed
+        else {
+          return {
+            valid: false,
+            reason: `Confirm action is not allowed for requests in '${normalizedState}' state`
+          };
         }
       }
       
@@ -267,8 +409,8 @@ class ActionValidatorService {
         
         // For non-requesters, check if user is assigned reviewer or can review
         if (!isRequester) {
-          const isReviewer = this._isReviewer(userId, request);
-          const canReview = await this._canReview(userId, request, context);
+          const isReviewer = this._isReviewer(userId, requestObj);
+          const canReview = await this._canReview(userId, requestObj, context);
           
           // Allow if user is assigned reviewer (explicit assignment) or can review
           if (!isReviewer && !canReview) {
@@ -345,19 +487,41 @@ class ActionValidatorService {
    * @private
    */
   _isRequester(userId, request) {
-    if (!request.requester || !userId) return false;
-    
-    const userIdStr = userId.toString();
-    const requesterUserId = request.requester.userId;
-    
-    // Handle populated object (has _id property)
-    if (requesterUserId && typeof requesterUserId === 'object' && requesterUserId._id) {
-      return requesterUserId._id.toString() === userIdStr;
+    if (!request.requester || !userId) {
+      console.debug(`[ACTION VALIDATOR] _isRequester: Missing requester or userId`, {
+        hasRequester: !!request.requester,
+        hasUserId: !!userId
+      });
+      return false;
     }
     
-    // Handle ObjectId or string
-    const requesterId = requesterUserId?.toString();
-    return requesterId === userIdStr;
+    const userIdStr = this._normalizeUserId(userId);
+    if (!userIdStr) {
+      console.debug(`[ACTION VALIDATOR] _isRequester: Failed to normalize userId`, { userId });
+      return false;
+    }
+    
+    const requesterUserId = request.requester.userId;
+    const requesterId = this._normalizeUserId(requesterUserId);
+    
+    if (!requesterId) {
+      console.debug(`[ACTION VALIDATOR] _isRequester: Failed to normalize requesterUserId`, { 
+        requesterUserId,
+        requesterUserIdType: typeof requesterUserId,
+        requesterUserIdIsObject: typeof requesterUserId === 'object'
+      });
+      return false;
+    }
+    
+    const isMatch = requesterId === userIdStr;
+    console.debug(`[ACTION VALIDATOR] _isRequester: Comparison result`, {
+      userIdStr,
+      requesterId,
+      isMatch,
+      requestId: request.Request_ID
+    });
+    
+    return isMatch;
   }
 
   /**
@@ -368,16 +532,12 @@ class ActionValidatorService {
   _isReviewer(userId, request) {
     if (!request.reviewer || !userId) return false;
     
-    const userIdStr = userId.toString();
+    const userIdStr = this._normalizeUserId(userId);
+    if (!userIdStr) return false;
+    
     const reviewerUserId = request.reviewer.userId;
+    const reviewerId = this._normalizeUserId(reviewerUserId);
     
-    // Handle populated object (has _id property)
-    if (reviewerUserId && typeof reviewerUserId === 'object' && reviewerUserId._id) {
-      return reviewerUserId._id.toString() === userIdStr;
-    }
-    
-    // Handle ObjectId or string
-    const reviewerId = reviewerUserId?.toString();
     return reviewerId === userIdStr;
   }
 
@@ -625,6 +785,78 @@ class ActionValidatorService {
   }
 
   /**
+   * Normalize userId to string for comparison
+   * Handles: string ObjectIds, ObjectId instances, populated ObjectIds, MongoDB Extended JSON format
+   * 
+   * Based on database structure: userId can be:
+   * - String from JWT/token: "6954219d24e8d1a40a5b766a"
+   * - ObjectId instance from Mongoose: ObjectId("6954219d24e8d1a40a5b766a")
+   * - Populated ObjectId with _id property: { _id: ObjectId("...") }
+   * - MongoDB Extended JSON: { "$oid": "6954219d24e8d1a40a5b766a" }
+   * @private
+   * @param {string|ObjectId|Object} userId - User ID in various formats
+   * @param {number} depth - Recursion depth guard (prevents infinite loops)
+   * @returns {string|null} Normalized userId as string, or null if invalid
+   */
+  _normalizeUserId(userId, depth = 0) {
+    // Prevent infinite recursion
+    if (depth > 5) {
+      console.warn(`[ACTION VALIDATOR] _normalizeUserId recursion depth exceeded, returning null`);
+      return null;
+    }
+    
+    if (!userId && userId !== 0) return null;
+    
+    // Handle MongoDB Extended JSON format: { "$oid": "..." }
+    if (typeof userId === 'object' && userId !== null && userId.$oid) {
+      return String(userId.$oid);
+    }
+    
+    // If it's already a string, validate and return
+    if (typeof userId === 'string') {
+      // Validate it looks like an ObjectId (24 hex chars)
+      if (/^[a-f0-9]{24}$/i.test(userId.trim())) {
+        return userId.trim();
+      }
+      return userId; // Return as-is even if not valid ObjectId format
+    }
+    
+    // If it's not an object at this point, try to convert to string
+    if (typeof userId !== 'object' || userId === null) {
+      const str = String(userId);
+      return /^[a-f0-9]{24}$/i.test(str) ? str : str;
+    }
+    
+    // If it has _id property (populated ObjectId), recurse with depth guard
+    // But check if _id is different from userId to avoid circular references
+    if (userId._id && userId._id !== userId) {
+      return this._normalizeUserId(userId._id, depth + 1);
+    }
+    
+    // If it's an ObjectId instance, convert to string
+    if (userId.toString && typeof userId.toString === 'function') {
+      try {
+        const str = userId.toString();
+        // ObjectId.toString() returns the hex string directly
+        if (/^[a-f0-9]{24}$/i.test(str)) {
+          return str;
+        }
+      } catch (e) {
+        // toString() failed, fall through to last resort
+      }
+    }
+    
+    // Last resort: try to convert to string
+    try {
+      const str = String(userId);
+      return /^[a-f0-9]{24}$/i.test(str) ? str : str;
+    } catch (e) {
+      console.warn(`[ACTION VALIDATOR] Failed to normalize userId:`, e);
+      return null;
+    }
+  }
+
+  /**
    * Get available actions for user on request
    * Uses active responder logic: only active responder gets actionable controls
    * @param {string|ObjectId} userId - User ID
@@ -635,23 +867,40 @@ class ActionValidatorService {
   async getAvailableActions(userId, request, context = {}) {
     const available = [REQUEST_ACTIONS.VIEW]; // Always allow view
 
-    const currentState = request.status || request.Status;
+    // Ensure request is a plain object to avoid circular reference issues
+    // If it's a Mongoose document, convert to plain object
+    let requestObj = request;
+    if (request && typeof request.toObject === 'function') {
+      try {
+        requestObj = request.toObject({ virtuals: false, getters: false });
+      } catch (e) {
+        // If toObject fails, try to work with the document directly
+        requestObj = request;
+      }
+    }
+
+    const currentState = requestObj.status || requestObj.Status;
     const normalizedState = RequestStateService.normalizeState(currentState);
     
     // Final states: only view (and delete for admins with permission)
     if (RequestStateService.isFinalState(normalizedState)) {
       // Check delete permission for admins
       try {
-        const user = await User.findById(userId).select('authority').lean();
+        // Normalize userId first to avoid issues
+        const normalizedUserId = this._normalizeUserId(userId);
+        if (!normalizedUserId) {
+          return available; // Can't determine user, only view
+        }
+        const user = await User.findById(normalizedUserId).select('authority').lean();
         const userAuthority = user?.authority || 20;
         
         if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-          const locationId = this._extractLocationId(request, context);
+          const locationId = this._extractLocationId(requestObj, context);
           let canDelete = false;
           
           if (locationId) {
             canDelete = await permissionService.checkPermission(
-              userId,
+              normalizedUserId,
               'request',
               'delete',
               { locationId }
@@ -660,7 +909,7 @@ class ActionValidatorService {
           
           if (!canDelete) {
             canDelete = await permissionService.checkPermission(
-              userId,
+              normalizedUserId,
               'request',
               'delete',
               {}
@@ -678,8 +927,8 @@ class ActionValidatorService {
       return available;
     }
     
-    // Get active responder
-    const activeResponder = RequestStateService.getActiveResponder(request);
+    // Get active responder - use requestObj to avoid circular references
+    const activeResponder = RequestStateService.getActiveResponder(requestObj);
     
     // If no active responder, only view
     if (!activeResponder || !activeResponder.userId) {
@@ -687,24 +936,82 @@ class ActionValidatorService {
     }
     
     // Check if user is the active responder
-    // Normalize userIds for comparison - handle both ObjectId and string cases
-    const userIdStr = userId.toString();
-    const responderUserId = activeResponder.userId;
-    // Handle both populated ObjectId (_id property) and direct ObjectId
-    const responderId = responderUserId?._id 
-      ? responderUserId._id.toString() 
-      : responderUserId?.toString() || String(responderUserId);
+    // CRITICAL: Normalize both userIds to strings for reliable comparison
+    // userId comes from JWT/token (string), activeResponder.userId is ObjectId from DB
+    let userIdStr;
+    let responderId;
     
-    const isActiveResponder = userIdStr === responderId || 
-      (responderUserId && responderUserId.toString() === userIdStr);
-    
-    // If user is NOT active responder, only view
-    if (!isActiveResponder) {
-      return available;
+    try {
+      userIdStr = this._normalizeUserId(userId);
+      const responderUserId = activeResponder.userId;
+      responderId = this._normalizeUserId(responderUserId);
+    } catch (error) {
+      console.error(`[ACTION VALIDATOR] Error normalizing userIds: ${error.message}`, {
+        error: error.stack,
+        originalUserId: userId,
+        responderUserId: activeResponder.userId
+      });
+      return available; // Only view on error
     }
+
+    if (!userIdStr || !responderId) {
+      console.warn(`[ACTION VALIDATOR] Missing userId or responderId`, {
+        originalUserId: userId,
+        normalizedUserId: userIdStr,
+        originalResponderUserId: activeResponder.userId,
+        normalizedResponderId: responderId,
+        activeResponder,
+        requestId: requestObj.Request_ID
+      });
+      return available; // Only view
+    }
+
+    // Now both are strings, comparison is reliable
+    let isActiveResponder = userIdStr === responderId;
+
+    // Special case: For coordinator-to-admin requests, ANY admin (authority >= 80) can review
+    // This allows any admin to act as reviewer even if not the assigned reviewer
+    if (!isActiveResponder && requestObj.reviewer?.assignmentRule === 'coordinator-to-admin') {
+      const user = await User.findById(userIdStr).select('authority').lean();
+      const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
+      
+      if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+        console.debug(`[ACTION VALIDATOR] User is admin reviewing coordinator-to-admin request`, {
+          userId: userIdStr,
+          userAuthority,
+          requestId: requestObj.Request_ID,
+          assignmentRule: requestObj.reviewer.assignmentRule
+        });
+        isActiveResponder = true; // Treat admin as active responder
+      }
+    }
+
+    if (!isActiveResponder) {
+      console.debug(`[ACTION VALIDATOR] User is not active responder`, {
+        userId: userIdStr,
+        responderId,
+        requestId: requestObj.Request_ID,
+        activeResponderRelationship: activeResponder.relationship
+      });
+      return available; // Only view
+    }
+
+    console.debug(`[ACTION VALIDATOR] User IS active responder`, {
+      userId: userIdStr,
+      responderId,
+      requestId: requestObj.Request_ID,
+      relationship: activeResponder.relationship
+    });
     
     // User IS active responder - get their authority
-    const user = await User.findById(userId).select('authority').lean();
+    // Use normalized userIdStr for the query to avoid issues
+    // Note: We may have already fetched user above for coordinator-to-admin check, but fetch again for consistency
+    let user = await User.findById(userIdStr).select('authority').lean();
+    if (!user) {
+      // If user not found (shouldn't happen), try to get from cache or return view only
+      console.warn(`[ACTION VALIDATOR] User not found: ${userIdStr}`);
+      return available; // Only view
+    }
     const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
     
     // Get base actions for current state
@@ -725,7 +1032,7 @@ class ActionValidatorService {
     
     // Special handling for pending-review: requester can cancel and edit
     if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
-      const isRequester = this._isRequester(userId, request);
+      const isRequester = this._isRequester(userIdStr, requestObj);
       if (isRequester) {
         const cancelValidation = await this.validateAction(userId, REQUEST_ACTIONS.CANCEL, request, context);
         if (cancelValidation.valid) {
@@ -741,17 +1048,17 @@ class ActionValidatorService {
     
     // Special handling for approved state: requester/reviewer can edit, manage-staff, reschedule, cancel
     if (normalizedState === REQUEST_STATES.APPROVED) {
-      const isRequester = this._isRequester(userId, request);
-      const isReviewer = this._isReviewer(userId, request);
+      const isRequester = this._isRequester(userIdStr, requestObj);
+      const isReviewer = this._isReviewer(userIdStr, requestObj);
       
       if (isRequester || isReviewer) {
-        const locationId = this._extractLocationId(request, context);
+        const locationId = this._extractLocationId(requestObj, context);
         
         // Edit action
         let canEditEvent = false;
         if (locationId) {
           canEditEvent = await permissionService.checkPermission(
-            userId,
+            userIdStr,
             'event',
             'update',
             { locationId }
@@ -759,7 +1066,7 @@ class ActionValidatorService {
         }
         if (!canEditEvent) {
           canEditEvent = await permissionService.checkPermission(
-            userId,
+            userIdStr,
             'event',
             'update',
             {}
@@ -773,7 +1080,7 @@ class ActionValidatorService {
         let canManageStaff = false;
         if (locationId) {
           canManageStaff = await permissionService.checkPermission(
-            userId,
+            userIdStr,
             'event',
             'manage-staff',
             { locationId }
@@ -781,7 +1088,7 @@ class ActionValidatorService {
         }
         if (!canManageStaff) {
           canManageStaff = await permissionService.checkPermission(
-            userId,
+            userIdStr,
             'event',
             'manage-staff',
             {}

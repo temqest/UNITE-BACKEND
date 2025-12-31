@@ -34,6 +34,9 @@ class EventRequestService {
    */
   async createRequest(requesterId, requestData) {
     try {
+      // Import AUTHORITY_TIERS for authority checks
+      const { AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
+      
       // 1. Get requester details
       const requester = await User.findById(requesterId);
       if (!requester) {
@@ -54,13 +57,58 @@ class EventRequestService {
       }
 
       // 3. Auto-populate location fields if not provided
-      // Derive from requester's location/coverage area
+      // Priority: explicit > coordinator (if assigned) > requester
       let finalDistrict = requestData.district;
       let finalProvince = requestData.province;
       let finalMunicipalityId = requestData.municipalityId;
 
+      // If admin is assigning a coordinator, use coordinator's location
+      if (requester.authority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && requestData.coordinatorId) {
+        const selectedCoordinator = await User.findById(requestData.coordinatorId);
+        if (selectedCoordinator) {
+          // Try coordinator's coverage areas first
+          if (selectedCoordinator.coverageAreas && selectedCoordinator.coverageAreas.length > 0) {
+            const primaryCoverage = selectedCoordinator.coverageAreas.find(ca => ca.isPrimary) || 
+                                    selectedCoordinator.coverageAreas[0];
+            if (primaryCoverage) {
+              if (!finalDistrict && primaryCoverage.districtIds && primaryCoverage.districtIds.length > 0) {
+                finalDistrict = primaryCoverage.districtIds[0];
+              }
+              if (!finalProvince && finalDistrict) {
+                const { Location } = require('../../models/index');
+                const districtLocation = await Location.findById(finalDistrict);
+                if (districtLocation && districtLocation.province) {
+                  finalProvince = districtLocation.province;
+                }
+              }
+            }
+          }
+          
+          // Fallback to coordinator's locations
+          if ((!finalDistrict || !finalProvince) && selectedCoordinator.locations) {
+            if (!finalMunicipalityId && selectedCoordinator.locations.municipalityId) {
+              finalMunicipalityId = selectedCoordinator.locations.municipalityId;
+            }
+            if (!finalDistrict && selectedCoordinator.locations.districtId) {
+              finalDistrict = selectedCoordinator.locations.districtId;
+            }
+            if (!finalProvince && selectedCoordinator.locations.provinceId) {
+              finalProvince = selectedCoordinator.locations.provinceId;
+            }
+          }
+          
+          console.log(`[EVENT REQUEST SERVICE] Using coordinator location for admin-created request`, {
+            coordinatorId: requestData.coordinatorId,
+            district: finalDistrict,
+            province: finalProvince,
+            municipalityId: finalMunicipalityId
+          });
+        }
+      }
+
+      // If location still not set, try requester's location (for coordinators/stakeholders creating their own requests)
       if (!finalDistrict || !finalProvince) {
-        // Try to get from requester's coverage areas (for coordinators)
+        // Try requester's coverage areas (for coordinators)
         if (requester.coverageAreas && requester.coverageAreas.length > 0) {
           const primaryCoverage = requester.coverageAreas.find(ca => ca.isPrimary) || requester.coverageAreas[0];
           if (primaryCoverage) {
@@ -78,7 +126,7 @@ class EventRequestService {
           }
         }
 
-        // Try to get from requester's locations (for stakeholders)
+        // Try requester's locations (for stakeholders)
         if (!finalDistrict && requester.locations && requester.locations.municipalityId) {
           finalMunicipalityId = requester.locations.municipalityId;
           const { Location } = require('../../models/index');
@@ -120,7 +168,6 @@ class EventRequestService {
       // 5. Assign reviewer based on requester authority
       // If admin (authority >= 80) provides coordinatorId, use it instead of auto-assignment
       let reviewer;
-      const { AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
       
       if (requester.authority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && requestData.coordinatorId) {
         // Admin is manually selecting a coordinator
@@ -724,11 +771,13 @@ class EventRequestService {
   async getRequestById(requestId, userId) {
     try {
       const request = await EventRequest.findOne({ Request_ID: requestId })
-        .populate('requester.userId', 'firstName lastName email authority')
-        .populate('reviewer.userId', 'firstName lastName email authority')
-        .populate('province', 'name code type')
-        .populate('district', 'name code type province')
-        .populate('municipalityId', 'name code type district province');
+        .populate([
+          { path: 'requester.userId', select: 'firstName lastName email authority' },
+          { path: 'reviewer.userId', select: 'firstName lastName email authority' },
+          { path: 'province', select: 'name code type' },
+          { path: 'district', select: 'name code type province' },
+          { path: 'municipalityId', select: 'name code type district province' }
+        ]);
 
       if (!request) {
         throw new Error('Request not found');
@@ -1002,11 +1051,21 @@ class EventRequestService {
 
       // 4. Get next state
       const currentState = request.status;
+      const normalizedCurrentState = RequestStateService.normalizeState(currentState);
       const nextState = RequestStateService.getNextState(currentState, action);
 
       if (!nextState) {
-        throw new Error(`Invalid transition from ${currentState} with action ${action}`);
+        throw new Error(`Invalid transition from ${currentState} (normalized: ${normalizedCurrentState}) with action ${action}`);
       }
+      
+      // Log state transition for debugging
+      console.log(`[EVENT REQUEST SERVICE] Executing action: ${action}`, {
+        requestId: request.Request_ID,
+        currentState,
+        normalizedCurrentState,
+        nextState,
+        userId: userId.toString()
+      });
 
       // 5. Update request based on action
       if (action === REQUEST_ACTIONS.ACCEPT) {
@@ -1030,6 +1089,15 @@ class EventRequestService {
         // Auto-publish event if approved (from pending-review, review-accepted, or review-rescheduled)
         if (nextState === REQUEST_STATES.APPROVED) {
           await eventPublisherService.publishEvent(request, actorSnapshot);
+        }
+      } else if (action === REQUEST_ACTIONS.CONFIRM) {
+        request.status = nextState;
+        // CONFIRM from pending-review or review-rescheduled is equivalent to ACCEPT - add decision history as accept
+        if (currentState === REQUEST_STATES.PENDING_REVIEW || currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+          request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
+        } else if (currentState === REQUEST_STATES.APPROVED) {
+          // CONFIRM on approved state is stakeholder acknowledgment - add decision history as confirm
+          request.addDecisionHistory('confirm', actorSnapshot, actionData.notes || '');
         }
       } else if (action === REQUEST_ACTIONS.DECLINE) {
         request.status = nextState;
@@ -1094,19 +1162,19 @@ class EventRequestService {
       // 8. Save request and verify save completed
       await request.save();
       
-      // Verify save completed by re-fetching the request
-      const savedRequest = await EventRequest.findOne({ Request_ID: requestId });
-      if (!savedRequest) {
-        throw new Error('Request save verification failed - request not found after save');
-      }
-      
-      // Verify status was updated correctly
-      if (savedRequest.status !== nextState) {
-        console.warn(`[EVENT REQUEST SERVICE] Request status mismatch after save. Expected: ${nextState}, Got: ${savedRequest.status}`);
-        // Re-fetch to ensure we have latest data
-        await savedRequest.populate('province', 'name code type');
-        await savedRequest.populate('district', 'name code type province');
-        await savedRequest.populate('municipalityId', 'name code type district province');
+      // Verify status was updated correctly (use already-updated request object)
+      if (request.status !== nextState) {
+        console.warn(`[EVENT REQUEST SERVICE] Status mismatch. Expected: ${nextState}, Got: ${request.status}`);
+        // Only re-fetch if mismatch (shouldn't happen, but handle gracefully)
+        const savedRequest = await EventRequest.findOne({ Request_ID: requestId })
+          .populate([
+            { path: 'province', select: 'name code type' },
+            { path: 'district', select: 'name code type province' },
+            { path: 'municipalityId', select: 'name code type district province' }
+          ]);
+        if (!savedRequest) {
+          throw new Error('Request save verification failed - request not found after save');
+        }
         return savedRequest;
       }
 
@@ -1122,7 +1190,7 @@ class EventRequestService {
           };
 
           await notificationEngine.notifyRequestStateChange(
-            savedRequest,
+            request,
             action,
             actorSnapshot,
             notificationActionData
@@ -1136,12 +1204,14 @@ class EventRequestService {
         }
       });
 
-      // Re-populate location references before returning
-      await savedRequest.populate('province', 'name code type');
-      await savedRequest.populate('district', 'name code type province');
-      await savedRequest.populate('municipalityId', 'name code type district province');
-
-      return savedRequest;
+      // Re-populate location references before returning (optimize: combine into single populate)
+      await request.populate([
+        { path: 'province', select: 'name code type' },
+        { path: 'district', select: 'name code type province' },
+        { path: 'municipalityId', select: 'name code type district province' }
+      ]);
+      
+      return request;
     } catch (error) {
       console.error(`[EVENT REQUEST SERVICE] Error executing action: ${error.message}`);
       throw new Error(`Failed to execute action: ${error.message}`);

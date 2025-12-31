@@ -88,10 +88,15 @@ class NotificationRecipientService {
         recipients.add(request.reviewer.userId.toString());
       }
 
+      const mongoose = require('mongoose');
       return Array.from(recipients).map(id => {
         // Convert string IDs to ObjectId if needed
-        if (typeof id === 'string' && require('mongoose').Types.ObjectId.isValid(id)) {
-          return require('mongoose').Types.ObjectId(id);
+        if (typeof id === 'string' && mongoose.Types.ObjectId.isValid(id)) {
+          return new mongoose.Types.ObjectId(id);
+        }
+        // If already an ObjectId, return as-is
+        if (id instanceof mongoose.Types.ObjectId) {
+          return id;
         }
         return id;
       });

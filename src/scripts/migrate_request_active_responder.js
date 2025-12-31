@@ -8,19 +8,54 @@
  */
 
 const mongoose = require('mongoose');
+require('dotenv').config();
 const { REQUEST_STATES } = require('../utils/eventRequests/requestConstants');
 const RequestStateService = require('../services/eventRequests_services/requestState.service');
 
-// Import models
-const { EventRequestLegacy: EventRequest } = require('../models/request_models/eventRequest.model');
+// Import models - use the new EventRequest model
+const EventRequest = require('../models/eventRequests_models/eventRequest.model');
 const { User } = require('../models/index');
 
 async function migrateRequests() {
   try {
-    // Connect to database (adjust connection string as needed)
-    const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/unite';
-    await mongoose.connect(mongoUri);
-    console.log('Connected to MongoDB');
+    // Connect to database - use MONGO_URI and MONGO_DB_NAME
+    const rawMongoUri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL || null;
+    const mongoDbName = process.env.MONGO_DB_NAME || null;
+    
+    if (!rawMongoUri) {
+      console.error('❌ ERROR: MongoDB connection string is not defined (MONGODB_URI or MONGO_URI)');
+      console.error('Please set MONGODB_URI or MONGO_URI in your .env file');
+      process.exit(1);
+    }
+    
+    // Build connection URI with database name if provided
+    let mongoUri = rawMongoUri;
+    if (mongoDbName) {
+      // Determine if the URI already has a database name portion (i.e. after the host and before query '?')
+      const idx = rawMongoUri.indexOf('?');
+      const beforeQuery = idx === -1 ? rawMongoUri : rawMongoUri.slice(0, idx);
+      // If there is no DB portion (no slash followed by non-empty segment after the host), append one.
+      const hasDb = /\/[A-Za-z0-9_\-]+$/.test(beforeQuery);
+      if (!hasDb) {
+        if (idx === -1) {
+          mongoUri = `${rawMongoUri.replace(/\/$/, '')}/${mongoDbName}`;
+        } else {
+          mongoUri = `${rawMongoUri.slice(0, idx).replace(/\/$/, '')}/${mongoDbName}${rawMongoUri.slice(idx)}`;
+        }
+      } else {
+        // Replace existing database name with the one from MONGO_DB_NAME
+        const parts = beforeQuery.split('/');
+        parts[parts.length - 1] = mongoDbName;
+        mongoUri = idx === -1 ? parts.join('/') : `${parts.join('/')}${rawMongoUri.slice(idx)}`;
+      }
+      console.log(`Using database name from MONGO_DB_NAME: ${mongoDbName}`);
+    }
+    
+    await mongoose.connect(mongoUri, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log(`✅ Connected to MongoDB: ${mongoUri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}`);
 
     // Get all requests
     const requests = await EventRequest.find({}).lean();

@@ -28,7 +28,8 @@ class RequestStateService {
     },
     [REQUEST_STATES.APPROVED]: {
       [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED,
-      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Allow rescheduling approved events
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED, // Allow rescheduling approved events
+      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED // Allow stakeholders to confirm approved requests (no state change, just acknowledgment)
     },
     [REQUEST_STATES.REJECTED]: {
       // No transitions from rejected (final state)
@@ -193,11 +194,21 @@ class RequestStateService {
     }
 
     // If activeResponder is already set, use it (but normalize userId)
+    // NOTE: Keep as ObjectId here - conversion to string happens in actionValidator
+    // This ensures consistency with database structure
     if (request.activeResponder && request.activeResponder.userId) {
       // Normalize userId - handle both populated and non-populated ObjectId
-      const normalizedUserId = request.activeResponder.userId._id || request.activeResponder.userId;
+      // Extract the actual ObjectId (not string) for consistency
+      let normalizedUserId = request.activeResponder.userId;
+      
+      // If it's a populated ObjectId with _id property, use that
+      if (normalizedUserId._id) {
+        normalizedUserId = normalizedUserId._id;
+      }
+      
+      // Return ObjectId instance (not string) - actionValidator will normalize to string for comparison
       return {
-        userId: normalizedUserId,
+        userId: normalizedUserId, // Keep as ObjectId
         relationship: request.activeResponder.relationship,
         authority: request.activeResponder.authority
       };

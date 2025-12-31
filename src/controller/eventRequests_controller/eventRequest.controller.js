@@ -7,8 +7,9 @@
 const eventRequestService = require('../../services/eventRequests_services/eventRequest.service');
 const actionValidatorService = require('../../services/eventRequests_services/actionValidator.service');
 const permissionService = require('../../services/users_services/permission.service');
+const RequestStateService = require('../../services/eventRequests_services/requestState.service');
 const EventRequest = require('../../models/eventRequests_models/eventRequest.model');
-const { STATUS_LABELS } = require('../../utils/eventRequests/requestConstants');
+const { STATUS_LABELS, REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
 
 class EventRequestController {
   /**
@@ -64,15 +65,13 @@ class EventRequestController {
         skip: parseInt(req.query.skip) || 0
       };
 
-      // Check if actions should be included (default: false for list views for performance)
-      const includeActions = req.query.includeActions === 'true' || req.query.includeActions === true;
-
       const result = await eventRequestService.getRequests(userId, filters);
       const { requests, totalCount, statusCounts } = result;
 
-      // Format requests - skip allowedActions computation for list views unless explicitly requested
+      // Format requests - always compute allowedActions for UI functionality
+      // Performance impact is minimal since computation is fast (ObjectId comparison)
       const formattedRequests = await Promise.all(
-        requests.map(r => this._formatRequest(r, includeActions ? userId : null))
+        requests.map(r => this._formatRequest(r, userId))
       );
 
       res.status(200).json({
@@ -188,12 +187,81 @@ class EventRequestController {
       }
 
       const request = await eventRequestService.executeAction(requestId, userId, action, actionData);
+      
+      // Generate user-friendly success message based on action and new state
+      let successMessage = `Action '${action}' executed successfully`;
+      const previousState = request.statusHistory && request.statusHistory.length > 1 
+        ? request.statusHistory[request.statusHistory.length - 2]?.status 
+        : null;
+      const newState = request.status || request.Status;
+      const normalizedState = RequestStateService.normalizeState(newState);
+      const normalizedPreviousState = previousState ? RequestStateService.normalizeState(previousState) : null;
+      
+      // Determine if state changed and if UI should refresh/close
+      const stateChanged = normalizedPreviousState !== normalizedState;
+      const isFinalState = RequestStateService.isFinalState(normalizedState);
+      const shouldRefresh = stateChanged || isFinalState;
+      const shouldCloseModal = isFinalState || normalizedState === REQUEST_STATES.APPROVED || 
+                               normalizedState === REQUEST_STATES.REJECTED || 
+                               normalizedState === REQUEST_STATES.CANCELLED;
+      
+      if (action === 'confirm') {
+        if (normalizedState === REQUEST_STATES.APPROVED) {
+          successMessage = 'Request confirmed and approved. The event is now published.';
+        } else if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+          // This shouldn't happen (confirm should transition to approved), but handle it
+          successMessage = 'Request confirmed successfully.';
+        } else {
+          successMessage = 'Request confirmed successfully.';
+        }
+      } else if (action === 'accept') {
+        successMessage = 'Request accepted and approved. The event is now published.';
+      } else if (action === 'reject' || action === 'decline') {
+        successMessage = 'Request has been rejected.';
+      } else if (action === 'reschedule') {
+        successMessage = 'Reschedule proposal submitted. Waiting for response.';
+      } else if (action === 'cancel') {
+        successMessage = 'Request has been cancelled.';
+      }
+
+      const formattedRequest = await this._formatRequest(request, userId);
+
+      // Set cache-busting headers to ensure frontend refreshes
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'X-Request-Updated-At': new Date().toISOString(),
+        'X-Should-Refresh': shouldRefresh ? 'true' : 'false',
+        'X-Should-Close-Modal': shouldCloseModal ? 'true' : 'false'
+      });
 
       res.status(200).json({
         success: true,
-        message: `Action '${action}' executed successfully`,
+        message: successMessage,
+        timestamp: new Date().toISOString(), // Add timestamp for cache busting
         data: {
-          request: await this._formatRequest(request, userId)
+          request: formattedRequest,
+          // UI control flags for frontend
+          ui: {
+            shouldRefresh: shouldRefresh,
+            shouldCloseModal: shouldCloseModal,
+            stateChanged: stateChanged,
+            previousState: normalizedPreviousState,
+            newState: normalizedState,
+            isFinalState: isFinalState,
+            refreshType: isFinalState ? 'full' : 'partial', // Indicate refresh scope
+            cacheKeysToInvalidate: [ // Cache keys for frontend to invalidate
+              `/api/event-requests`,
+              `/api/event-requests/${requestId}`,
+              `/api/event-requests/${requestId}/actions`
+            ],
+            // Add explicit action taken
+            actionExecuted: action,
+            actionResult: normalizedState === REQUEST_STATES.APPROVED ? 'approved' : 
+                          normalizedState === REQUEST_STATES.REJECTED ? 'rejected' : 
+                          normalizedState === REQUEST_STATES.CANCELLED ? 'cancelled' : 'updated'
+          }
         }
       });
     } catch (error) {
@@ -357,7 +425,17 @@ class EventRequestController {
       statusHistory: request.statusHistory || [],
       decisionHistory: request.decisionHistory || [],
       activeResponder: request.activeResponder ? {
-        userId: request.activeResponder.userId?._id || request.activeResponder.userId,
+        userId: (() => {
+          const uid = request.activeResponder.userId;
+          if (!uid) return null;
+          // Handle populated ObjectId
+          if (uid._id) return uid._id.toString();
+          // Handle direct ObjectId
+          if (uid.toString && typeof uid.toString === 'function') {
+            return uid.toString();
+          }
+          return String(uid);
+        })(),
         relationship: request.activeResponder.relationship,
         authority: request.activeResponder.authority
       } : null,
