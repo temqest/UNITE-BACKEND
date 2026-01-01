@@ -43,8 +43,14 @@ class EventRequestService {
         throw new Error('Requester not found');
       }
 
-      // 2. Check permission
+      // 2. Check permission - allow both initiate (personal creation) and create (workflow operations)
       const locationId = requestData.district || requestData.municipalityId;
+      const canInitiate = await permissionService.checkPermission(
+        requesterId,
+        'request',
+        'initiate',
+        { locationId }
+      );
       const canCreate = await permissionService.checkPermission(
         requesterId,
         'request',
@@ -52,7 +58,7 @@ class EventRequestService {
         { locationId }
       );
 
-      if (!canCreate) {
+      if (!canInitiate && !canCreate) {
         throw new Error('User does not have permission to create requests');
       }
 
@@ -423,8 +429,64 @@ class EventRequestService {
           { 'reviewer.userId': userIdObjectId }
         ];
 
-        // If user has review permission, they can also see requests in their jurisdiction
-        // (This is handled by location filters below, but we keep the $or structure)
+        // If user is a coordinator (authority 60-79), add jurisdiction filtering
+        // Coordinators can see requests in their coverage area AND organization
+        const isCoordinator = user.authority >= 60 && user.authority < 80 && !user.isSystemAdmin;
+        
+        if (isCoordinator) {
+          try {
+            const coordinatorContextService = require('../users_services/coordinatorContext.service');
+            const context = await coordinatorContextService.getCoordinatorContext(userId);
+            
+            // Get municipality IDs directly from user's embedded coverageAreas
+            // (context service doesn't include municipalityIds in returned coverageAreas)
+            const municipalityIds = [];
+            if (user.coverageAreas && user.coverageAreas.length > 0) {
+              const rawIds = user.coverageAreas
+                .flatMap(ca => ca.municipalityIds || [])
+                .filter(Boolean);
+              
+              municipalityIds.push(...rawIds.map(id => {
+                const idStr = id.toString();
+                return mongoose.Types.ObjectId.isValid(idStr) 
+                  ? new mongoose.Types.ObjectId(idStr) 
+                  : idStr;
+              }));
+            }
+
+            // Get organization IDs from context
+            const organizationIds = (context.organizations || [])
+              .map(org => {
+                const orgId = org._id ? org._id.toString() : org.toString();
+                return mongoose.Types.ObjectId.isValid(orgId) 
+                  ? new mongoose.Types.ObjectId(orgId) 
+                  : orgId;
+              })
+              .filter(Boolean);
+
+            // Add jurisdiction conditions: requests must match BOTH location AND organization
+            if (municipalityIds.length > 0 && organizationIds.length > 0) {
+              // Add requests that match coordinator's jurisdiction (municipality AND organization)
+              query.$or.push({
+                $and: [
+                  { municipalityId: { $in: municipalityIds } },
+                  { organizationId: { $in: organizationIds } }
+                ]
+              });
+              
+              // Also support legacy municipality field
+              query.$or.push({
+                $and: [
+                  { municipality: { $in: municipalityIds } },
+                  { organizationId: { $in: organizationIds } }
+                ]
+              });
+            }
+          } catch (contextError) {
+            console.error('[getRequests] Error getting coordinator context for jurisdiction filtering:', contextError.message);
+            // Continue without jurisdiction filtering - coordinator will only see their own requests
+          }
+        }
       }
 
       // Apply additional filters

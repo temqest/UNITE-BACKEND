@@ -227,48 +227,12 @@ class LocationService {
       });
     }
 
-    // Assign organization from signup request
-    if (req.organizationId) {
-      const { UserOrganization } = require('../../models');
-      const organization = req.organizationId;
-      await UserOrganization.create({
-        userId: user._id,
-        organizationId: organization._id,
-        isPrimary: true,
-        assignedBy: approverId || null
-      });
-      
-      // Also update user's embedded organizations array
-      user.organizations = [{
-        organizationId: organization._id,
-        organizationName: organization.name,
-        organizationType: organization.type,
-        isPrimary: true,
-        assignedAt: new Date(),
-        assignedBy: approverId || null
-      }];
-      await user.save();
-      console.log(`[approveRequest] Assigned organization to ${user.email}:`, {
-        organizationId: organization._id.toString(),
-        organizationName: organization.name,
-        assignedBy: approverId ? approverId.toString() : null
-      });
-    }
-
-    // Assign locations if provided
-    if (req.district) {
-      await this.assignUserToLocation(user._id, req.district, 'exact', { isPrimary: true });
-    }
-    if (req.province) {
-      await this.assignUserToLocation(user._id, req.province, 'descendants', { isPrimary: false });
-    }
+    // CRITICAL: Set embedded locations field BEFORE assigning organizations
+    // This prevents validation error "Stakeholders must have a municipality assignment"
+    // The validation checks if organizations exist AND municipality is missing
+    // So we must set municipality before organizations
     if (req.municipality) {
-      await this.assignUserToLocation(user._id, req.municipality, 'exact', { isPrimary: false });
-    }
-
-    // Update embedded locations field (CRITICAL: Required for jurisdiction filtering)
-    // This must match the manual creation pattern in user.controller.js
-    if (req.municipality) {
+      const { Location } = require('../../models');
       const municipality = await Location.findById(req.municipality);
       if (municipality) {
         user.locations = {
@@ -287,6 +251,60 @@ class LocationService {
       } else {
         console.warn(`[approveRequest] Municipality ${req.municipality} not found for ${user.email}`);
       }
+    }
+
+    // Assign organization from signup request
+    if (req.organizationId) {
+      const { UserOrganization } = require('../../models');
+      const organization = req.organizationId; // Already populated
+      
+      // Use proper assignment method (matches pattern from user.controller.js)
+      await UserOrganization.assignOrganization(
+        user._id,
+        organization._id,
+        {
+          roleInOrg: 'member',
+          isPrimary: true,
+          assignedBy: approverId || null
+        }
+      );
+      
+      // Set top-level organizationId and organizationType (required for backward compatibility and queries)
+      user.organizationId = organization._id;
+      user.organizationType = organization.type;
+      
+      // Update embedded organizations array
+      user.organizations = [{
+        organizationId: organization._id,
+        organizationName: organization.name,
+        organizationType: organization.type,
+        isPrimary: true,
+        assignedAt: new Date(),
+        assignedBy: approverId || null
+      }];
+      
+      // organizationInstitution is already set (line 152) - keep it as reference only
+      // Do NOT let it override organizationId - organizationId is the source of truth
+      
+      await user.save();
+      console.log(`[approveRequest] Assigned organization to ${user.email}:`, {
+        organizationId: organization._id.toString(),
+        organizationName: organization.name,
+        organizationType: organization.type,
+        assignedBy: approverId ? approverId.toString() : null
+      });
+    }
+
+    // Assign locations via UserLocation collection (for location hierarchy queries)
+    // Note: Embedded locations field was already set above before organization assignment
+    if (req.district) {
+      await this.assignUserToLocation(user._id, req.district, 'exact', { isPrimary: true });
+    }
+    if (req.province) {
+      await this.assignUserToLocation(user._id, req.province, 'descendants', { isPrimary: false });
+    }
+    if (req.municipality) {
+      await this.assignUserToLocation(user._id, req.municipality, 'exact', { isPrimary: false });
     }
 
     // Recalculate and update user's authority AFTER all assignments are complete

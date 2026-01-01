@@ -61,6 +61,12 @@ const createRoleSchema = Joi.object({
             'any.required': 'Permission actions are required',
             'array.min': 'At least one action must be specified',
             'array.includesRequiredUnknowns': 'Actions must be strings'
+          }),
+        metadata: Joi.object()
+          .optional()
+          .allow(null, {})
+          .messages({
+            'object.base': 'Permission metadata must be an object'
           })
       })
     )
@@ -100,6 +106,12 @@ const updateRoleSchema = Joi.object({
   permissions: Joi.array()
     .items(
       Joi.object({
+        _id: Joi.string()
+          .optional()
+          .allow(null)
+          .messages({
+            'string.base': 'Permission _id must be a string'
+          }),
         resource: Joi.string()
           .required()
           .trim()
@@ -114,6 +126,12 @@ const updateRoleSchema = Joi.object({
           .messages({
             'any.required': 'Permission actions are required',
             'array.min': 'At least one action must be specified'
+          }),
+        metadata: Joi.object()
+          .optional()
+          .allow(null, {})
+          .messages({
+            'object.base': 'Permission metadata must be an object'
           })
       })
     )
@@ -171,8 +189,10 @@ const validateCreateRole = (req, res, next) => {
 };
 
 const validateUpdateRole = (req, res, next) => {
+  // Strip unknown fields (like 'code' which shouldn't be updated) before validation
   const { error, value } = updateRoleSchema.validate(req.body, {
-    abortEarly: false
+    abortEarly: false,
+    stripUnknown: true
   });
 
   if (error) {

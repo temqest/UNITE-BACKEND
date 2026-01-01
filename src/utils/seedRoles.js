@@ -17,7 +17,8 @@ const dryRun = process.argv.includes('--dry-run');
 // Default permissions to create
 const defaultPermissions = [
   // Event permissions
-  { code: 'event.create', name: 'Create Event', resource: 'event', action: 'create', description: 'Create new events' },
+  { code: 'event.create', name: 'Create Event', resource: 'event', action: 'create', description: 'Create new events (workflow operations)' },
+  { code: 'event.initiate', name: 'Initiate Event Creation', resource: 'event', action: 'initiate', description: 'Personally initiate creation of new events' },
   { code: 'event.read', name: 'Read Event', resource: 'event', action: 'read', description: 'View events' },
   { code: 'event.update', name: 'Update Event', resource: 'event', action: 'update', description: 'Update existing events' },
   { code: 'event.delete', name: 'Delete Event', resource: 'event', action: 'delete', description: 'Delete events' },
@@ -26,7 +27,8 @@ const defaultPermissions = [
   { code: 'event.manage-staff', name: 'Manage Event Staff', resource: 'event', action: 'manage-staff', description: 'Assign and manage volunteers/staff for events' },
   
   // Request permissions
-  { code: 'request.create', name: 'Create Request', resource: 'request', action: 'create', description: 'Create new requests' },
+  { code: 'request.create', name: 'Create Request', resource: 'request', action: 'create', description: 'Create new requests (workflow operations)' },
+  { code: 'request.initiate', name: 'Initiate Request Creation', resource: 'request', action: 'initiate', description: 'Personally initiate creation of new requests' },
   { code: 'request.read', name: 'Read Request', resource: 'request', action: 'read', description: 'View requests' },
   { code: 'request.update', name: 'Update Request', resource: 'request', action: 'update', description: 'Update existing requests' },
   { code: 'request.delete', name: 'Delete Request', resource: 'request', action: 'delete', description: 'Delete requests' },
@@ -126,8 +128,8 @@ const defaultRoles = [
     isSystemRole: true,
     authority: 60,
     permissions: [
-      { resource: 'event', actions: ['create', 'read', 'update', 'approve', 'publish', 'manage-staff'] },
-      { resource: 'request', actions: ['create', 'read', 'review', 'approve', 'reject', 'reschedule', 'confirm'] },
+      { resource: 'event', actions: ['create', 'initiate', 'read', 'update', 'approve', 'publish', 'manage-staff'] },
+      { resource: 'request', actions: ['create', 'initiate', 'read', 'review', 'approve', 'reject', 'reschedule', 'confirm'] },
       { resource: 'user', actions: ['read'] },
       { resource: 'location', actions: ['read'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
@@ -143,8 +145,8 @@ const defaultRoles = [
     isSystemRole: true,
     authority: 30,
     permissions: [
-      { resource: 'event', actions: ['create', 'read', 'update'] },
-      { resource: 'request', actions: ['create', 'read', 'confirm', 'decline', 'reschedule'] },
+      { resource: 'event', actions: ['create', 'initiate', 'read', 'update'] },
+      { resource: 'request', actions: ['create', 'initiate', 'read', 'confirm', 'decline', 'reschedule'] },
       { resource: 'chat', actions: ['create', 'read', 'update', 'delete'] },
       { resource: 'page', actions: ['campaign', 'calendar', 'chat', 'notification', 'settings'] },
       { resource: 'feature', actions: ['create-event', 'request-blood'] }

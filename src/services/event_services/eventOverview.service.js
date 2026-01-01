@@ -750,7 +750,7 @@ class EventOverviewService {
           { made_by_id: userObjectId }
         ];
       } else if (isCoordinator) {
-        // Coordinator: Own events + stakeholder events in coverage area + organization events
+        // Coordinator: Own events + stakeholder events in coverage area AND organization
         const orClauses = [
           { coordinator_id: userObjectIdStr }, // Own events (string)
           { coordinator_id: userObjectId }, // Own events (ObjectId)
@@ -766,13 +766,16 @@ class EventOverviewService {
           const coordinatorContextService = require('../users_services/coordinatorContext.service');
           const context = await coordinatorContextService.getCoordinatorContext(userObjectId);
           
-          // Get municipality IDs from coverage areas
-          municipalityIds = (context.coverageAreas || [])
-            .flatMap(ca => ca.municipalityIds || [])
-            .filter(Boolean)
-            .map(id => id.toString());
+          // Get municipality IDs directly from user's embedded coverageAreas
+          // (context service doesn't include municipalityIds in returned coverageAreas)
+          if (user.coverageAreas && user.coverageAreas.length > 0) {
+            municipalityIds = user.coverageAreas
+              .flatMap(ca => ca.municipalityIds || [])
+              .filter(Boolean)
+              .map(id => id.toString());
+          }
 
-          // Get organization IDs
+          // Get organization IDs from context
           organizationIds = (context.organizations || [])
             .map(org => org._id.toString())
             .filter(Boolean);
@@ -782,60 +785,21 @@ class EventOverviewService {
           // Continue with just own events (orClauses already has coordinator_id and made_by_id)
         }
 
-        // Add coverage area filter: events where stakeholder's location matches coordinator's coverage
-        if (municipalityIds.length > 0) {
+        // Find stakeholders that match BOTH location AND organization (AND logic, not OR)
+        if (municipalityIds.length > 0 && organizationIds.length > 0) {
           try {
-            // Find stakeholders in coordinator's coverage area
-            const locationService = require('../utility_services/location.service');
-            const userLocations = await locationService.getUserLocations(userObjectId);
-            const locationIds = userLocations.map(loc => loc._id.toString());
+            const matchingStakeholderIds = await this._findStakeholdersInCoverageAndOrganization(
+              municipalityIds,
+              organizationIds
+            );
 
-            if (locationIds.length > 0) {
-              // Get all users (stakeholders) in these locations
-              const { UserLocation } = require('../../models');
-              const stakeholderAssignments = await UserLocation.find({
-                locationId: { $in: locationIds }
-              }).select('userId').lean();
-              
-              const stakeholderIdsInCoverage = Array.from(new Set(
-                stakeholderAssignments.map(a => a.userId.toString())
-              ));
-
-              if (stakeholderIdsInCoverage.length > 0) {
-                orClauses.push({
-                  stakeholder_id: { $in: stakeholderIdsInCoverage }
-                });
-              }
+            if (matchingStakeholderIds.length > 0) {
+              orClauses.push({
+                stakeholder_id: { $in: matchingStakeholderIds }
+              });
             }
-
-            // Also match events by municipality if event has municipality field
-            orClauses.push({
-              municipality: { $in: municipalityIds }
-            });
-          } catch (locationError) {
-            // If location service fails, log but continue
-            console.error('[getUserEventsForCalendar] Error getting user locations:', locationError.message);
-            // Still add municipality filter even if location lookup fails
-            orClauses.push({
-              municipality: { $in: municipalityIds }
-            });
-          }
-        }
-
-        // Add organization filter: events where stakeholder's organization matches
-        if (organizationIds.length > 0) {
-          // Find stakeholders in coordinator's organizations
-          const stakeholdersInOrgs = await User.find({
-            'organizations.organizationId': { $in: organizationIds },
-            'roles.roleCode': { $regex: /stakeholder/i }
-          }).select('_id').lean();
-
-          const stakeholderIdsInOrgs = stakeholdersInOrgs.map(s => s._id.toString());
-
-          if (stakeholderIdsInOrgs.length > 0) {
-            orClauses.push({
-              stakeholder_id: { $in: stakeholderIdsInOrgs }
-            });
+          } catch (stakeholderError) {
+            console.error('[getUserEventsForCalendar] Error finding matching stakeholders:', stakeholderError.message);
           }
         }
 
@@ -967,6 +931,58 @@ class EventOverviewService {
 
     } catch (error) {
       throw new Error(`Failed to get user events for calendar: ${error.message}`);
+    }
+  }
+
+  /**
+   * Find stakeholders that match BOTH location (coverage area) AND organization
+   * This ensures coordinators only see events from stakeholders in their jurisdiction
+   * 
+   * @private
+   * @param {Array<string>} municipalityIds - Municipality IDs from coordinator's coverage areas
+   * @param {Array<string>} organizationIds - Organization IDs from coordinator's organizations
+   * @returns {Promise<Array<string>>} Array of stakeholder user IDs that match both criteria
+   */
+  async _findStakeholdersInCoverageAndOrganization(municipalityIds, organizationIds) {
+    try {
+      const mongoose = require('mongoose');
+      
+      // Convert string IDs to ObjectIds for proper comparison
+      const municipalityObjectIds = municipalityIds
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+      
+      const organizationObjectIds = organizationIds
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+
+      if (municipalityObjectIds.length === 0 || organizationObjectIds.length === 0) {
+        return [];
+      }
+
+      // Find stakeholders that match BOTH:
+      // 1. locations.municipalityId is in coordinator's municipalities (coverage area)
+      // 2. organizations.organizationId is in coordinator's organizations
+      // 3. Has stakeholder role
+      const matchingStakeholders = await User.find({
+        'locations.municipalityId': { $in: municipalityObjectIds },
+        'organizations.organizationId': { $in: organizationObjectIds },
+        'roles.roleCode': { $regex: /stakeholder/i },
+        isActive: true
+      }).select('_id').lean();
+
+      const stakeholderIds = matchingStakeholders.map(s => s._id.toString());
+      
+      console.log('[getUserEventsForCalendar] Found matching stakeholders:', {
+        municipalityCount: municipalityObjectIds.length,
+        organizationCount: organizationObjectIds.length,
+        matchingStakeholderCount: stakeholderIds.length
+      });
+
+      return stakeholderIds;
+    } catch (error) {
+      console.error('[getUserEventsForCalendar] Error in _findStakeholdersInCoverageAndOrganization:', error);
+      return [];
     }
   }
 }

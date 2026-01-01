@@ -22,12 +22,12 @@ const { cacheMiddleware, invalidateCache } = require('../middleware/cacheMiddlew
 /**
  * @route   POST /api/event-requests
  * @desc    Create new event request
- * @access  Private (requires request.create permission)
+ * @access  Private (requires request.initiate permission)
  */
 router.post(
   '/event-requests',
   authenticate,
-  requirePermission('request', 'create'),
+  requirePermission('request', 'initiate'),
   validateCreateEventRequest,
   async (req, res, next) => {
     try {

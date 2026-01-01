@@ -371,11 +371,11 @@ router.get('/events/statistics/dashboard', async (req, res, next) => {
  * @route   POST /api/events
  * @desc    UNIFIED event creation endpoint (decoupled from request workflow)
  * @desc    Direct event creation for admin/coordinator; authority-based field locking
- * @access  Private (requires event.create permission)
+ * @access  Private (requires event.initiate permission)
  * @body    { title, location, startDate, endDate?, category, coordinatorId?, stakeholderId? }
  * @note    Non-admins: coordinatorId forced to req.user.id, stakeholder scoped to jurisdiction
  */
-router.post('/events', authenticate, requirePermission('event', 'create'), async (req, res, next) => {
+router.post('/events', authenticate, requirePermission('event', 'initiate'), async (req, res, next) => {
   try {
     // Import controller here to avoid circular dependency
     const { eventRequestController } = require('../controller/request_controller');

@@ -6,6 +6,7 @@ const permissionController = require('../controller/rbac_controller/permission.c
 const roleController = require('../controller/rbac_controller/role.controller');
 const userRoleController = require('../controller/rbac_controller/userRole.controller');
 const { validateCheckPermission } = require('../validators/rbac_validators/permission.validators');
+const { validateCreateRole, validateUpdateRole } = require('../validators/rbac_validators/role.validators');
 
 // Import all route modules
 const authRoutes = require('./auth.routes');
@@ -80,6 +81,58 @@ router.get('/api/permissions', authenticate, requirePermission('role', 'read'), 
 router.get('/api/roles', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
   try {
     await roleController.getAllRoles(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/roles
+ * @desc    Create a new role
+ * @access  Private (requires role.create permission)
+ */
+router.post('/api/roles', authenticate, requirePermission('role', 'create'), validateCreateRole, async (req, res, next) => {
+  try {
+    await roleController.createRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/roles/:roleId
+ * @desc    Update role
+ * @access  Private (requires role.update permission)
+ */
+router.put('/api/roles/:roleId', authenticate, requirePermission('role', 'update'), validateUpdateRole, async (req, res, next) => {
+  try {
+    await roleController.updateRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/roles/:roleId
+ * @desc    Delete role (prevents deletion if users are assigned)
+ * @access  Private (requires role.delete permission)
+ */
+router.delete('/api/roles/:roleId', authenticate, requirePermission('role', 'delete'), async (req, res, next) => {
+  try {
+    await roleController.deleteRole(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/roles/:roleId/users-count
+ * @desc    Get count of users assigned to a role
+ * @access  Private (requires role.read permission)
+ */
+router.get('/api/roles/:roleId/users-count', authenticate, requirePermission('role', 'read'), async (req, res, next) => {
+  try {
+    await roleController.getRoleUsersCount(req, res);
   } catch (error) {
     next(error);
   }

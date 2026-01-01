@@ -21,7 +21,7 @@ const validateCreateEventRequest = (req, res, next) => {
     Email: Joi.string().email().required(),
     Phone_Number: Joi.string().trim().required(),
     // Optional event fields
-    Event_Description: Joi.string().trim().optional(),
+    Event_Description: Joi.string().trim().allow('', null).optional(),
     Category: Joi.string().trim().optional(),
     // Category-specific fields
     Target_Donation: Joi.number().optional(),
@@ -85,7 +85,7 @@ const validateUpdateEventRequest = (req, res, next) => {
     End_Date: Joi.date().optional(),
     Email: Joi.string().email().optional(),
     Phone_Number: Joi.string().trim().optional(),
-    Event_Description: Joi.string().trim().optional(),
+    Event_Description: Joi.string().trim().allow('', null).optional(),
     Category: Joi.string().trim().optional(),
     // Category-specific fields
     Target_Donation: Joi.number().optional(),
