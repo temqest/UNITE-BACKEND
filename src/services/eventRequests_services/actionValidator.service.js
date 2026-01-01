@@ -147,15 +147,15 @@ class ActionValidatorService {
       
       // 2b. Prevent requesters from self-reviewing their own requests (except when they're active responder in reschedule)
       // Use authority-based check, not role-based
-      // Special case: In APPROVED state, requesters with reschedule permission can reschedule their own events
-      // This allows coordinators to reschedule their own approved events
+      // Special case: In APPROVED state, requesters with permission can reschedule/edit their own events
+      // This allows coordinators to reschedule/edit their own approved events
       if (isRequester && normalizedState !== REQUEST_STATES.REVIEW_RESCHEDULED) {
         // In non-reschedule states, requesters cannot review their own requests
-        // BUT: Allow RESCHEDULE in APPROVED state (coordinators can reschedule their own approved events)
-        const blockedActions = [REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT, REQUEST_ACTIONS.EDIT];
-        // Only block RESCHEDULE if NOT in APPROVED state
+        // BUT: Allow RESCHEDULE and EDIT in APPROVED state (coordinators can reschedule/edit their own approved events)
+        const blockedActions = [REQUEST_ACTIONS.ACCEPT, REQUEST_ACTIONS.REJECT];
+        // Only block RESCHEDULE and EDIT if NOT in APPROVED state
         if (normalizedState !== REQUEST_STATES.APPROVED) {
-          blockedActions.push(REQUEST_ACTIONS.RESCHEDULE);
+          blockedActions.push(REQUEST_ACTIONS.RESCHEDULE, REQUEST_ACTIONS.EDIT);
         }
         
         if (blockedActions.includes(action)) {

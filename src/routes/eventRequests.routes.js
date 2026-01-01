@@ -214,6 +214,14 @@ router.post(
   async (req, res, next) => {
     try {
       await eventRequestController.assignStaff(req, res);
+      // Invalidate cache for this user's requests and the specific request
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+        invalidateCache(new RegExp(`event-requests/${req.params.requestId}`));
+        // Also invalidate list cache
+        invalidateCache(/event-requests\?/);
+      }
     } catch (error) {
       next(error);
     }

@@ -896,12 +896,25 @@ class EventRequestService {
             }
           }
         } else {
-          // For approved events, check if user is the assigned coordinator
-          // Coordinators should be able to edit events they manage
+          // For approved events, check if user is the assigned coordinator OR the requester with permission
+          // This allows coordinators to edit their own approved events even if they're not assigned
           const isAssignedCoordinator = request.assignedCoordinator?.userId?.toString() === userId.toString() ||
                                        request.reviewer?.userId?.toString() === userId.toString();
+          const isRequester = request.requester?.userId?.toString() === userId.toString();
           
-          if (!isAssignedCoordinator) {
+          // If user is requester, re-check permission without location context (system-level permission)
+          // This handles cases where location-scoped permission check failed but user has system-level permission
+          let hasSystemLevelPermission = false;
+          if (isRequester) {
+            hasSystemLevelPermission = await permissionService.checkPermission(
+              userId,
+              resource,
+              action,
+              {} // Check system-level permission (no location context)
+            );
+          }
+          
+          if (!isAssignedCoordinator && !(isRequester && hasSystemLevelPermission)) {
             // Log diagnostic info for debugging
             const userPermissions = await permissionService.getUserPermissions(userId, null);
             console.error(`[EVENT REQUEST SERVICE] Permission denied for ${resource}.${action}`, {
@@ -911,6 +924,8 @@ class EventRequestService {
               isApproved,
               locationId: locationId?.toString(),
               isAssignedCoordinator,
+              isRequester,
+              hasSystemLevelPermission,
               userPermissionsCount: userPermissions.length,
               hasWildcard: userPermissions.some(p => p.resource === '*' && p.actions.includes('*')),
               permissions: userPermissions.map(p => `${p.resource}.${p.actions.join(',')}`)
@@ -1362,6 +1377,16 @@ class EventRequestService {
    * @returns {Promise<Object>} Result with event and staff
    */
   async assignStaffToEvent(userId, requestId, eventId, staffMembers) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    const timeoutMs = 30000; // 30 second timeout
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Staff assignment timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
     try {
       console.log(`[EVENT REQUEST SERVICE] assignStaffToEvent called:`, {
         userId: userId?.toString(),
@@ -1372,15 +1397,34 @@ class EventRequestService {
 
       const EventStaff = require('../../models/events_models/eventStaff.model');
       
+      // Validate input
+      if (!staffMembers || !Array.isArray(staffMembers)) {
+        throw new Error('Staff members must be an array');
+      }
+
+      if (staffMembers.length === 0) {
+        throw new Error('At least one staff member is required');
+      }
+
+      // Validate each staff member
+      for (const staff of staffMembers) {
+        if (!staff.FullName || !staff.Role) {
+          throw new Error(`Invalid staff data: FullName and Role are required. Received: ${JSON.stringify(staff)}`);
+        }
+        if (typeof staff.FullName !== 'string' || typeof staff.Role !== 'string') {
+          throw new Error(`Invalid staff data: FullName and Role must be strings. Received: ${JSON.stringify(staff)}`);
+        }
+      }
+      
       // Verify event exists
-      const event = await Event.findOne({ Event_ID: eventId });
+      const event = await Event.findOne({ Event_ID: eventId }).session(session);
       if (!event) {
         throw new Error('Event not found');
       }
       console.log(`[EVENT REQUEST SERVICE] Event found: ${event.Event_ID}`);
 
       // Get existing staff assignments
-      const existingStaff = await EventStaff.find({ EventID: eventId });
+      const existingStaff = await EventStaff.find({ EventID: eventId }).session(session).lean();
       console.log(`[EVENT REQUEST SERVICE] Found ${existingStaff.length} existing staff assignments`);
       
       // Create a map of existing staff by FullName+Role for quick lookup
@@ -1390,78 +1434,128 @@ class EventRequestService {
         existingStaffMap.set(key, s);
       });
 
-      // Process new staff list - add new ones, keep existing ones that are still in the list
+      // Process new staff list - identify what to add, keep, and remove
       const newStaffMap = new Map();
-      const staffList = [];
-      let newStaffCount = 0;
-      let keptStaffCount = 0;
+      const staffToAdd = [];
+      const staffToKeep = [];
       
       for (const staff of staffMembers) {
-        // Validate staff data format
-        if (!staff.FullName || !staff.Role) {
-          console.warn(`[EVENT REQUEST SERVICE] Invalid staff data:`, staff);
-          continue;
-        }
-
-        const key = `${staff.FullName}|${staff.Role}`;
+        const key = `${staff.FullName.trim()}|${staff.Role.trim()}`;
         newStaffMap.set(key, staff);
         
         if (existingStaffMap.has(key)) {
           // Staff already exists, keep it
-          staffList.push(existingStaffMap.get(key));
-          keptStaffCount++;
-          console.log(`[EVENT REQUEST SERVICE] Keeping existing staff: ${staff.FullName} - ${staff.Role}`);
+          staffToKeep.push(existingStaffMap.get(key));
         } else {
-          // New staff, create it
-          const eventStaff = new EventStaff({
+          // New staff, prepare for bulk insert
+          staffToAdd.push({
             EventID: eventId,
-            Staff_FullName: staff.FullName,
-            Role: staff.Role
+            Staff_FullName: staff.FullName.trim(),
+            Role: staff.Role.trim()
           });
-          const savedStaff = await eventStaff.save();
-          console.log(`[EVENT REQUEST SERVICE] Created new staff: ${savedStaff._id} - ${savedStaff.Staff_FullName} - ${savedStaff.Role}`);
-          staffList.push(savedStaff);
-          newStaffCount++;
         }
       }
 
-      // Remove staff that are no longer in the list
-      let removedStaffCount = 0;
+      // Identify staff to remove
+      const staffToRemove = [];
       for (const [key, existingStaffMember] of existingStaffMap) {
         if (!newStaffMap.has(key)) {
-          const deleteResult = await EventStaff.deleteOne({ _id: existingStaffMember._id });
-          console.log(`[EVENT REQUEST SERVICE] Removed staff: ${existingStaffMember.Staff_FullName} - ${existingStaffMember.Role} (deleted: ${deleteResult.deletedCount})`);
-          removedStaffCount++;
+          staffToRemove.push(existingStaffMember._id);
         }
       }
 
+      // Execute operations efficiently
+      // Use insertMany directly for better performance when only adding
+      if (staffToAdd.length > 0 && staffToRemove.length === 0) {
+        // Only adding - use insertMany (faster than bulkWrite with insertOne)
+        await EventStaff.insertMany(staffToAdd, { session });
+        console.log(`[EVENT REQUEST SERVICE] Inserted ${staffToAdd.length} staff members`);
+      } else if (staffToRemove.length > 0 || staffToAdd.length > 0) {
+        // Mixed operations - use bulkWrite
+        const bulkOps = [];
+        
+        // Add new staff members
+        if (staffToAdd.length > 0) {
+          for (const staffDoc of staffToAdd) {
+            bulkOps.push({
+              insertOne: {
+                document: staffDoc
+              }
+            });
+          }
+        }
+
+        // Remove staff that are no longer in the list
+        if (staffToRemove.length > 0) {
+          bulkOps.push({
+            deleteMany: {
+              filter: { _id: { $in: staffToRemove } }
+            }
+          });
+        }
+
+        if (bulkOps.length > 0) {
+          await EventStaff.bulkWrite(bulkOps, { session });
+          console.log(`[EVENT REQUEST SERVICE] Bulk operations completed:`, {
+            added: staffToAdd.length,
+            removed: staffToRemove.length
+          });
+        }
+      }
+
+      // Construct staff list from kept + newly added (avoid unnecessary fetch)
+      // We know what staff should exist, so construct the response directly
+      // The frontend only needs FullName and Role anyway
+      const staffList = [
+        ...staffToKeep.map(s => ({
+          _id: s._id,
+          Staff_FullName: s.Staff_FullName,
+          FullName: s.Staff_FullName,
+          Role: s.Role
+        })),
+        ...staffToAdd.map(s => ({
+          Staff_FullName: s.Staff_FullName,
+          FullName: s.Staff_FullName,
+          Role: s.Role
+        }))
+      ];
+
       console.log(`[EVENT REQUEST SERVICE] Staff processing summary:`, {
-        newStaff: newStaffCount,
-        keptStaff: keptStaffCount,
-        removedStaff: removedStaffCount,
+        newStaff: staffToAdd.length,
+        keptStaff: staffToKeep.length,
+        removedStaff: staffToRemove.length,
         totalStaff: staffList.length
       });
 
       // Generate staff assignment ID
       const staffAssignmentId = `STAFF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       event.StaffAssignmentID = staffAssignmentId;
-      const eventSaveResult = await event.save();
+      await event.save({ session });
       console.log(`[EVENT REQUEST SERVICE] Updated event StaffAssignmentID: ${staffAssignmentId}`);
 
       // Update request if it exists
-      const request = await EventRequest.findOne({ Request_ID: requestId });
-      if (request) {
-        request.StaffAssignmentID = staffAssignmentId;
-        const requestSaveResult = await request.save();
-        console.log(`[EVENT REQUEST SERVICE] Updated request StaffAssignmentID: ${staffAssignmentId}`);
-      } else {
-        console.warn(`[EVENT REQUEST SERVICE] Request ${requestId} not found, skipping request update`);
+      let request = null;
+      if (requestId) {
+        request = await EventRequest.findOne({ Request_ID: requestId }).session(session);
+        if (request) {
+          request.StaffAssignmentID = staffAssignmentId;
+          await request.save({ session });
+          console.log(`[EVENT REQUEST SERVICE] Updated request StaffAssignmentID: ${staffAssignmentId}`);
+        } else {
+          console.warn(`[EVENT REQUEST SERVICE] Request ${requestId} not found, skipping request update`);
+        }
       }
 
-      // Trigger notification if new staff was added
-      if (newStaffCount > 0) {
+      // Commit transaction
+      await Promise.race([
+        session.commitTransaction(),
+        timeoutPromise
+      ]);
+
+      // Trigger notification if new staff was added (outside transaction)
+      if (staffToAdd.length > 0) {
         try {
-          await notificationEngine.notifyStaffAdded(event, request, userId, newStaffCount);
+          await notificationEngine.notifyStaffAdded(event, request, userId, staffToAdd.length);
         } catch (notificationError) {
           console.error(`[EVENT REQUEST SERVICE] Error sending staff added notification: ${notificationError.message}`);
           // Don't fail staff assignment if notification fails
@@ -1484,6 +1578,11 @@ class EventRequestService {
 
       return result;
     } catch (error) {
+      // Abort transaction on error
+      await session.abortTransaction().catch(() => {
+        // Ignore abort errors
+      });
+      
       console.error(`[EVENT REQUEST SERVICE] Error assigning staff:`, {
         message: error.message,
         stack: error.stack,
@@ -1492,7 +1591,17 @@ class EventRequestService {
         eventId,
         staffCount: staffMembers?.length || 0
       });
-      throw new Error(`Failed to assign staff: ${error.message}`);
+      
+      // Provide more detailed error messages
+      if (error.message.includes('timeout')) {
+        throw new Error(`Staff assignment timed out. Please try again.`);
+      } else if (error.message.includes('validation')) {
+        throw new Error(`Invalid staff data: ${error.message}`);
+      } else {
+        throw new Error(`Failed to assign staff: ${error.message}`);
+      }
+    } finally {
+      session.endSession();
     }
   }
 }
