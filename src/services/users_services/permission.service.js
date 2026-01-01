@@ -1,8 +1,56 @@
 const mongoose = require('mongoose');
 const { Role, Permission, UserRole, UserCoverageAssignment, CoverageArea, User } = require('../../models/index');
 const userCoverageAssignmentService = require('./userCoverageAssignment.service');
+const cache = require('../../utils/cache');
 
 class PermissionService {
+  /**
+   * Generate cache key for permission check
+   * @private
+   * @param {string|ObjectId} userId - User ID
+   * @param {string} resource - Resource name
+   * @param {string} action - Action name
+   * @param {Object} context - Context object
+   * @returns {string} Cache key
+   */
+  _getPermissionCacheKey(userId, resource, action, context = {}) {
+    const userIdStr = userId?.toString() || 'anonymous';
+    const locationId = context?.locationId?.toString() || 'global';
+    const coverageAreaId = context?.coverageAreaId?.toString() || '';
+    const geographicUnitId = context?.geographicUnitId?.toString() || '';
+    return `permission:${userIdStr}:${resource}:${action}:${locationId}:${coverageAreaId}:${geographicUnitId}`;
+  }
+
+  /**
+   * Generate cache key for user permissions
+   * @private
+   * @param {string|ObjectId} userId - User ID
+   * @param {Object} context - Context object
+   * @returns {string} Cache key
+   */
+  _getUserPermissionsCacheKey(userId, context = {}) {
+    const userIdStr = userId?.toString() || 'anonymous';
+    const locationId = context?.locationId?.toString() || 'global';
+    const coverageAreaId = context?.coverageAreaId?.toString() || '';
+    const geographicUnitId = context?.geographicUnitId?.toString() || '';
+    return `userPermissions:${userIdStr}:${locationId}:${coverageAreaId}:${geographicUnitId}`;
+  }
+
+  /**
+   * Invalidate permission cache for a user
+   * @param {string|ObjectId} userId - User ID
+   */
+  invalidateUserPermissionCache(userId) {
+    if (!userId) return;
+    const userIdStr = userId.toString();
+    const keys = cache.keys();
+    const userKeys = keys.filter(key => key.includes(`:${userIdStr}:`) || key.includes(`permission:${userIdStr}`) || key.includes(`userPermissions:${userIdStr}`));
+    if (userKeys.length > 0) {
+      cache.del(userKeys);
+      console.log(`[PERMISSION SERVICE] Invalidated ${userKeys.length} cache entries for user ${userIdStr}`);
+    }
+  }
+
   /**
    * Check if a user has a specific permission
    * @param {string|ObjectId} userId - User ID
@@ -13,6 +61,13 @@ class PermissionService {
    */
   async checkPermission(userId, resource, action, context = {}) {
     try {
+      // Check cache first
+      const cacheKey = this._getPermissionCacheKey(userId, resource, action, context);
+      const cached = cache.get(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+
       // Quick check: If user has wildcard permission (*.*), grant all permissions immediately
       // This is especially important for admins who have ['*.*'] permissions
       let quickPermissions = [];
@@ -41,71 +96,48 @@ class PermissionService {
         return true;
       }
       
-      // 1. Get all active roles for user from UserRole collection
-      let userRoles = await UserRole.find({ 
-        userId, 
-        isActive: true,
-        $or: [
-          { expiresAt: { $exists: false } },
-          { expiresAt: null },
-          { expiresAt: { $gt: new Date() } }
-        ]
-      }).populate('roleId');
-
-      // 2. Also check embedded roles in User model (for consistency with getUsersWithPermission)
-      // User is already imported at the top of the file
+      // OPTIMIZED: Use single User query with embedded roles (faster path)
+      // Check embedded roles first (most users have embedded roles)
       const user = await User.findById(userId).select('roles').lean();
+      let userRoles = [];
+      
       if (user && user.roles && user.roles.length > 0) {
         const activeEmbeddedRoles = user.roles.filter(r => r.isActive !== false);
         if (activeEmbeddedRoles.length > 0) {
-          // Get role documents for embedded roles
           const embeddedRoleIds = activeEmbeddedRoles
             .map(r => r.roleId)
             .filter(Boolean);
           
           if (embeddedRoleIds.length > 0) {
-            const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } });
-            // Convert to same format as UserRole (with roleId populated)
-            const embeddedUserRoles = embeddedRoles.map(role => ({
+            // Single query to get all roles
+            const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } }).lean();
+            userRoles = embeddedRoles.map(role => ({
               roleId: role,
               userId: userId,
               isActive: true
             }));
-            // Merge with UserRole results (avoid duplicates)
-            const existingRoleIds = new Set(userRoles.map(ur => ur.roleId._id.toString()));
-            embeddedUserRoles.forEach(eur => {
-              if (!existingRoleIds.has(eur.roleId._id.toString())) {
-                userRoles.push(eur);
-              }
-            });
           }
         }
       }
-
+      
+      // Fallback: Query UserRole collection only if embedded roles are missing
       if (userRoles.length === 0) {
-        // Fallback: Check embedded roles directly from User model
-        const user = await User.findById(userId).select('roles').lean();
-        if (user && user.roles && user.roles.length > 0) {
-          const activeEmbeddedRoles = user.roles.filter(r => r.isActive !== false);
-          if (activeEmbeddedRoles.length > 0) {
-            const embeddedRoleIds = activeEmbeddedRoles
-              .map(r => r.roleId)
-              .filter(Boolean);
-            
-            if (embeddedRoleIds.length > 0) {
-              const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } });
-              
-              // Convert to UserRole format for aggregation
-              const embeddedUserRoles = embeddedRoles.map(role => ({
-                roleId: role,
-                userId: userId,
-                isActive: true
-              }));
-              
-              userRoles = embeddedUserRoles;
-            }
-          }
-        }
+        const userRoleDocs = await UserRole.find({ 
+          userId, 
+          isActive: true,
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: new Date() } }
+          ]
+        }).populate('roleId').lean();
+        
+        userRoles = userRoleDocs.map(ur => ({
+          roleId: ur.roleId,
+          userId: ur.userId,
+          isActive: ur.isActive,
+          context: ur.context
+        }));
         
         if (userRoles.length === 0) {
           return false;
@@ -162,6 +194,9 @@ class PermissionService {
         // console.log('[PERMISSION DENIED]', { userId: userId.toString(), resource, action });
       }
 
+      // Cache the result (TTL: 3 minutes)
+      cache.set(cacheKey, hasPermission, 180);
+
       return hasPermission;
     } catch (error) {
       console.error('Error checking permission:', error);
@@ -190,6 +225,13 @@ class PermissionService {
       } else {
         // It's a locationScope (backward compatibility - could be ObjectId, string, or null)
         locationScope = locationScopeOrContext;
+      }
+
+      // Check cache first
+      const cacheKey = this._getUserPermissionsCacheKey(userId, actualContext);
+      const cached = cache.get(cacheKey);
+      if (cached !== undefined) {
+        return cached;
       }
 
       // Convert userId to ObjectId if it's a valid ObjectId string
@@ -268,6 +310,9 @@ class PermissionService {
 
       const permissions = await this.aggregatePermissions(userRoles);
       
+      // Cache the result (TTL: 3 minutes)
+      cache.set(cacheKey, permissions, 180);
+      
       return permissions;
     } catch (error) {
       console.error('[PERMISSION SERVICE] Error getting user permissions:', error);
@@ -286,6 +331,8 @@ class PermissionService {
    */
   async assignRole(userId, roleId, locationScope = [], assignedBy = null, expiresAt = null, coverageAreaScope = [], session = null) {
     try {
+      // Invalidate cache when role is assigned
+      this.invalidateUserPermissionCache(userId);
       // Verify role exists
       const role = await Role.findById(roleId).session(session);
       if (!role) {
@@ -341,7 +388,12 @@ class PermissionService {
         query.roleId = roleId;
       }
 
-      return await UserRole.updateMany(query, { isActive: false });
+      const result = await UserRole.updateMany(query, { isActive: false });
+      
+      // Invalidate cache when role is revoked
+      this.invalidateUserPermissionCache(userId);
+      
+      return result;
     } catch (error) {
       throw new Error(`Failed to revoke role: ${error.message}`);
     }
@@ -390,11 +442,7 @@ class PermissionService {
         ]
       });
 
-      console.log(`[getUsersWithPermission] Found ${roles.length} roles with permission ${resource}.${action}:`, 
-        roles.map(r => ({ id: r._id, code: r.code, name: r.name })));
-
       if (roles.length === 0) {
-        console.log(`[getUsersWithPermission] No roles found with permission ${resource}.${action}`);
         return [];
       }
 
@@ -413,7 +461,6 @@ class PermissionService {
         ]
       }).populate('roleId');
 
-      console.log(`[getUsersWithPermission] Found ${userRoles.length} active UserRole assignments for permission ${resource}.${action}`);
 
       // Filter by location scope if provided (backward compatible)
       // Only filter if locationScope is a valid value (not null, undefined, or empty object)
@@ -439,7 +486,6 @@ class PermissionService {
         'roles.isActive': true
       }).select('_id roles');
 
-      console.log(`[getUsersWithPermission] Found ${usersWithEmbeddedRoles.length} users with embedded roles for permission ${resource}.${action}`);
 
       // Filter users by checking if they have the required role in embedded array
       usersWithEmbeddedRoles.forEach(user => {
@@ -508,7 +554,6 @@ class PermissionService {
         // Removed verbose logging
       }
       
-      console.log(`[getUsersWithPermission] Returning ${userIds.length} unique user IDs for permission ${resource}.${action} (${userRoles.length} from UserRole, ${usersWithEmbeddedRoles.length} from embedded roles):`, userIds);
       return userIds;
     } catch (error) {
       console.error('Error getting users with permission:', error);

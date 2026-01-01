@@ -347,13 +347,6 @@ class ActionValidatorService {
           const canReview = await this._canReview(userId, requestObj, context);
           
           if (!isReviewer && !canReview) {
-            console.warn(`[ACTION VALIDATOR] Confirm in pending-review: User is not reviewer`, {
-              userId: this._normalizeUserId(userId),
-              requestId: requestObj.Request_ID,
-              isRequester,
-              isReviewer,
-              canReview
-            });
             return {
               valid: false,
               reason: 'Only the assigned reviewer can confirm requests in pending-review state'
@@ -361,12 +354,6 @@ class ActionValidatorService {
           }
           
           // Reviewer can confirm - permission check will be done below
-          console.debug(`[ACTION VALIDATOR] Confirm in pending-review: Reviewer can confirm`, {
-            userId: this._normalizeUserId(userId),
-            requestId: requestObj.Request_ID,
-            isReviewer,
-            canReview
-          });
         }
         // 2. REVIEW_RESCHEDULED state: Either requester or reviewer can confirm based on active responder
         else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
@@ -404,16 +391,6 @@ class ActionValidatorService {
             const reviewerId = this._normalizeUserId(requestObj.reviewer?.userId);
             const isReviewer = normalizedUserId && reviewerId && normalizedUserId === reviewerId;
             
-            console.warn(`[ACTION VALIDATOR] Confirm on approved: User is not requester`, {
-              userId: normalizedUserId,
-              requesterId,
-              reviewerId,
-              isReviewer,
-              requestId: requestObj.Request_ID,
-              requesterUserId: requestObj.requester?.userId,
-              reviewerUserId: requestObj.reviewer?.userId,
-              currentState: normalizedState
-            });
             
             // If user is the reviewer and request was just approved, provide helpful message
             if (isReviewer) {
@@ -533,16 +510,11 @@ class ActionValidatorService {
    */
   _isRequester(userId, request) {
     if (!request.requester || !userId) {
-      console.debug(`[ACTION VALIDATOR] _isRequester: Missing requester or userId`, {
-        hasRequester: !!request.requester,
-        hasUserId: !!userId
-      });
       return false;
     }
     
     const userIdStr = this._normalizeUserId(userId);
     if (!userIdStr) {
-      console.debug(`[ACTION VALIDATOR] _isRequester: Failed to normalize userId`, { userId });
       return false;
     }
     
@@ -550,23 +522,10 @@ class ActionValidatorService {
     const requesterId = this._normalizeUserId(requesterUserId);
     
     if (!requesterId) {
-      console.debug(`[ACTION VALIDATOR] _isRequester: Failed to normalize requesterUserId`, { 
-        requesterUserId,
-        requesterUserIdType: typeof requesterUserId,
-        requesterUserIdIsObject: typeof requesterUserId === 'object'
-      });
       return false;
     }
     
-    const isMatch = requesterId === userIdStr;
-    console.debug(`[ACTION VALIDATOR] _isRequester: Comparison result`, {
-      userIdStr,
-      requesterId,
-      isMatch,
-      requestId: request.Request_ID
-    });
-    
-    return isMatch;
+    return requesterId === userIdStr;
   }
 
   /**
@@ -756,19 +715,16 @@ class ActionValidatorService {
       const assignmentRule = request.reviewer?.assignmentRule;
       
       if (isReviewer && assignmentRule) {
-        console.log(`[ACTION VALIDATOR] User ${userId} is assigned reviewer with assignment rule: ${assignmentRule}, allowing review`);
         // Still check authority hierarchy, but explicit assignment allows review
         const authorityCheck = await this._checkAuthorityHierarchy(userId, request);
         if (authorityCheck.valid) {
           return true;
         } else {
-          console.warn(`[ACTION VALIDATOR] Assigned reviewer ${userId} failed authority check: ${authorityCheck.reason}`);
           // For explicit assignments, we're more lenient - allow if user has reasonable authority
           const actor = await User.findById(userId).select('authority').lean();
           const requesterAuthority = request.requester?.authoritySnapshot || AUTHORITY_TIERS.BASIC_USER;
           if (actor && actor.authority >= AUTHORITY_TIERS.STAKEHOLDER) {
             // Explicit assignment allows review even if authority hierarchy doesn't match
-            console.log(`[ACTION VALIDATOR] Allowing user (${actor.authority}) to review requester (${requesterAuthority}) request via explicit assignment`);
             return true;
           }
         }
@@ -985,7 +941,6 @@ class ActionValidatorService {
     }
     
     if (!userIdStr) {
-      console.warn(`[ACTION VALIDATOR] Could not normalize userId`);
       return available; // Only view
     }
     
@@ -1008,18 +963,9 @@ class ActionValidatorService {
         // For APPROVED state, if user is requester, reviewer, or admin, allow them to proceed
         // even without an active responder
         if (isRequester || isReviewer || userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-          console.log(`[ACTION VALIDATOR] APPROVED state: User can act (requester: ${isRequester}, reviewer: ${isReviewer}, admin: ${userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN})`, {
-            userId: userIdStr,
-            requestId: requestObj.Request_ID,
-            userAuthority
-          });
           // Continue to action computation below - don't return early
         } else {
           // Not requester, reviewer, or admin - only view
-          console.log(`[ACTION VALIDATOR] APPROVED state: User is not requester/reviewer/admin, view only`, {
-            userId: userIdStr,
-            requestId: requestObj.Request_ID
-          });
           return available;
         }
       } catch (error) {
@@ -1068,15 +1014,6 @@ class ActionValidatorService {
       }
 
       if (!userIdStr || (!responderId && normalizedState !== REQUEST_STATES.APPROVED)) {
-        console.warn(`[ACTION VALIDATOR] Missing userId or responderId`, {
-          originalUserId: userId,
-          normalizedUserId: userIdStr,
-          originalResponderUserId: activeResponder?.userId,
-          normalizedResponderId: responderId,
-          activeResponder,
-          normalizedState,
-          requestId: requestObj.Request_ID
-        });
         // For APPROVED state, we've already validated user can proceed, so continue
         if (normalizedState !== REQUEST_STATES.APPROVED) {
           return available; // Only view
@@ -1099,38 +1036,12 @@ class ActionValidatorService {
     // not "only the assigned reviewer can respond"
     // Skip this check for APPROVED state (already handled above)
     if (!isActiveResponder && normalizedState !== REQUEST_STATES.APPROVED && requestObj.reviewer?.assignmentRule === 'coordinator-to-admin' && activeResponder) {
-      console.log(`[ACTION VALIDATOR] Entering coordinator-to-admin special case`, {
-        userId: userIdStr,
-        requestId: requestObj.Request_ID,
-        assignmentRule: requestObj.reviewer?.assignmentRule,
-        normalizedState,
-        currentIsActiveResponder: isActiveResponder,
-        activeResponder: activeResponder ? {
-          userId: activeResponder.userId?.toString(),
-          relationship: activeResponder.relationship
-        } : null
-      });
-      
       const user = await User.findById(userIdStr).select('authority').lean();
       const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
-      
-      console.log(`[ACTION VALIDATOR] User authority check`, {
-        userId: userIdStr,
-        userAuthority,
-        isAdmin: userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN,
-        threshold: AUTHORITY_TIERS.OPERATIONAL_ADMIN
-      });
       
       if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
         if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
           // PENDING_REVIEW: Any Admin can act as reviewer
-          console.log(`[ACTION VALIDATOR] User is admin reviewing coordinator-to-admin request (PENDING_REVIEW)`, {
-            userId: userIdStr,
-            userAuthority,
-            requestId: requestObj.Request_ID,
-            assignmentRule: requestObj.reviewer.assignmentRule,
-            state: normalizedState
-          });
           isActiveResponder = true; // Treat admin as active responder
         } else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
           // REVIEW_RESCHEDULED: Simplified logic for reschedule loop
@@ -1148,83 +1059,21 @@ class ActionValidatorService {
           }
           
           const activeResponderRelationship = activeResponder?.relationship || null;
-          const requesterId = requestObj.requester?.userId?.toString() || null;
-          
-          console.log(`[ACTION VALIDATOR] REVIEW_RESCHEDULED state analysis`, {
-            userId: userIdStr,
-            userAuthority,
-            requestId: requestObj.Request_ID,
-            lastActorId,
-            lastActionExists: !!requestObj.lastAction,
-            lastActionActorIdType: requestObj.lastAction?.actorId ? typeof requestObj.lastAction.actorId : 'null',
-            activeResponderRelationship,
-            activeResponderUserId: activeResponder?.userId?.toString(),
-            requesterId,
-            conditionCheck: {
-              isReviewerRelationship: activeResponderRelationship === 'reviewer',
-              lastActorIdNotEqualToUserId: lastActorId !== userIdStr,
-              willSetActiveResponder: activeResponderRelationship === 'reviewer' && lastActorId !== userIdStr
-            }
-          });
           
           // If activeResponder.relationship === 'reviewer', ANY Admin can respond
           // UNLESS this Admin was the one who rescheduled (then they're View only)
           if (activeResponderRelationship === 'reviewer') {
             // Admin can respond UNLESS they rescheduled last
             if (lastActorId && lastActorId !== userIdStr) {
-              console.log(`[ACTION VALIDATOR] ✅ Admin can respond (activeResponder.relationship === 'reviewer' and Admin did NOT reschedule last)`, {
-                userId: userIdStr,
-                userAuthority,
-                requestId: requestObj.Request_ID,
-                lastActorId,
-                activeResponderRelationship,
-                activeResponderUserId: activeResponder?.userId?.toString(),
-                condition: `lastActorId (${lastActorId}) !== userIdStr (${userIdStr})`
-              });
               isActiveResponder = true;
-            } else if (lastActorId === userIdStr) {
-              // Admin rescheduled last, they remain View only (requester is active responder)
-              console.log(`[ACTION VALIDATOR] ❌ Admin rescheduled last, they are View only (requester is active responder)`, {
-                userId: userIdStr,
-                userAuthority,
-                requestId: requestObj.Request_ID,
-                lastActorId,
-                activeResponderRelationship,
-                condition: `lastActorId (${lastActorId}) === userIdStr (${userIdStr})`
-              });
-            } else {
-              // lastActorId is null or undefined - log warning
-              console.warn(`[ACTION VALIDATOR] ⚠️ lastActorId is null/undefined, cannot determine if Admin rescheduled`, {
-                userId: userIdStr,
-                requestId: requestObj.Request_ID,
-                lastAction: requestObj.lastAction,
-                activeResponderRelationship
-              });
             }
-          } else {
-            console.log(`[ACTION VALIDATOR] Active responder relationship is not 'reviewer'`, {
-              userId: userIdStr,
-              requestId: requestObj.Request_ID,
-              activeResponderRelationship,
-              expected: 'reviewer'
-            });
+            // If lastActorId is null/undefined, log warning but don't block
+            if (!lastActorId) {
+              console.warn(`[ACTION VALIDATOR] lastActorId is null/undefined for request ${requestObj.Request_ID}`);
+            }
           }
-          // If activeResponder.relationship === 'requester', only requester can respond
-          // (This is handled by the initial userIdStr === responderId check above)
         }
-      } else {
-        console.log(`[ACTION VALIDATOR] User is not Admin (authority < ${AUTHORITY_TIERS.OPERATIONAL_ADMIN})`, {
-          userId: userIdStr,
-          userAuthority,
-          threshold: AUTHORITY_TIERS.OPERATIONAL_ADMIN
-        });
       }
-      
-      console.log(`[ACTION VALIDATOR] Exiting coordinator-to-admin special case`, {
-        userId: userIdStr,
-        requestId: requestObj.Request_ID,
-        finalIsActiveResponder: isActiveResponder
-      });
     }
 
     // For APPROVED state, allow requester/reviewer/admin to proceed even if not active responder
@@ -1233,30 +1082,8 @@ class ActionValidatorService {
     let shouldProceed = isActiveResponder;
     
     if (!shouldProceed) {
-      console.debug(`[ACTION VALIDATOR] User is not active responder and cannot proceed`, {
-        userId: userIdStr,
-        responderId,
-        requestId: requestObj.Request_ID,
-        normalizedState,
-        activeResponderRelationship: activeResponder?.relationship,
-        isRequester,
-        isReviewer,
-        userAuthority
-      });
       return available; // Only view
     }
-
-    console.debug(`[ACTION VALIDATOR] User can proceed (active responder or APPROVED requester/reviewer/admin)`, {
-      userId: userIdStr,
-      responderId,
-      requestId: requestObj.Request_ID,
-      relationship: activeResponder?.relationship,
-      normalizedState,
-      isActiveResponder,
-      isRequester,
-      isReviewer,
-      isAdmin: userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN
-    });
     
     // Get user authority if not already fetched (for APPROVED state we may have already fetched it)
     if (!userAuthority || userAuthority === AUTHORITY_TIERS.BASIC_USER) {
@@ -1265,8 +1092,7 @@ class ActionValidatorService {
       // Note: We may have already fetched user above for coordinator-to-admin check, but fetch again for consistency
       const user = await User.findById(userIdStr).select('authority').lean();
       if (!user) {
-        // If user not found (shouldn't happen), try to get from cache or return view only
-        console.warn(`[ACTION VALIDATOR] User not found: ${userIdStr}`);
+        // If user not found (shouldn't happen), return view only
         return available; // Only view
       }
       userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
@@ -1275,48 +1101,18 @@ class ActionValidatorService {
     // Get base actions for current state
     const baseActions = RequestStateService.getAvailableActions(normalizedState);
     
-    console.log(`[ACTION VALIDATOR] Computing actions for active responder`, {
-      userId: userIdStr,
-      requestId: requestObj.Request_ID,
-      normalizedState,
-      userAuthority,
-      baseActions,
-      isActiveResponder: true
-    });
-    
     // Map actions based on authority (accept/reject vs confirm/decline)
     const mappedActions = this._mapActionsByAuthority(userAuthority, baseActions);
-    
-    console.log(`[ACTION VALIDATOR] Mapped actions by authority`, {
-      userId: userIdStr,
-      requestId: requestObj.Request_ID,
-      mappedActions,
-      userAuthority
-    });
     
     // Check permissions for each action and add if valid
     for (const action of mappedActions) {
       if (action === REQUEST_ACTIONS.VIEW) continue; // Already added
       
       const validation = await this.validateAction(userId, action, request, context);
-      console.log(`[ACTION VALIDATOR] Action validation result`, {
-        userId: userIdStr,
-        requestId: requestObj.Request_ID,
-        action,
-        valid: validation.valid,
-        reason: validation.reason || 'N/A'
-      });
       if (validation.valid) {
         available.push(action);
       }
     }
-    
-    console.log(`[ACTION VALIDATOR] Final available actions`, {
-      userId: userIdStr,
-      requestId: requestObj.Request_ID,
-      availableActions: available,
-      availableActionsCount: available.length
-    });
     
     // Special handling for pending-review: requester can cancel and edit
     if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
@@ -1373,20 +1169,6 @@ class ActionValidatorService {
         hasCancelPermission = await permissionService.checkPermission(userIdStr, 'request', 'cancel', {});
       }
       
-      // Log permission check results for coordinators (for debugging)
-      if (isCoordinator) {
-        console.log(`[ACTION VALIDATOR] APPROVED state: Coordinator permission check`, {
-          userId: userIdStr,
-          requestId: requestObj.Request_ID,
-          userAuthority,
-          locationId: locationId || 'none',
-          hasReschedulePermission,
-          hasEditPermission,
-          hasManageStaffPermission,
-          hasCancelPermission
-        });
-      }
-      
       // Determine if user should have access to approved event actions
       // Allow if: requester, reviewer, admin, OR coordinator with any of the required permissions
       const shouldHaveAccess = isRequester || 
@@ -1406,32 +1188,10 @@ class ActionValidatorService {
         }
         
         // Reschedule: check both permission AND validateAction
-        // For coordinators on approved events, ensure validateAction doesn't fail due to requester check
         if (hasReschedulePermission) {
           const rescheduleValidation = await this.validateAction(userId, REQUEST_ACTIONS.RESCHEDULE, request, context);
           if (rescheduleValidation.valid) {
             available.push(REQUEST_ACTIONS.RESCHEDULE);
-            if (isCoordinator) {
-              console.log(`[ACTION VALIDATOR] ✅ Coordinator reschedule added for approved event`, {
-                userId: userIdStr,
-                requestId: requestObj.Request_ID,
-                hasReschedulePermission: true,
-                validationPassed: true
-              });
-            }
-          } else {
-            // Enhanced logging for coordinator reschedule validation failures
-            console.log(`[ACTION VALIDATOR] Reschedule permission exists but validation failed:`, {
-              userId: userIdStr,
-              requestId: requestObj.Request_ID,
-              isCoordinator,
-              isRequester,
-              userAuthority,
-              hasReschedulePermission: true,
-              reason: rescheduleValidation.reason,
-              currentState: requestObj.status || requestObj.Status,
-              locationId: locationId || 'none'
-            });
           }
         }
         
@@ -1442,44 +1202,8 @@ class ActionValidatorService {
             available.push(REQUEST_ACTIONS.CANCEL);
           }
         }
-        
-        console.log(`[ACTION VALIDATOR] APPROVED state: Added actions for requester/reviewer/admin/coordinator`, {
-          userId: userIdStr,
-          requestId: requestObj.Request_ID,
-          isRequester,
-          isReviewer,
-          isAdmin: userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN,
-          isCoordinator,
-          userAuthority,
-          hasReschedulePermission,
-          hasEditPermission,
-          hasManageStaffPermission,
-          hasCancelPermission,
-          addedActions: available.filter(a => a !== REQUEST_ACTIONS.VIEW)
-        });
-      } else {
-        console.log(`[ACTION VALIDATOR] APPROVED state: User does not have access`, {
-          userId: userIdStr,
-          requestId: requestObj.Request_ID,
-          isRequester,
-          isReviewer,
-          isCoordinator,
-          userAuthority,
-          hasReschedulePermission,
-          hasEditPermission,
-          hasManageStaffPermission,
-          hasCancelPermission
-        });
       }
     }
-    
-    console.log(`[ACTION VALIDATOR] Returning available actions`, {
-      userId: userIdStr,
-      requestId: requestObj.Request_ID || requestObj.RequestId || requestObj._id,
-      availableActions: available,
-      availableActionsCount: available.length,
-      isActiveResponder: true
-    });
     
     return available;
   }

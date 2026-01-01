@@ -1169,14 +1169,11 @@ class LocationService {
             isActive: true
           }));
           
-          console.log(`[getUserLocations] Using embedded locations (fast path): ${locations.length} locations for user ${userId}`);
           return locations;
         }
       }
 
       // Slow path: Query UserLocation collection (for users without embedded locations)
-      console.log(`[getUserLocations] No embedded locations, querying UserLocation collection (slow path) for user ${userId}`);
-      
       // Get all user location assignments
       const query = { userId };
       if (onlyActiveAssignments) {

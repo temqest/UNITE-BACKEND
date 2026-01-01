@@ -45,6 +45,14 @@ class EventRequestController {
    * @route GET /api/event-requests
    */
   async getEventRequests(req, res) {
+    const startTime = Date.now();
+    const timings = {
+      total: 0,
+      query: 0,
+      formatting: 0,
+      permissionChecks: 0
+    };
+
     try {
       const userId = req.user._id || req.user.id;
       const filters = {
@@ -65,38 +73,27 @@ class EventRequestController {
         skip: parseInt(req.query.skip) || 0
       };
 
+      const queryStart = Date.now();
       const result = await eventRequestService.getRequests(userId, filters);
+      timings.query = Date.now() - queryStart;
       const { requests, totalCount, statusCounts } = result;
 
-      // Format requests - always compute allowedActions for UI functionality
-      // Performance impact is minimal since computation is fast (ObjectId comparison)
-      const formattedRequests = await Promise.all(
-        requests.map(r => this._formatRequest(r, userId))
-      );
+      // Check if minimal fields are requested (for list view)
+      const fieldsParam = req.query.fields;
+      const isMinimal = fieldsParam === 'minimal' || fieldsParam === 'list';
 
-      // Verify allowedActions are present in all formatted requests
-      const requestsWithActions = formattedRequests.filter(r => r?.allowedActions && Array.isArray(r.allowedActions));
+      // Format requests in batch - optimized for performance
+      const formatStart = Date.now();
+      const formattedRequests = await this._formatRequestsBatch(requests, userId, isMinimal);
+      timings.formatting = Date.now() - formatStart;
+
+      // Verify allowedActions are present (only log if there's an issue)
       const requestsWithoutActions = formattedRequests.filter(r => !r?.allowedActions || !Array.isArray(r.allowedActions));
-      
-      console.log(`[EVENT REQUEST CONTROLLER] 📊 GET /api/event-requests response summary:`, {
-        totalRequests: formattedRequests.length,
-        requestsWithAllowedActions: requestsWithActions.length,
-        requestsWithoutAllowedActions: requestsWithoutActions.length,
-        userId: userId?.toString(),
-        sampleRequestIds: formattedRequests.slice(0, 3).map(r => ({
-          requestId: r?.requestId,
-          hasAllowedActions: !!r?.allowedActions,
-          allowedActionsCount: r?.allowedActions?.length || 0,
-          allowedActions: r?.allowedActions
-        }))
-      });
-
       if (requestsWithoutActions.length > 0) {
-        console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ Some requests missing allowedActions:`, {
-          count: requestsWithoutActions.length,
-          requestIds: requestsWithoutActions.map(r => r?.requestId)
-        });
+        console.warn(`⚠️ ${requestsWithoutActions.length} requests missing allowedActions`);
       }
+
+      timings.total = Date.now() - startTime;
 
       res.status(200).json({
         success: true,
@@ -137,20 +134,6 @@ class EventRequestController {
       const staff = request.staff || await EventStaff.find({ EventID: request.Event_ID });
 
       const formattedRequest = await this._formatRequest(request, userId);
-      
-      // Verify allowedActions are present
-      console.log(`[EVENT REQUEST CONTROLLER] 📊 GET /api/event-requests/:requestId response:`, {
-        requestId,
-        userId: userId?.toString(),
-        hasAllowedActions: !!formattedRequest?.allowedActions,
-        allowedActionsCount: formattedRequest?.allowedActions?.length || 0,
-        allowedActions: formattedRequest?.allowedActions,
-        status: formattedRequest?.status
-      });
-
-      if (!formattedRequest?.allowedActions || !Array.isArray(formattedRequest.allowedActions)) {
-        console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ Request ${requestId} missing allowedActions in response`);
-      }
 
       res.status(200).json({
         success: true,
@@ -416,14 +399,80 @@ class EventRequestController {
   }
 
   /**
+   * Format multiple requests in batch (optimized for performance)
+   * @private
+   * @param {Array} requests - Array of request documents
+   * @param {string|ObjectId} userId - User ID for computing allowedActions
+   * @param {boolean} isMinimal - If true, exclude large fields (statusHistory, decisionHistory)
+   * @returns {Promise<Array>} Array of formatted request objects
+   */
+  async _formatRequestsBatch(requests, userId, isMinimal = false) {
+    if (!requests || requests.length === 0) {
+      return [];
+    }
+
+    const batchStart = Date.now();
+    let userFetchTime = 0;
+    let permissionTime = 0;
+
+    // Pre-fetch requesting user's authority and permissions once
+    const userFetchStart = Date.now();
+    const { User } = require('../../models/index');
+    const requestingUser = await User.findById(userId).select('authority').lean();
+    const requestingUserAuthority = requestingUser?.authority || 20;
+    userFetchTime = Date.now() - userFetchStart;
+
+    // Collect all unique user IDs from requests (requester and reviewer)
+    const userIdsSet = new Set();
+    requests.forEach(req => {
+      const requesterId = req.requester?.userId?._id || req.requester?.userId;
+      const reviewerId = req.reviewer?.userId?._id || req.reviewer?.userId;
+      if (requesterId) userIdsSet.add(requesterId.toString());
+      if (reviewerId) userIdsSet.add(reviewerId.toString());
+    });
+
+    // Batch load all user authorities in a single query
+    const userIdsArray = Array.from(userIdsSet);
+    const usersMap = new Map();
+    if (userIdsArray.length > 0) {
+      const batchUserStart = Date.now();
+      const users = await User.find({ _id: { $in: userIdsArray } })
+        .select('_id authority')
+        .lean();
+      users.forEach(user => {
+        usersMap.set(user._id.toString(), user.authority || 20);
+      });
+      userFetchTime += Date.now() - batchUserStart;
+    }
+
+    // Format all requests in parallel (permission checks are now cached)
+    const permissionStart = Date.now();
+    const formattedRequests = await Promise.all(
+      requests.map(r => this._formatRequest(r, userId, {
+        requestingUserAuthority,
+        usersMap,
+        isMinimal
+      }))
+    );
+    permissionTime = Date.now() - permissionStart;
+
+    const batchTime = Date.now() - batchStart;
+
+    return formattedRequests;
+  }
+
+  /**
    * Format request for response
    * @private
    * @param {Object} request - Request document
    * @param {string|ObjectId} userId - User ID for computing allowedActions (optional)
+   * @param {Object} batchContext - Optional batch context with pre-fetched data and isMinimal flag
    * @returns {Promise<Object>} Formatted request object
    */
-  async _formatRequest(request, userId = null) {
+  async _formatRequest(request, userId = null, batchContext = null) {
     if (!request) return null;
+
+    const isMinimal = batchContext?.isMinimal || false;
 
     const formatted = {
       requestId: request.Request_ID,
@@ -471,8 +520,11 @@ class EventRequestController {
       statusLabel: STATUS_LABELS[request.status] || request.status,
       notes: request.notes,
       rescheduleProposal: request.rescheduleProposal,
-      statusHistory: request.statusHistory || [],
-      decisionHistory: request.decisionHistory || [],
+      // Exclude large fields in minimal mode (list view)
+      ...(isMinimal ? {} : {
+        statusHistory: request.statusHistory || [],
+        decisionHistory: request.decisionHistory || []
+      }),
       activeResponder: request.activeResponder ? {
         userId: (() => {
           const uid = request.activeResponder.userId;
@@ -499,48 +551,34 @@ class EventRequestController {
 
     // Compute allowedActions - always include, default to ['view'] if computation fails or userId missing
     // This ensures frontend always has allowedActions array to work with
+    // Note: Permission checks are now cached, so repeated calls are fast
     if (userId) {
       try {
         const locationId = request.district || request.municipalityId;
+        // Use batch context if available to avoid redundant user queries
+        const context = { locationId };
+        if (batchContext?.requestingUserAuthority !== undefined) {
+          context._batchContext = batchContext;
+        }
         const allowedActions = await actionValidatorService.getAvailableActions(
           userId,
           request,
-          { locationId }
+          context
         );
         
         // Validate that allowedActions is an array
         if (Array.isArray(allowedActions) && allowedActions.length > 0) {
           formatted.allowedActions = allowedActions;
-          console.log(`[EVENT REQUEST CONTROLLER] ✅ allowedActions computed for request ${request.Request_ID || request._id}:`, {
-            requestId: request.Request_ID || request._id,
-            userId: userId?.toString(),
-            allowedActions,
-            actionCount: allowedActions.length,
-            status: request.status || request.Status
-          });
         } else {
           // If computation returned invalid result, default to view
-          console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ Invalid allowedActions result, defaulting to ['view']:`, {
-            requestId: request.Request_ID || request._id,
-            userId: userId?.toString(),
-            result: allowedActions
-          });
           formatted.allowedActions = ['view'];
         }
       } catch (error) {
-        console.error(`[EVENT REQUEST CONTROLLER] ❌ Error computing allowedActions: ${error.message}`, {
-          requestId: request.Request_ID || request._id,
-          userId: userId?.toString(),
-          error: error.stack
-        });
         // Don't fail the request if allowedActions computation fails
         formatted.allowedActions = ['view']; // At minimum, allow view
       }
     } else {
       // No userId provided - default to view only
-      console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ No userId provided, defaulting allowedActions to ['view']`, {
-        requestId: request.Request_ID || request._id
-      });
       formatted.allowedActions = ['view'];
     }
 
@@ -625,11 +663,6 @@ class EventRequestController {
         staffMembers
       );
 
-      console.log('[EVENT REQUEST CONTROLLER] Staff assignment result:', {
-        eventId: result.event?.Event_ID,
-        staffCount: result.staff?.length || 0,
-        staff: result.staff
-      });
 
       res.status(200).json({
         success: true,

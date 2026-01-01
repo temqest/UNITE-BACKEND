@@ -96,13 +96,6 @@ class EventRequestService {
               finalProvince = selectedCoordinator.locations.provinceId;
             }
           }
-          
-          console.log(`[EVENT REQUEST SERVICE] Using coordinator location for admin-created request`, {
-            coordinatorId: requestData.coordinatorId,
-            district: finalDistrict,
-            province: finalProvince,
-            municipalityId: finalMunicipalityId
-          });
         }
       }
 
@@ -221,7 +214,7 @@ class EventRequestService {
           assignmentRule: 'manual'
         };
         
-        console.log(`[EVENT REQUEST SERVICE] Admin ${requesterId} manually selected coordinator ${selectedCoordinatorId} for request`);
+        // Admin manually selected coordinator for request
       } else {
         // Use existing auto-assignment logic (will handle Coordinator→Stakeholder case if stakeholderId provided)
         reviewer = await reviewerAssignmentService.assignReviewer(requesterId, {
@@ -308,17 +301,12 @@ class EventRequestService {
             relationship: 'reviewer',
             authority: reviewerUser.authority || 20
           };
-          console.log(`[EVENT REQUEST SERVICE] Set activeResponder:`, {
-            requestId: request.Request_ID,
-            userId: reviewerUserId.toString(),
-            relationship: 'reviewer',
-            authority: reviewerUser.authority
-          });
+          // Set activeResponder for reviewer
         } else {
-          console.warn(`[EVENT REQUEST SERVICE] Reviewer user not found: ${reviewer.userId}`);
+          // Reviewer user not found
         }
       } else {
-        console.warn(`[EVENT REQUEST SERVICE] No reviewer assigned for request ${request.Request_ID}`);
+        // No reviewer assigned for request
       }
       request.lastAction = null; // No action yet
 
@@ -385,6 +373,7 @@ class EventRequestService {
    * @returns {Promise<{requests: Object[], totalCount: number}>} Object with requests array and total count
    */
   async getRequests(userId, filters = {}) {
+    const queryStart = Date.now();
     try {
       const user = await User.findById(userId);
       if (!user) {
@@ -568,6 +557,47 @@ class EventRequestService {
       
       const aggregationPipeline = [
         { $match: query },
+        // Early projection to reduce data size before lookups
+        {
+          $project: {
+            Request_ID: 1,
+            Event_ID: 1,
+            requester: 1,
+            reviewer: 1,
+            organizationId: 1,
+            coverageAreaId: 1,
+            municipalityId: 1,
+            district: 1,
+            province: 1,
+            Event_Title: 1,
+            Location: 1,
+            Date: 1,
+            Start_Date: 1,
+            End_Date: 1,
+            Email: 1,
+            Phone_Number: 1,
+            Event_Description: 1,
+            Category: 1,
+            Target_Donation: 1,
+            VenueType: 1,
+            TrainingType: 1,
+            MaxParticipants: 1,
+            Topic: 1,
+            TargetAudience: 1,
+            ExpectedAudienceSize: 1,
+            PartnerOrganization: 1,
+            StaffAssignmentID: 1,
+            status: 1,
+            notes: 1,
+            rescheduleProposal: 1,
+            statusHistory: 1,
+            decisionHistory: 1,
+            activeResponder: 1,
+            lastAction: 1,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        },
         {
           $facet: {
             // Get status counts
@@ -713,7 +743,10 @@ class EventRequestService {
         }
       ];
       
-      const aggregationResult = await EventRequest.aggregate(aggregationPipeline);
+      // Execute aggregation with allowDiskUse for large datasets
+      const aggStart = Date.now();
+      const aggregationResult = await EventRequest.aggregate(aggregationPipeline).allowDiskUse(true);
+      const aggTime = Date.now() - aggStart;
       const result = aggregationResult[0] || {};
       
       // Process status counts
@@ -754,6 +787,8 @@ class EventRequestService {
       // Aggregation returns plain objects, which is fine for our use case
       // The controller will format them appropriately
       const requests = result.requests || [];
+
+      const queryTime = Date.now() - queryStart;
 
       return { requests, totalCount, statusCounts };
     } catch (error) {
@@ -872,7 +907,6 @@ class EventRequestService {
       if (hasWildcard) {
         // System admin with *.* - grant permission immediately
         canUpdate = true;
-        console.log(`[EVENT REQUEST SERVICE] User ${userId} has wildcard permission (*.*), granting ${resource}.${action}`);
       } else {
         // Check permission with location context
         canUpdate = await permissionService.checkPermission(
@@ -979,7 +1013,6 @@ class EventRequestService {
             if (updateData.Category !== undefined) event.Category = updateData.Category;
             
             await event.save();
-            console.log(`[EVENT REQUEST SERVICE] Updated event ${request.Event_ID} along with approved request ${requestId}`);
             
             // Trigger event edited notification
             try {
@@ -1079,14 +1112,7 @@ class EventRequestService {
         throw new Error(`Invalid transition from ${currentState} (normalized: ${normalizedCurrentState}) with action ${action}`);
       }
       
-      // Log state transition for debugging
-      console.log(`[EVENT REQUEST SERVICE] Executing action: ${action}`, {
-        requestId: request.Request_ID,
-        currentState,
-        normalizedCurrentState,
-        nextState,
-        userId: userId.toString()
-      });
+      // Execute state transition
 
       // 5. Update request based on action
       // Note: getNote() helper is defined at the start of this method
@@ -1097,8 +1123,17 @@ class EventRequestService {
         request.addDecisionHistory('accept', actorSnapshot, note);
         
         // Accept action always goes directly to approved and publishes event
+        // Note: publishEvent is made non-blocking to avoid timeout issues
         if (nextState === REQUEST_STATES.APPROVED) {
-          await eventPublisherService.publishEvent(request, actorSnapshot);
+          // Fire-and-forget: publish event asynchronously after response is sent
+          setImmediate(async () => {
+            try {
+              await eventPublisherService.publishEvent(request, actorSnapshot);
+            } catch (publishError) {
+              console.error(`[EVENT REQUEST SERVICE] Error publishing event (non-blocking): ${publishError.message}`);
+              // Don't fail action execution if event publishing fails
+            }
+          });
         }
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
@@ -1114,8 +1149,17 @@ class EventRequestService {
         }
         
         // Auto-publish event if approved (from pending-review, review-accepted, or review-rescheduled)
+        // Note: publishEvent is made non-blocking to avoid timeout issues
         if (nextState === REQUEST_STATES.APPROVED) {
-          await eventPublisherService.publishEvent(request, actorSnapshot);
+          // Fire-and-forget: publish event asynchronously after response is sent
+          setImmediate(async () => {
+            try {
+              await eventPublisherService.publishEvent(request, actorSnapshot);
+            } catch (publishError) {
+              console.error(`[EVENT REQUEST SERVICE] Error publishing event (non-blocking): ${publishError.message}`);
+              // Don't fail action execution if event publishing fails
+            }
+          });
         }
       } else if (action === REQUEST_ACTIONS.DECLINE) {
         request.status = nextState;
@@ -1195,19 +1239,7 @@ class EventRequestService {
               relationship: recalculated.relationship,
               authority: recalculated.authority
             };
-            console.log(`[EVENT REQUEST SERVICE] Recalculated activeResponder`, {
-              requestId: request.Request_ID,
-              activeResponder: request.activeResponder
-            });
           }
-        } else {
-          console.log(`[EVENT REQUEST SERVICE] activeResponder set correctly after reschedule`, {
-            requestId: request.Request_ID,
-            activeResponder: {
-              userId: request.activeResponder.userId.toString(),
-              relationship: request.activeResponder.relationship
-            }
-          });
         }
       }
 
@@ -1388,13 +1420,6 @@ class EventRequestService {
     });
 
     try {
-      console.log(`[EVENT REQUEST SERVICE] assignStaffToEvent called:`, {
-        userId: userId?.toString(),
-        requestId,
-        eventId,
-        staffCount: staffMembers?.length || 0
-      });
-
       const EventStaff = require('../../models/events_models/eventStaff.model');
       
       // Validate input
@@ -1421,11 +1446,9 @@ class EventRequestService {
       if (!event) {
         throw new Error('Event not found');
       }
-      console.log(`[EVENT REQUEST SERVICE] Event found: ${event.Event_ID}`);
 
       // Get existing staff assignments
       const existingStaff = await EventStaff.find({ EventID: eventId }).session(session).lean();
-      console.log(`[EVENT REQUEST SERVICE] Found ${existingStaff.length} existing staff assignments`);
       
       // Create a map of existing staff by FullName+Role for quick lookup
       const existingStaffMap = new Map();
@@ -1469,7 +1492,6 @@ class EventRequestService {
       if (staffToAdd.length > 0 && staffToRemove.length === 0) {
         // Only adding - use insertMany (faster than bulkWrite with insertOne)
         await EventStaff.insertMany(staffToAdd, { session });
-        console.log(`[EVENT REQUEST SERVICE] Inserted ${staffToAdd.length} staff members`);
       } else if (staffToRemove.length > 0 || staffToAdd.length > 0) {
         // Mixed operations - use bulkWrite
         const bulkOps = [];
@@ -1496,10 +1518,6 @@ class EventRequestService {
 
         if (bulkOps.length > 0) {
           await EventStaff.bulkWrite(bulkOps, { session });
-          console.log(`[EVENT REQUEST SERVICE] Bulk operations completed:`, {
-            added: staffToAdd.length,
-            removed: staffToRemove.length
-          });
         }
       }
 
@@ -1520,18 +1538,10 @@ class EventRequestService {
         }))
       ];
 
-      console.log(`[EVENT REQUEST SERVICE] Staff processing summary:`, {
-        newStaff: staffToAdd.length,
-        keptStaff: staffToKeep.length,
-        removedStaff: staffToRemove.length,
-        totalStaff: staffList.length
-      });
-
       // Generate staff assignment ID
       const staffAssignmentId = `STAFF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       event.StaffAssignmentID = staffAssignmentId;
       await event.save({ session });
-      console.log(`[EVENT REQUEST SERVICE] Updated event StaffAssignmentID: ${staffAssignmentId}`);
 
       // Update request if it exists
       let request = null;
@@ -1540,7 +1550,6 @@ class EventRequestService {
         if (request) {
           request.StaffAssignmentID = staffAssignmentId;
           await request.save({ session });
-          console.log(`[EVENT REQUEST SERVICE] Updated request StaffAssignmentID: ${staffAssignmentId}`);
         } else {
           console.warn(`[EVENT REQUEST SERVICE] Request ${requestId} not found, skipping request update`);
         }
@@ -1569,12 +1578,6 @@ class EventRequestService {
           Role: s.Role
         }))
       };
-
-      console.log(`[EVENT REQUEST SERVICE] assignStaffToEvent completed successfully:`, {
-        eventId,
-        staffCount: result.staff.length,
-        staffList: result.staff.map(s => `${s.FullName} - ${s.Role}`)
-      });
 
       return result;
     } catch (error) {

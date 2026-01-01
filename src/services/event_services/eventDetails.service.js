@@ -182,22 +182,12 @@ class EventDetailsService {
         Training.findOne({ Training_ID: eventId }).lean()
       ]);
 
-      // Debug logging (always log to help diagnose)
-      console.log(`[getEventCategory] Searching for Event_ID: ${eventId}, eventCategory: ${eventCategory}`);
-      console.log(`[getEventCategory] Query results:`, {
-        bloodDriveFound: !!bloodDrive,
-        advocacyFound: !!advocacy,
-        trainingFound: !!training,
-        bloodDriveData: bloodDrive ? { Target_Donation: bloodDrive.Target_Donation, VenueType: bloodDrive.VenueType } : null
-      });
 
       if (bloodDrive) {
         const categoryData = {
           Target_Donation: bloodDrive.Target_Donation,
           VenueType: bloodDrive.VenueType
         };
-        
-        console.log(`[getEventCategory] ✅ Found BloodDrive record! Returning data:`, categoryData);
         
         return {
           type: 'BloodDrive',
@@ -213,8 +203,6 @@ class EventDetailsService {
           PartnerOrganization: advocacy.PartnerOrganization
         };
         
-        console.log(`[getEventCategory] ✅ Found Advocacy record! Returning data:`, categoryData);
-        
         return {
           type: 'Advocacy',
           data: categoryData
@@ -226,8 +214,6 @@ class EventDetailsService {
           TrainingType: training.TrainingType,
           MaxParticipants: training.MaxParticipants
         };
-        
-        console.log(`[getEventCategory] ✅ Found Training record! Returning data:`, categoryData);
         
         return {
           type: 'Training',
@@ -256,8 +242,6 @@ class EventDetailsService {
 
       // If we have a category type but no record found, try alternative search methods
       if (categoryStr && categoryStr !== 'Unknown') {
-        console.log(`[getEventCategory] ⚠️ Found category type "${categoryStr}" from Event.Category but NO category record found for Event_ID: ${eventId}`);
-        
         // Try to find the record with case-insensitive or partial matching as a last resort
         let alternativeRecord = null;
         try {
@@ -267,11 +251,6 @@ class EventDetailsService {
               BloodDrive_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
             }).lean();
             
-            // If still not found, try to find any BloodDrive record (for debugging)
-            if (!alternativeRecord) {
-              const sampleRecords = await BloodDrive.find({}).select('BloodDrive_ID').limit(3).lean();
-              console.log(`[getEventCategory] Sample BloodDrive_IDs in database:`, sampleRecords.map(r => r.BloodDrive_ID));
-            }
           } else if (categoryStr === 'Advocacy' || categoryStr.toLowerCase().includes('advoc')) {
             alternativeRecord = await Advocacy.findOne({ 
               Advocacy_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
@@ -283,7 +262,6 @@ class EventDetailsService {
           }
           
           if (alternativeRecord) {
-            console.log(`[getEventCategory] ✅ Found ${categoryStr} record with alternative search!`);
             // Extract data based on category type
             if (categoryStr === 'BloodDrive' || categoryStr.toLowerCase().includes('blood')) {
               return {

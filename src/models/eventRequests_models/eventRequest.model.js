@@ -392,6 +392,9 @@ eventRequestSchema.index({ status: 1, createdAt: -1 });
 eventRequestSchema.index({ status: 1, district: 1 });
 eventRequestSchema.index({ status: 1, province: 1 });
 eventRequestSchema.index({ Category: 1, status: 1 });
+// Compound indexes for optimized query patterns (status + user + sort)
+eventRequestSchema.index({ status: 1, 'requester.userId': 1, createdAt: -1 });
+eventRequestSchema.index({ status: 1, 'reviewer.userId': 1, createdAt: -1 });
 
 // Pre-save hook to ensure authoritySnapshot is set
 eventRequestSchema.pre('save', function(next) {
