@@ -74,6 +74,30 @@ class EventRequestController {
         requests.map(r => this._formatRequest(r, userId))
       );
 
+      // Verify allowedActions are present in all formatted requests
+      const requestsWithActions = formattedRequests.filter(r => r?.allowedActions && Array.isArray(r.allowedActions));
+      const requestsWithoutActions = formattedRequests.filter(r => !r?.allowedActions || !Array.isArray(r.allowedActions));
+      
+      console.log(`[EVENT REQUEST CONTROLLER] 📊 GET /api/event-requests response summary:`, {
+        totalRequests: formattedRequests.length,
+        requestsWithAllowedActions: requestsWithActions.length,
+        requestsWithoutAllowedActions: requestsWithoutActions.length,
+        userId: userId?.toString(),
+        sampleRequestIds: formattedRequests.slice(0, 3).map(r => ({
+          requestId: r?.requestId,
+          hasAllowedActions: !!r?.allowedActions,
+          allowedActionsCount: r?.allowedActions?.length || 0,
+          allowedActions: r?.allowedActions
+        }))
+      });
+
+      if (requestsWithoutActions.length > 0) {
+        console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ Some requests missing allowedActions:`, {
+          count: requestsWithoutActions.length,
+          requestIds: requestsWithoutActions.map(r => r?.requestId)
+        });
+      }
+
       res.status(200).json({
         success: true,
         data: {
@@ -112,10 +136,26 @@ class EventRequestController {
       const EventStaff = require('../../models/events_models/eventStaff.model');
       const staff = request.staff || await EventStaff.find({ EventID: request.Event_ID });
 
+      const formattedRequest = await this._formatRequest(request, userId);
+      
+      // Verify allowedActions are present
+      console.log(`[EVENT REQUEST CONTROLLER] 📊 GET /api/event-requests/:requestId response:`, {
+        requestId,
+        userId: userId?.toString(),
+        hasAllowedActions: !!formattedRequest?.allowedActions,
+        allowedActionsCount: formattedRequest?.allowedActions?.length || 0,
+        allowedActions: formattedRequest?.allowedActions,
+        status: formattedRequest?.status
+      });
+
+      if (!formattedRequest?.allowedActions || !Array.isArray(formattedRequest.allowedActions)) {
+        console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ Request ${requestId} missing allowedActions in response`);
+      }
+
       res.status(200).json({
         success: true,
         data: {
-          request: await this._formatRequest(request, userId),
+          request: formattedRequest,
           staff: staff.map(s => ({
             FullName: s.FullName || s.Staff_FullName,
             Role: s.Role
@@ -457,7 +497,8 @@ class EventRequestController {
       updatedAt: request.updatedAt
     };
 
-    // Compute allowedActions if userId provided
+    // Compute allowedActions - always include, default to ['view'] if computation fails or userId missing
+    // This ensures frontend always has allowedActions array to work with
     if (userId) {
       try {
         const locationId = request.district || request.municipalityId;
@@ -466,12 +507,50 @@ class EventRequestController {
           request,
           { locationId }
         );
-        formatted.allowedActions = allowedActions;
+        
+        // Validate that allowedActions is an array
+        if (Array.isArray(allowedActions) && allowedActions.length > 0) {
+          formatted.allowedActions = allowedActions;
+          console.log(`[EVENT REQUEST CONTROLLER] ✅ allowedActions computed for request ${request.Request_ID || request._id}:`, {
+            requestId: request.Request_ID || request._id,
+            userId: userId?.toString(),
+            allowedActions,
+            actionCount: allowedActions.length,
+            status: request.status || request.Status
+          });
+        } else {
+          // If computation returned invalid result, default to view
+          console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ Invalid allowedActions result, defaulting to ['view']:`, {
+            requestId: request.Request_ID || request._id,
+            userId: userId?.toString(),
+            result: allowedActions
+          });
+          formatted.allowedActions = ['view'];
+        }
       } catch (error) {
-        console.error(`[EVENT REQUEST CONTROLLER] Error computing allowedActions: ${error.message}`);
+        console.error(`[EVENT REQUEST CONTROLLER] ❌ Error computing allowedActions: ${error.message}`, {
+          requestId: request.Request_ID || request._id,
+          userId: userId?.toString(),
+          error: error.stack
+        });
         // Don't fail the request if allowedActions computation fails
         formatted.allowedActions = ['view']; // At minimum, allow view
       }
+    } else {
+      // No userId provided - default to view only
+      console.warn(`[EVENT REQUEST CONTROLLER] ⚠️ No userId provided, defaulting allowedActions to ['view']`, {
+        requestId: request.Request_ID || request._id
+      });
+      formatted.allowedActions = ['view'];
+    }
+
+    // Final safety check: ensure allowedActions is always an array
+    if (!Array.isArray(formatted.allowedActions)) {
+      console.error(`[EVENT REQUEST CONTROLLER] ❌ allowedActions is not an array, fixing:`, {
+        requestId: request.Request_ID || request._id,
+        allowedActions: formatted.allowedActions
+      });
+      formatted.allowedActions = ['view'];
     }
 
     return formatted;
