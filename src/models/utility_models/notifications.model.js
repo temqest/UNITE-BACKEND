@@ -293,33 +293,36 @@ notificationSchema.statics.createAdminActionNotification = async function(recipi
       } catch (e) {
         // ignore formatting errors
       }
+      // Keep message clean - ActionNote will be displayed separately
       if (eventTitle) {
         if (original && when) {
-          message = `The event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+          message = `The event "${eventTitle}" scheduled on ${original} has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
         } else if (when) {
-          message = `The event "${eventTitle}" has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+          message = `The event "${eventTitle}" has a proposed reschedule to ${when} by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
         } else {
-          message = `The event "${eventTitle}" has a proposed reschedule by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+          message = `The event "${eventTitle}" has a proposed reschedule by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
         }
       } else {
         if (original && when) {
-          message = `Your event request scheduled on ${original} has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+          message = `Your event request scheduled on ${original} has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}.`;
         } else if (when) {
-          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}. ${note ? `Note: ${note}` : ''}`;
+          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. Proposed date: ${when}.`;
         } else {
-          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+          message = `Your event request has been rescheduled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
         }
       }
       type = 'AdminRescheduled';
       break;
     case 'Rejected':
       title = 'Event Request Rejected';
-      message = eventTitle ? `The event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+      // Keep message clean - ActionNote will be displayed separately
+      message = eventTitle ? `The event "${eventTitle}" has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been rejected by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
       type = 'AdminRejected';
       break;
     case 'Cancelled':
       title = 'Event Request Cancelled';
-      message = eventTitle ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Note: ${note}` : ''}`;
+      // Keep message clean - ActionNote will be displayed separately
+      message = eventTitle ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.` : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
       type = 'RequestCancelled';
       break;
     case 'Approved':
@@ -509,9 +512,10 @@ notificationSchema.statics.createAdminCancellationNotification = async function(
   } catch (e) {}
   
   const title = 'Event Request Cancelled';
+  // Keep message clean - ActionNote will be displayed separately
   const message = eventTitle 
-    ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`
-    : `An event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`;
+    ? `The event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`
+    : `An event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
   
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -548,9 +552,10 @@ notificationSchema.statics.createStakeholderCancellationNotification = async fun
   } catch (e) {}
   
   const title = 'Your Event Request Cancelled';
+  // Keep message clean - ActionNote will be displayed separately
   const message = eventTitle
-    ? `Your event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`
-    : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}. ${note ? `Reason: ${note}` : ''}`;
+    ? `Your event "${eventTitle}" has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`
+    : `Your event request has been cancelled by the ${actorLabel}${actorName ? ` (${actorName})` : ''}.`;
   
   return this.create({
     Notification_ID: `NOTIF_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,

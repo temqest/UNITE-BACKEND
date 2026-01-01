@@ -289,7 +289,7 @@ class EmailDigestService {
     <p>You have <strong>${totalCount}</strong> notification${totalCount !== 1 ? 's' : ''}:</p>
     ${summaryHtml}
     <div style="text-align: center; margin: 30px 0;">
-      <a href="https://unitehealth.tech/notifications" style="background-color: #dc3545; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View All Notifications</a>
+      <a href="https://unitehealth.tech" style="background-color: #dc3545; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View All Notifications</a>
     </div>
     <p style="color: #666; font-size: 14px;">Please log in to your UNITE account to view details and take action.</p>
   </div>

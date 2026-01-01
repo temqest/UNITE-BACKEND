@@ -70,14 +70,27 @@ class NotificationEngine {
    */
   async checkDuplicateNotification(notificationData) {
     try {
-      const oneMinuteAgo = new Date(Date.now() - 60 * 1000); // 1 minute window
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000); // 5 minute window (extended from 1 minute)
 
-      // Build query for duplicate check
+      // Build query for duplicate check - check both new and legacy recipient fields
       const query = {
-        recipientUserId: notificationData.recipientUserId,
         NotificationType: notificationData.NotificationType,
-        createdAt: { $gte: oneMinuteAgo }
+        createdAt: { $gte: fiveMinutesAgo },
+        $or: []
       };
+
+      // Check both recipientUserId (new format) and Recipient_ID (legacy format)
+      if (notificationData.recipientUserId) {
+        query.$or.push({ recipientUserId: notificationData.recipientUserId });
+      }
+      if (notificationData.Recipient_ID) {
+        query.$or.push({ Recipient_ID: notificationData.Recipient_ID });
+      }
+
+      // If no recipient fields, can't check for duplicates
+      if (query.$or.length === 0) {
+        return false;
+      }
 
       // Add entity-specific filter
       if (notificationData.Request_ID) {
@@ -90,6 +103,10 @@ class NotificationEngine {
       }
 
       const duplicate = await Notification.findOne(query);
+
+      if (duplicate) {
+        console.log(`[NOTIFICATION ENGINE] Duplicate notification detected: ${notificationData.NotificationType} for recipient ${notificationData.recipientUserId || notificationData.Recipient_ID} on ${notificationData.Request_ID || notificationData.Event_ID} (created ${Math.round((Date.now() - duplicate.createdAt.getTime()) / 1000)}s ago)`);
+      }
 
       return !!duplicate;
     } catch (error) {
