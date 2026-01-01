@@ -1004,6 +1004,12 @@ class EventRequestService {
    */
   async executeAction(requestId, userId, action, actionData = {}) {
     try {
+      // Helper function to get note from actionData (handles both 'note' and 'notes' for backward compatibility)
+      const getNote = () => {
+        // Prefer 'notes' (normalized by validator), fallback to 'note' (from frontend), then empty string
+        return actionData.notes || actionData.note || '';
+      };
+
       // 1. Get request
       const request = await EventRequest.findOne({ Request_ID: requestId });
       if (!request) {
@@ -1068,9 +1074,12 @@ class EventRequestService {
       });
 
       // 5. Update request based on action
+      // Note: getNote() helper is defined at the start of this method
+      const note = getNote();
+      
       if (action === REQUEST_ACTIONS.ACCEPT) {
         request.status = nextState;
-        request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
+        request.addDecisionHistory('accept', actorSnapshot, note);
         
         // Accept action always goes directly to approved and publishes event
         if (nextState === REQUEST_STATES.APPROVED) {
@@ -1078,32 +1087,26 @@ class EventRequestService {
         }
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
-        request.addDecisionHistory('reject', actorSnapshot, actionData.notes || '');
+        request.addDecisionHistory('reject', actorSnapshot, note);
       } else if (action === REQUEST_ACTIONS.CONFIRM) {
         request.status = nextState;
         // CONFIRM from pending-review or review-rescheduled is equivalent to ACCEPT - add decision history as accept
         if (currentState === REQUEST_STATES.PENDING_REVIEW || currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-          request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
+          request.addDecisionHistory('accept', actorSnapshot, note);
+        } else if (currentState === REQUEST_STATES.APPROVED) {
+          // CONFIRM on approved state is stakeholder acknowledgment - add decision history as confirm
+          request.addDecisionHistory('confirm', actorSnapshot, note);
         }
         
         // Auto-publish event if approved (from pending-review, review-accepted, or review-rescheduled)
         if (nextState === REQUEST_STATES.APPROVED) {
           await eventPublisherService.publishEvent(request, actorSnapshot);
         }
-      } else if (action === REQUEST_ACTIONS.CONFIRM) {
-        request.status = nextState;
-        // CONFIRM from pending-review or review-rescheduled is equivalent to ACCEPT - add decision history as accept
-        if (currentState === REQUEST_STATES.PENDING_REVIEW || currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-          request.addDecisionHistory('accept', actorSnapshot, actionData.notes || '');
-        } else if (currentState === REQUEST_STATES.APPROVED) {
-          // CONFIRM on approved state is stakeholder acknowledgment - add decision history as confirm
-          request.addDecisionHistory('confirm', actorSnapshot, actionData.notes || '');
-        }
       } else if (action === REQUEST_ACTIONS.DECLINE) {
         request.status = nextState;
         // DECLINE from pending-review or review-rescheduled is equivalent to REJECT - add decision history as reject
         if (currentState === REQUEST_STATES.PENDING_REVIEW || currentState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-          request.addDecisionHistory('reject', actorSnapshot, actionData.notes || '');
+          request.addDecisionHistory('reject', actorSnapshot, note);
         }
       } else if (action === REQUEST_ACTIONS.RESCHEDULE) {
         request.status = nextState;
@@ -1111,11 +1114,11 @@ class EventRequestService {
           proposedDate: actionData.proposedDate,
           proposedStartTime: actionData.proposedStartTime,
           proposedEndTime: actionData.proposedEndTime,
-          reviewerNotes: actionData.notes || '',
+          reviewerNotes: note,
           proposedAt: new Date(),
           proposedBy: actorSnapshot
         };
-        request.addDecisionHistory('reschedule', actorSnapshot, actionData.notes || '', {
+        request.addDecisionHistory('reschedule', actorSnapshot, note, {
           proposedDate: actionData.proposedDate,
           proposedStartTime: actionData.proposedStartTime,
           proposedEndTime: actionData.proposedEndTime
@@ -1136,7 +1139,7 @@ class EventRequestService {
                 event,
                 request,
                 actorSnapshot,
-                actionData.notes || null
+                note || null
               );
             }
           } catch (eventError) {
@@ -1147,7 +1150,7 @@ class EventRequestService {
       }
 
       // 6. Add status history
-      request.addStatusHistory(nextState, actorSnapshot, actionData.notes || '');
+      request.addStatusHistory(nextState, actorSnapshot, note);
 
       // 7. Update active responder and lastAction
       const requesterId = request.requester?.userId?.toString();
@@ -1156,8 +1159,42 @@ class EventRequestService {
         request,
         action,
         userId,
-        { requesterId, reviewerId }
+        { requesterId, reviewerId, actorAuthority: actorSnapshot.authoritySnapshot }
       );
+      
+      // 7.5. Validate activeResponder was set correctly for reschedule
+      if (action === REQUEST_ACTIONS.RESCHEDULE && request.status === REQUEST_STATES.REVIEW_RESCHEDULED) {
+        if (!request.activeResponder || !request.activeResponder.userId) {
+          console.warn(`[EVENT REQUEST SERVICE] activeResponder not set after reschedule, recalculating`, {
+            requestId: request.Request_ID,
+            actorId: userId.toString(),
+            requesterId,
+            reviewerId,
+            assignmentRule: request.reviewer?.assignmentRule
+          });
+          // Recalculate using getActiveResponder as safety net
+          const recalculated = RequestStateService.getActiveResponder(request);
+          if (recalculated) {
+            request.activeResponder = {
+              userId: recalculated.userId,
+              relationship: recalculated.relationship,
+              authority: recalculated.authority
+            };
+            console.log(`[EVENT REQUEST SERVICE] Recalculated activeResponder`, {
+              requestId: request.Request_ID,
+              activeResponder: request.activeResponder
+            });
+          }
+        } else {
+          console.log(`[EVENT REQUEST SERVICE] activeResponder set correctly after reschedule`, {
+            requestId: request.Request_ID,
+            activeResponder: {
+              userId: request.activeResponder.userId.toString(),
+              relationship: request.activeResponder.relationship
+            }
+          });
+        }
+      }
 
       // 8. Save request and verify save completed
       await request.save();
@@ -1183,8 +1220,9 @@ class EventRequestService {
       setImmediate(async () => {
         try {
           // Prepare action data for notification
+          // Note: getNote() is defined in outer scope
           const notificationActionData = {
-            notes: actionData.notes || null,
+            notes: note || null,
             proposedDate: actionData.proposedDate || null,
             originalDate: originalEventDate
           };

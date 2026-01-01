@@ -177,13 +177,22 @@ class EventRequestController {
     try {
       const userId = req.user._id || req.user.id;
       const { requestId } = req.params;
-      const { action, ...actionData } = req.body;
+      
+      // Use validatedData if available (from validator), otherwise fallback to body
+      const validatedData = req.validatedData || req.body;
+      const { action, ...actionData } = validatedData;
 
       if (!action) {
         return res.status(400).json({
           success: false,
           message: 'Action is required'
         });
+      }
+
+      // Ensure notes field is normalized (validator normalizes note -> notes, but ensure it's set)
+      if (actionData.note && !actionData.notes) {
+        actionData.notes = actionData.note;
+        delete actionData.note;
       }
 
       const request = await eventRequestService.executeAction(requestId, userId, action, actionData);

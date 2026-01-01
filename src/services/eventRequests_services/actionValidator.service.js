@@ -969,20 +969,70 @@ class ActionValidatorService {
     // Now both are strings, comparison is reliable
     let isActiveResponder = userIdStr === responderId;
 
-    // Special case: For coordinator-to-admin requests, ANY admin (authority >= 80) can review
-    // This allows any admin to act as reviewer even if not the assigned reviewer
+    // Special case: For coordinator-to-admin requests, handle Admin actions
     if (!isActiveResponder && requestObj.reviewer?.assignmentRule === 'coordinator-to-admin') {
       const user = await User.findById(userIdStr).select('authority').lean();
       const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
       
-      if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && normalizedState === REQUEST_STATES.PENDING_REVIEW) {
-        console.debug(`[ACTION VALIDATOR] User is admin reviewing coordinator-to-admin request`, {
-          userId: userIdStr,
-          userAuthority,
-          requestId: requestObj.Request_ID,
-          assignmentRule: requestObj.reviewer.assignmentRule
-        });
-        isActiveResponder = true; // Treat admin as active responder
+      if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+        if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+          // PENDING_REVIEW: Any Admin can act as reviewer
+          console.debug(`[ACTION VALIDATOR] User is admin reviewing coordinator-to-admin request`, {
+            userId: userIdStr,
+            userAuthority,
+            requestId: requestObj.Request_ID,
+            assignmentRule: requestObj.reviewer.assignmentRule,
+            state: normalizedState
+          });
+          isActiveResponder = true; // Treat admin as active responder
+        } else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+          // REVIEW_RESCHEDULED: Complex logic for reschedule loop
+          const lastActorId = requestObj.lastAction?.actorId?.toString();
+          const requesterId = requestObj.requester?.userId?.toString();
+          const activeResponderRelationship = activeResponder.relationship;
+          
+          // Case 1: If Admin rescheduled, they should be View only (requester is active responder)
+          if (lastActorId === userIdStr && lastActorId !== requesterId) {
+            // This Admin rescheduled, they should be View only
+            console.debug(`[ACTION VALIDATOR] Admin who rescheduled should be View only, requester is active responder`, {
+              userId: userIdStr,
+              userAuthority,
+              requestId: requestObj.Request_ID,
+              lastActorId,
+              requesterId,
+              activeResponderUserId: activeResponder.userId?.toString()
+            });
+            // Don't set isActiveResponder = true, Admin should remain View only
+          } 
+          // Case 2: If requester rescheduled, ANY Admin should be able to respond
+          // (activeResponder is set to assigned reviewer, but any Admin can act)
+          else if (lastActorId === requesterId && activeResponderRelationship === 'reviewer') {
+            // Requester rescheduled, activeResponder is set to assigned reviewer
+            // But in coordinator-to-admin requests, ANY Admin should be able to respond
+            console.debug(`[ACTION VALIDATOR] Requester rescheduled, any Admin can respond in coordinator-to-admin request`, {
+              userId: userIdStr,
+              userAuthority,
+              requestId: requestObj.Request_ID,
+              lastActorId,
+              requesterId,
+              activeResponderUserId: activeResponder.userId?.toString(),
+              activeResponderRelationship
+            });
+            isActiveResponder = true; // Treat any Admin as active responder
+          }
+          // Case 3: If requester is active responder (after Admin rescheduled)
+          else if (userIdStr === requesterId && activeResponderRelationship === 'requester') {
+            // Requester should be active responder after Admin rescheduled
+            console.debug(`[ACTION VALIDATOR] Requester is active responder after Admin rescheduled`, {
+              userId: userIdStr,
+              requestId: requestObj.Request_ID,
+              lastActorId,
+              requesterId,
+              activeResponderRelationship
+            });
+            isActiveResponder = true;
+          }
+        }
       }
     }
 

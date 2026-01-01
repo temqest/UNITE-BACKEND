@@ -4,7 +4,7 @@
  * Manages state transitions for event requests with clean, predictable flow
  */
 
-const { REQUEST_STATES, REQUEST_ACTIONS } = require('../../utils/eventRequests/requestConstants');
+const { REQUEST_STATES, REQUEST_ACTIONS, AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
 
 class RequestStateService {
   /**
@@ -232,10 +232,40 @@ class RequestStateService {
     if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
       // Reschedule negotiation: receiver is active responder
       // Receiver is the one who did NOT initiate the reschedule
+      const requesterId = request.requester?.userId?.toString();
+      const reviewerId = request.reviewer?.userId?.toString();
+      
+      // Check for Admin reschedule in coordinator-to-admin requests
+      // If an Admin (not the assigned reviewer) rescheduled, requester becomes active responder
+      if (request.reviewer?.assignmentRule === 'coordinator-to-admin') {
+        let proposerId = null;
+        let proposerAuthority = null;
+        
+        // Get proposer from lastAction or rescheduleProposal
+        if (request.lastAction && request.lastAction.actorId) {
+          proposerId = request.lastAction.actorId.toString();
+        } else if (request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
+          proposerId = request.rescheduleProposal.proposedBy.userId?.toString();
+          proposerAuthority = request.rescheduleProposal.proposedBy.authoritySnapshot;
+        }
+        
+        // If proposer is Admin (authority >= 80) and not the requester or assigned reviewer
+        if (proposerId && proposerAuthority >= 80 && proposerId !== requesterId && proposerId !== reviewerId) {
+          // Admin rescheduled, requester becomes active responder
+          if (requesterId && request.requester && request.requester.userId) {
+            const requesterUserId = request.requester.userId._id || request.requester.userId;
+            return {
+              userId: requesterUserId,
+              relationship: 'requester',
+              authority: request.requester.authoritySnapshot || null
+            };
+          }
+        }
+      }
+      
+      // Standard logic: determine from lastAction
       if (request.lastAction && request.lastAction.actorId) {
         const lastActorId = request.lastAction.actorId.toString();
-        const requesterId = request.requester?.userId?.toString();
-        const reviewerId = request.reviewer?.userId?.toString();
 
         // If last actor was requester, reviewer is now active responder
         if (lastActorId === requesterId && reviewerId) {
@@ -255,13 +285,38 @@ class RequestStateService {
             authority: request.requester.authoritySnapshot || null
           };
         }
+        
+        // Handle Admin reschedules in coordinator-to-admin requests
+        // When Admin (not assigned reviewer) reschedules, requester becomes active responder
+        if (lastActorId !== requesterId && lastActorId !== reviewerId) {
+          // Check if this is an Admin reschedule in coordinator-to-admin request
+          if (request.reviewer?.assignmentRule === 'coordinator-to-admin') {
+            // Get Admin authority from rescheduleProposal
+            if (request.rescheduleProposal?.proposedBy) {
+              const proposerAuthority = request.rescheduleProposal.proposedBy.authoritySnapshot;
+              const proposerId = request.rescheduleProposal.proposedBy.userId?.toString();
+              
+              // If last actor is Admin (authority >= 80) and matches proposer
+              if (proposerId === lastActorId && proposerAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+                // Admin rescheduled, requester becomes active responder
+                if (requesterId && request.requester && request.requester.userId) {
+                  const requesterUserId = request.requester.userId._id || request.requester.userId;
+                  return {
+                    userId: requesterUserId,
+                    relationship: 'requester',
+                    authority: request.requester.authoritySnapshot || null
+                  };
+                }
+              }
+            }
+          }
+        }
       }
 
       // Fallback: if rescheduleProposal exists, receiver is the other party
       if (request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
         const proposerId = request.rescheduleProposal.proposedBy.userId?.toString();
-        const requesterId = request.requester?.userId?.toString();
-        const reviewerId = request.reviewer?.userId?.toString();
+        const proposerAuthority = request.rescheduleProposal.proposedBy.authoritySnapshot;
 
         // If requester proposed, reviewer is receiver
         if (proposerId === requesterId && reviewerId) {
@@ -280,6 +335,23 @@ class RequestStateService {
             relationship: 'requester',
             authority: request.requester.authoritySnapshot || null
           };
+        }
+        
+        // Handle Admin (not requester/reviewer) who proposed reschedule
+        // In coordinator-to-admin requests, if Admin rescheduled, requester becomes active responder
+        if (proposerId !== requesterId && proposerId !== reviewerId) {
+          if (request.reviewer?.assignmentRule === 'coordinator-to-admin' && 
+              proposerAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+            // Admin rescheduled, requester becomes active responder
+            if (requesterId && request.requester && request.requester.userId) {
+              const requesterUserId = request.requester.userId._id || request.requester.userId;
+              return {
+                userId: requesterUserId,
+                relationship: 'requester',
+                authority: request.requester.authoritySnapshot || null
+              };
+            }
+          }
         }
       }
 
@@ -302,7 +374,7 @@ class RequestStateService {
    * @param {Object} request - Request document (will be modified)
    * @param {string} action - Action that was performed
    * @param {string|ObjectId} actorId - User who performed the action
-   * @param {Object} context - Additional context { requesterId, reviewerId }
+   * @param {Object} context - Additional context { requesterId, reviewerId, actorAuthority }
    */
   static updateActiveResponder(request, action, actorId, context = {}) {
     const normalizedState = this.normalizeState(request.status || request.Status);
@@ -331,6 +403,40 @@ class RequestStateService {
 
     // Handle reschedule: receiver becomes active responder
     if (action === REQUEST_ACTIONS.RESCHEDULE) {
+      // Special case: Admin (authority >= 80) rescheduling coordinator-to-admin request
+      // When Admin (who is NOT the assigned reviewer) reschedules, requester becomes active responder
+      const actorAuthority = context.actorAuthority || null;
+      
+      if (!isRequester && !isReviewer && request.reviewer?.assignmentRule === 'coordinator-to-admin') {
+        // Check if actor is Admin (authority >= 80)
+        // First try context, then try rescheduleProposal (which may not be set yet)
+        let effectiveAuthority = actorAuthority;
+        if (!effectiveAuthority && request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
+          const proposedBy = request.rescheduleProposal.proposedBy;
+          if (proposedBy.userId && proposedBy.userId.toString() === actorIdStr) {
+            effectiveAuthority = proposedBy.authoritySnapshot;
+          }
+        }
+        
+        // If actor is Admin (authority >= 80) and not requester/reviewer, set requester as active responder
+        if (effectiveAuthority && effectiveAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && requesterId) {
+          console.log(`[REQUEST STATE] Admin (authority ${effectiveAuthority}) rescheduled coordinator-to-admin request, setting requester as active responder`, {
+            actorId: actorIdStr,
+            requesterId,
+            reviewerId,
+            requestId: request.Request_ID
+          });
+          const requesterUserId = request.requester.userId._id || request.requester.userId;
+          request.activeResponder = {
+            userId: requesterUserId,
+            relationship: 'requester',
+            authority: request.requester.authoritySnapshot || null
+          };
+          return;
+        }
+      }
+      
+      // Standard reschedule logic: requester ↔ reviewer swap
       if (isRequester && reviewerId) {
         // Requester rescheduled, reviewer becomes active responder
         const reviewerUserId = request.reviewer.userId._id || request.reviewer.userId;
@@ -339,6 +445,11 @@ class RequestStateService {
           relationship: 'reviewer',
           authority: request.reviewer.authoritySnapshot || null
         };
+        console.log(`[REQUEST STATE] Requester rescheduled, reviewer set as active responder`, {
+          requesterId,
+          reviewerId,
+          requestId: request.Request_ID
+        });
       } else if (isReviewer && requesterId) {
         // Reviewer rescheduled, requester becomes active responder
         const requesterUserId = request.requester.userId._id || request.requester.userId;
@@ -347,6 +458,36 @@ class RequestStateService {
           relationship: 'requester',
           authority: request.requester.authoritySnapshot || null
         };
+        console.log(`[REQUEST STATE] Reviewer rescheduled, requester set as active responder`, {
+          requesterId,
+          reviewerId,
+          requestId: request.Request_ID
+        });
+      } else {
+        // Fallback: if actor is neither requester nor reviewer, try to determine from context
+        // This handles the Admin reschedule case when authority isn't in proposal yet
+        console.warn(`[REQUEST STATE] Reschedule by actor who is neither requester nor reviewer`, {
+          actorId: actorIdStr,
+          requesterId,
+          reviewerId,
+          assignmentRule: request.reviewer?.assignmentRule,
+          requestId: request.Request_ID
+        });
+        // Will be handled by getActiveResponder() fallback logic
+        // For now, if it's coordinator-to-admin, assume requester should be active responder
+        if (request.reviewer?.assignmentRule === 'coordinator-to-admin' && requesterId) {
+          const requesterUserId = request.requester.userId._id || request.requester.userId;
+          request.activeResponder = {
+            userId: requesterUserId,
+            relationship: 'requester',
+            authority: request.requester.authoritySnapshot || null
+          };
+          console.log(`[REQUEST STATE] Fallback: Set requester as active responder for coordinator-to-admin reschedule`, {
+            actorId: actorIdStr,
+            requesterId,
+            requestId: request.Request_ID
+          });
+        }
       }
       return;
     }
