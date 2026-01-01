@@ -15,24 +15,9 @@ class PermissionService {
     try {
       // Quick check: If user has wildcard permission (*.*), grant all permissions immediately
       // This is especially important for admins who have ['*.*'] permissions
-      console.log('[checkPermission] Starting permission check:', {
-        userId: userId.toString(),
-        resource,
-        action,
-        context
-      });
-
       let quickPermissions = [];
       try {
         quickPermissions = await this.getUserPermissions(userId, null);
-        console.log('[checkPermission] Quick permissions check:', {
-          permissionsCount: quickPermissions.length,
-          permissions: quickPermissions.map(p => ({
-            resource: p.resource,
-            actions: Array.isArray(p.actions) ? p.actions : [p.actions],
-            hasWildcard: p.resource === '*' && (Array.isArray(p.actions) ? p.actions.includes('*') : p.actions === '*')
-          }))
-        });
       } catch (quickError) {
         console.error('[checkPermission] Error in quick permission check:', quickError);
       }
@@ -53,12 +38,6 @@ class PermissionService {
       });
       
       if (hasWildcard) {
-        console.log('[checkPermission] ✓ Wildcard permission (*.*) detected, granting access:', {
-          userId: userId.toString(),
-          resource,
-          action,
-          permissionsFound: quickPermissions.length
-        });
         return true;
       }
       
@@ -104,8 +83,6 @@ class PermissionService {
       }
 
       if (userRoles.length === 0) {
-        console.log('[checkPermission] No user roles found, checking embedded roles in User model...');
-        
         // Fallback: Check embedded roles directly from User model
         const user = await User.findById(userId).select('roles').lean();
         if (user && user.roles && user.roles.length > 0) {
@@ -117,10 +94,6 @@ class PermissionService {
             
             if (embeddedRoleIds.length > 0) {
               const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } });
-              console.log('[checkPermission] Found embedded roles:', {
-                count: embeddedRoles.length,
-                roleCodes: embeddedRoles.map(r => r.code)
-              });
               
               // Convert to UserRole format for aggregation
               const embeddedUserRoles = embeddedRoles.map(role => ({
@@ -135,7 +108,6 @@ class PermissionService {
         }
         
         if (userRoles.length === 0) {
-          console.log('[checkPermission] ✗ No roles found for user');
           return false;
         }
       }
@@ -156,22 +128,9 @@ class PermissionService {
       }
 
       // 5. Aggregate permissions from all roles
-      console.log('[checkPermission] Aggregating permissions from roles:', {
-        userRolesCount: userRoles.length,
-        roleCodes: userRoles.map(ur => ur.roleId?.code || 'unknown')
-      });
-
       const permissions = await this.aggregatePermissions(userRoles);
 
       // 6. Check if permission exists
-      console.log('[checkPermission] Checking aggregated permissions:', {
-        permissionsCount: permissions.length,
-        permissions: permissions.map(p => ({
-          resource: p.resource,
-          actions: Array.isArray(p.actions) ? p.actions : (p.actions ? [p.actions] : []),
-          actionsType: Array.isArray(p.actions) ? 'array' : typeof p.actions
-        }))
-      });
 
       const hasPermission = permissions.some(p => {
         if (!p || !p.resource) return false;
@@ -182,11 +141,6 @@ class PermissionService {
         // Handle wildcard permissions: *.* grants all permissions
         if (p.resource === '*') {
           if (actions.includes('*') || actions.includes(action)) {
-            console.log('[checkPermission] ✓ Wildcard permission matched:', {
-              resource: p.resource,
-              actions: actions,
-              requestedAction: action
-            });
             return true;
           }
         }
@@ -194,11 +148,6 @@ class PermissionService {
         // Handle resource wildcard: resource.* grants all actions for that resource
         if (p.resource === resource) {
           if (actions.includes('*') || actions.includes(action)) {
-            console.log('[checkPermission] ✓ Resource permission matched:', {
-              resource: p.resource,
-              actions: actions,
-              requestedAction: action
-            });
             return true;
           }
         }
@@ -206,50 +155,11 @@ class PermissionService {
         return false;
       });
 
-      console.log('[checkPermission] Final permission check result:', {
-        userId: userId.toString(),
-        resource,
-        action,
-        hasPermission,
-        permissionsChecked: permissions.length
-      });
-
-      // Enhanced diagnostic logging for permission denials
+      // Only log permission denials for debugging
       if (!hasPermission) {
-        const User = require('../../models/index').User;
-        const authorityService = require('./authority.service');
-        let userAuthority = null;
-        try {
-          const user = await User.findById(userId).select('authority').lean();
-          userAuthority = user?.authority || await authorityService.calculateUserAuthority(userId);
-        } catch (e) {
-          // Ignore errors in diagnostic logging
-        }
-        
-        // Check for wildcard in a safe way
-        const hasWildcardInPerms = permissions.some(p => {
-          if (!p || !p.resource) return false;
-          const actions = Array.isArray(p.actions) ? p.actions : (p.actions ? [p.actions] : []);
-          return p.resource === '*' && actions.includes('*');
-        });
-
-        console.log('[PERMISSION DENIED]', {
-          userId: userId.toString(),
-          resource,
-          action,
-          requiredPermission: `${resource}.${action}`,
-          locationId: context.locationId?.toString() || null,
-          coverageAreaId: context.coverageAreaId?.toString() || null,
-          userAuthority,
-          permissionsFound: permissions.length,
-          hasWildcard: hasWildcardInPerms,
-          permissions: permissions.map(p => ({
-            resource: p.resource,
-            actions: Array.isArray(p.actions) ? p.actions : [p.actions]
-          })),
-          reason: 'INSUFFICIENT_PERMISSION',
-          timestamp: new Date().toISOString()
-        });
+        // Log only in development or when explicitly needed
+        // Commented out to reduce log noise
+        // console.log('[PERMISSION DENIED]', { userId: userId.toString(), resource, action });
       }
 
       return hasPermission;
@@ -268,9 +178,6 @@ class PermissionService {
    */
   async getUserPermissions(userId, locationScopeOrContext = null, context = {}) {
     try {
-      // Diagnostic logging
-      console.log(`[DIAG] getUserPermissions called with userId: ${userId}, type: ${typeof userId}`);
-      
       // Handle backward compatibility: if second param is an object with context properties, treat it as context
       let locationScope = null;
       let actualContext = context;
@@ -292,12 +199,8 @@ class PermissionService {
       if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
         actualUserId = new mongoose.Types.ObjectId(userId);
         userIdIsObjectId = true;
-        console.log(`[DIAG] Converted userId string to ObjectId: ${actualUserId}`);
       } else if (userId instanceof mongoose.Types.ObjectId) {
         userIdIsObjectId = true;
-        console.log(`[DIAG] userId is already ObjectId: ${actualUserId}`);
-      } else {
-        console.log(`[DIAG] userId is string format: ${actualUserId}`);
       }
       
       // OPTIMIZATION: Check embedded roles FIRST (much faster, single query)
@@ -315,7 +218,6 @@ class PermissionService {
           if (embeddedRoleIds.length > 0) {
             // Fetch roles in parallel (single query)
             const embeddedRoles = await Role.find({ _id: { $in: embeddedRoleIds } });
-            console.log(`[DIAG] Found ${embeddedRoles.length} embedded roles in User model (fast path)`);
             
             // Convert to same format as UserRole (with roleId populated)
             userRoles = embeddedRoles.map(role => ({
@@ -324,8 +226,6 @@ class PermissionService {
               isActive: true,
               assignedAt: activeEmbeddedRoles.find(r => r.roleId?.toString() === role._id.toString())?.assignedAt || new Date()
             }));
-            
-            console.log(`[DIAG] Using embedded roles (fast path), skipping UserRole collection query`);
           }
         }
       }
@@ -333,9 +233,6 @@ class PermissionService {
       // Fallback: Query UserRole collection only if embedded roles are missing
       // This ensures backward compatibility for users without embedded roles
       if (userRoles.length === 0) {
-        console.log(`[DIAG] No embedded roles found, querying UserRole collection (slow path)`);
-        console.log(`[DIAG] Querying UserRole.find({ userId: ${actualUserId}, isActive: true })`);
-
         userRoles = await UserRole.find({ 
           userId: actualUserId, 
           isActive: true,
@@ -346,11 +243,8 @@ class PermissionService {
           ]
         }).populate('roleId');
         
-        console.log(`[DIAG] Found ${userRoles.length} active role assignments from UserRole collection`);
-        
         // Fallback: if no roles found and userId was converted to ObjectId, try original string format
         if (userRoles.length === 0 && userIdIsObjectId && typeof userId === 'string') {
-          console.log(`[DIAG] No roles found with ObjectId, trying string format: ${userId}`);
           userRoles = await UserRole.find({ 
             userId: userId, 
             isActive: true,
@@ -360,26 +254,7 @@ class PermissionService {
               { expiresAt: { $gt: new Date() } }
             ]
           }).populate('roleId');
-          console.log(`[DIAG] Found ${userRoles.length} active role assignments with string format`);
         }
-      }
-      
-      console.log(`[DIAG] Total userRoles after merge: ${userRoles.length}`);
-      
-      // Diagnostic: Check if roles are populated
-      for (let i = 0; i < userRoles.length; i++) {
-        const ur = userRoles[i];
-        const role = ur.roleId;
-        console.log(`[DIAG] UserRole[${i}]:`, {
-          userRoleId: ur._id,
-          roleIdRef: ur.roleId,
-          roleIsPopulated: role && typeof role === 'object' && role._id,
-          roleType: typeof role,
-          roleCode: role?.code,
-          roleName: role?.name,
-          hasPermissions: !!(role && role.permissions),
-          permissionsLength: role?.permissions?.length || 0
-        });
       }
 
       if (locationScope) {
@@ -389,15 +264,13 @@ class PermissionService {
       // Support coverage area scope (new)
       if (actualContext?.coverageAreaId) {
         userRoles = await this.filterByCoverageAreaScope(userRoles, actualContext.coverageAreaId);
-        console.log(`[DIAG] After coverage area filter: ${userRoles.length} roles`);
       }
 
       const permissions = await this.aggregatePermissions(userRoles);
-      console.log(`[DIAG] Aggregated ${permissions.length} permissions from ${userRoles.length} roles`);
       
       return permissions;
     } catch (error) {
-      console.error('[DIAG] Error getting user permissions:', error);
+      console.error('[PERMISSION SERVICE] Error getting user permissions:', error);
       return [];
     }
   }
@@ -630,20 +503,9 @@ class PermissionService {
           };
         }));
         
-        console.log(`[DIAG] getUsersWithPermission - Users found with permission ${resource}.${action}:`, {
-          totalUsers: userIds.length,
-          usersLogged: userDetails.length,
-          users: userDetails,
-          authorityDistribution: {
-            systemAdmin: userDetails.filter(u => u.authority >= 100).length,
-            operationalAdmin: userDetails.filter(u => u.authority >= 80 && u.authority < 100).length,
-            coordinator: userDetails.filter(u => u.authority >= 60 && u.authority < 80).length,
-            stakeholder: userDetails.filter(u => u.authority >= 30 && u.authority < 60).length,
-            basicUser: userDetails.filter(u => u.authority < 30).length
-          }
-        });
+        // Removed verbose logging
       } else {
-        console.log(`[DIAG] getUsersWithPermission - NO users found with permission ${resource}.${action}`);
+        // Removed verbose logging
       }
       
       console.log(`[getUsersWithPermission] Returning ${userIds.length} unique user IDs for permission ${resource}.${action} (${userRoles.length} from UserRole, ${usersWithEmbeddedRoles.length} from embedded roles):`, userIds);
@@ -662,16 +524,16 @@ class PermissionService {
   async getUserRoles(userId) {
     try {
       // Diagnostic logging
-      console.log(`[DIAG] getUserRoles called with userId: ${userId}, type: ${typeof userId}`);
+      // Removed verbose logging
       
       // Convert userId to ObjectId if it's a valid ObjectId string
       let actualUserId = userId;
       if (typeof userId === 'string' && mongoose.Types.ObjectId.isValid(userId)) {
         actualUserId = new mongoose.Types.ObjectId(userId);
-        console.log(`[DIAG] Converted userId string to ObjectId: ${actualUserId}`);
+        // Removed verbose logging
       }
       
-      console.log(`[DIAG] Querying UserRole.find({ userId: ${actualUserId}, isActive: true })`);
+      // Removed verbose logging
       
       const userRoles = await UserRole.find({
         userId: actualUserId,
@@ -683,14 +545,11 @@ class PermissionService {
         ]
       }).populate('roleId');
 
-      console.log(`[DIAG] Found ${userRoles.length} active role assignments for user ${userId}`);
-      if (userRoles.length > 0) {
-        console.log(`[DIAG] Role codes: [${userRoles.map(ur => ur.roleId?.code || 'N/A').join(', ')}]`);
-      }
+      // Removed verbose logging
 
       return userRoles.map(ur => ur.roleId).filter(r => r !== null);
     } catch (error) {
-      console.error('[DIAG] Error getting user roles:', error);
+      console.error('[PERMISSION SERVICE] Error getting user roles:', error);
       return [];
     }
   }
@@ -704,10 +563,7 @@ class PermissionService {
   async aggregatePermissions(userRoles) {
     const permissionsMap = new Map();
 
-    console.log(`[DIAG] aggregatePermissions called with ${userRoles.length} userRoles`);
-    
     if (!userRoles || userRoles.length === 0) {
-      console.log(`[DIAG] aggregatePermissions: No userRoles provided, returning empty permissions`);
       return [];
     }
     
@@ -721,83 +577,43 @@ class PermissionService {
       const isMongooseDocument = role && typeof role === 'object' && role._id && role.constructor && role.constructor.name !== 'Object';
       const isObjectId = role && (role instanceof mongoose.Types.ObjectId || (typeof role === 'object' && role.toString && role.toString().length === 24));
       
-      console.log(`[DIAG] Processing userRole:`, {
-        userRoleId: userRole._id,
-        roleId: role?._id || role,
-        roleType: typeof role,
-        roleIsObject: role && typeof role === 'object',
-        isMongooseDocument,
-        isObjectId,
-        hasRole: !!role,
-        hasPermissions: !!(role && role.permissions),
-        permissionsCount: role?.permissions?.length || 0,
-        roleCode: role?.code,
-        roleName: role?.name
-      });
-      
       if (!role) {
         skippedRoles++;
-        console.log(`[DIAG] Skipping userRole ${userRole._id}: role is null/undefined`);
         continue;
       }
       
       // If role is just an ObjectId (not populated), try to populate it
       if (isObjectId && !isMongooseDocument) {
-        console.log(`[RBAC] aggregatePermissions - Role not populated for userRole ${userRole._id}, attempting to populate...`);
         try {
           const roleId = userRole.roleId;
           const populatedRole = await Role.findById(roleId);
           if (populatedRole) {
             userRole.roleId = populatedRole;
             role = populatedRole;
-            console.log(`[RBAC] aggregatePermissions - Successfully populated role ${populatedRole.code} for userRole ${userRole._id}`);
           } else {
             skippedRoles++;
-            console.error(`[RBAC] aggregatePermissions - Role ${roleId} not found in database for userRole ${userRole._id}`);
             continue;
           }
         } catch (populateError) {
           skippedRoles++;
-          console.error(`[RBAC] aggregatePermissions - Failed to populate role for userRole ${userRole._id}:`, populateError.message);
           continue;
         }
       }
       
-      if (!role.permissions) {
+      if (!role.permissions || !Array.isArray(role.permissions) || role.permissions.length === 0) {
         skippedRoles++;
-        console.log(`[DIAG] Skipping userRole ${userRole._id}: role.permissions is null/undefined`);
-        continue;
-      }
-      
-      if (!Array.isArray(role.permissions)) {
-        skippedRoles++;
-        console.log(`[DIAG] Skipping userRole ${userRole._id}: role.permissions is not an array (type: ${typeof role.permissions})`);
-        continue;
-      }
-      
-      if (role.permissions.length === 0) {
-        skippedRoles++;
-        console.log(`[DIAG] Skipping userRole ${userRole._id}: role.permissions is empty array`);
         continue;
       }
 
       processedRoles++;
-      console.log(`[DIAG] Processing permissions from role ${role.code || role._id} (${role.permissions.length} permissions)`);
 
       for (const perm of role.permissions) {
         // Validate permission structure
-        if (!perm || typeof perm !== 'object') {
-          console.log(`[DIAG] Skipping invalid permission object in role ${role.code || role._id}`);
-          continue;
-        }
-        
-        if (!perm.resource || typeof perm.resource !== 'string') {
-          console.log(`[DIAG] Skipping permission with invalid resource in role ${role.code || role._id}`);
+        if (!perm || typeof perm !== 'object' || !perm.resource || typeof perm.resource !== 'string') {
           continue;
         }
         
         if (!perm.actions || !Array.isArray(perm.actions) || perm.actions.length === 0) {
-          console.log(`[DIAG] Skipping permission with invalid actions in role ${role.code || role._id}`);
           continue;
         }
         // Use resource as key to merge all permissions for same resource
@@ -845,13 +661,11 @@ class PermissionService {
     }
 
     const finalPermissions = Array.from(permissionsMap.values());
-    console.log(`[DIAG] aggregatePermissions summary:`, {
-      totalUserRoles: userRoles.length,
-      processedRoles,
-      skippedRoles,
-      finalPermissionsCount: finalPermissions.length,
-      permissions: finalPermissions.map(p => `${p.resource}.${p.actions?.join(',') || '[]'}`)
-    });
+    
+    // Log summary only if there are issues (processedRoles === 0 but userRoles.length > 0)
+    if (processedRoles === 0 && userRoles.length > 0) {
+      console.warn(`[PERMISSION SERVICE] aggregatePermissions: No roles processed from ${userRoles.length} userRoles`);
+    }
 
     return finalPermissions;
   }
@@ -1402,3 +1216,4 @@ class PermissionService {
 }
 
 module.exports = new PermissionService();
+

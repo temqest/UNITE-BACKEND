@@ -27,24 +27,9 @@ function requirePermission(resource, action) {
                         null;
 
       // First check if user has wildcard permission (*.*) - admins get all permissions
-      console.log('[requirePermission] Checking permissions for user:', {
-        userId: userId.toString(),
-        resource,
-        action,
-        locationId: locationId?.toString() || null
-      });
-
       let userPermissions = [];
       try {
         userPermissions = await permissionService.getUserPermissions(userId, null);
-        console.log('[requirePermission] getUserPermissions returned:', {
-          count: userPermissions.length,
-          permissions: userPermissions.map(p => ({
-            resource: p.resource,
-            actions: p.actions,
-            hasWildcard: p.resource === '*' && p.actions.includes('*')
-          }))
-        });
       } catch (permError) {
         console.error('[requirePermission] Error getting user permissions:', permError);
       }
@@ -63,12 +48,6 @@ function requirePermission(resource, action) {
       });
       
       if (hasWildcard) {
-        console.log('[requirePermission] ✓ Wildcard permission (*.*) granted:', {
-          userId: userId.toString(),
-          resource,
-          action,
-          permissionsFound: userPermissions.length
-        });
         return next();
       }
 
@@ -77,23 +56,10 @@ function requirePermission(resource, action) {
       const userAuthority = await authorityService.calculateUserAuthority(userId);
       
       if (userAuthority >= 80) {
-        console.log('[requirePermission] SysAdmin bypass:', {
-          userId: userId.toString(),
-          authority: userAuthority,
-          resource,
-          action
-        });
         return next();
       }
 
       // Check permission
-      console.log('[requirePermission] Checking specific permission:', {
-        userId: userId.toString(),
-        resource,
-        action,
-        locationId: locationId?.toString() || null
-      });
-
       const hasPermission = await permissionService.checkPermission(
         userId,
         resource,
@@ -101,36 +67,13 @@ function requirePermission(resource, action) {
         { locationId }
       );
 
-      console.log('[requirePermission] checkPermission result:', {
-        userId: userId.toString(),
-        resource,
-        action,
-        hasPermission,
-        authority: userAuthority
-      });
-
       if (!hasPermission) {
-        console.log('[requirePermission] ✗ Permission denied:', {
-          userId: userId.toString(),
-          authority: userAuthority,
-          resource,
-          action,
-          locationId: locationId?.toString() || null,
-          userPermissionsCount: userPermissions.length,
-          userPermissions: userPermissions.map(p => `${p.resource}.${Array.isArray(p.actions) ? p.actions.join(',') : p.actions}`)
-        });
         return res.status(403).json({ 
           success: false, 
           message: `Permission denied: ${resource}.${action}`,
           required: { resource, action }
         });
       }
-
-      console.log('[requirePermission] ✓ Permission granted:', {
-        userId: userId.toString(),
-        resource,
-        action
-      });
 
       next();
     } catch (error) {
@@ -174,10 +117,6 @@ function requireAnyPermission(permissions) {
       );
       
       if (hasWildcard) {
-        console.log('[requireAnyPermission] Wildcard permission (*.*) granted:', {
-          userId: userId.toString(),
-          permissions
-        });
         return next();
       }
 
@@ -186,11 +125,6 @@ function requireAnyPermission(permissions) {
       const userAuthority = await authorityService.calculateUserAuthority(userId);
       
       if (userAuthority >= 80) {
-        console.log('[requireAnyPermission] SysAdmin bypass:', {
-          userId: userId.toString(),
-          authority: userAuthority,
-          permissions
-        });
         return next();
       }
 
@@ -208,11 +142,6 @@ function requireAnyPermission(permissions) {
         }
       }
 
-      console.log('[requireAnyPermission] Permission denied:', {
-        userId: userId.toString(),
-        authority: userAuthority,
-        permissions
-      });
       return res.status(403).json({ 
         success: false, 
         message: 'Permission denied: requires one of the following permissions',
@@ -259,10 +188,6 @@ function requireAllPermissions(permissions) {
       );
       
       if (hasWildcard) {
-        console.log('[requireAllPermissions] Wildcard permission (*.*) granted:', {
-          userId: userId.toString(),
-          permissions
-        });
         return next();
       }
 
@@ -271,11 +196,6 @@ function requireAllPermissions(permissions) {
       const userAuthority = await authorityService.calculateUserAuthority(userId);
       
       if (userAuthority >= 80) {
-        console.log('[requireAllPermissions] SysAdmin bypass:', {
-          userId: userId.toString(),
-          authority: userAuthority,
-          permissions
-        });
         return next();
       }
 
@@ -289,11 +209,6 @@ function requireAllPermissions(permissions) {
         );
         
         if (!hasPermission) {
-          console.log('[requireAllPermissions] Permission denied:', {
-            userId: userId.toString(),
-            authority: userAuthority,
-            missing: { resource: perm.resource, action: perm.action }
-          });
           return res.status(403).json({ 
             success: false, 
             message: `Permission denied: requires ${perm.resource}.${perm.action}`,

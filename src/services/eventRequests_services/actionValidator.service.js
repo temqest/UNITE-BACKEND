@@ -86,8 +86,44 @@ class ActionValidatorService {
           const userIdStr = userId.toString();
           const responderId = activeResponder.userId.toString();
           
+          // Special case: For coordinator-to-admin requests, handle Admin actions
+          // Core principle: activeResponder.relationship === 'reviewer' means "ANY Admin can respond"
+          let isActiveResponder = userIdStr === responderId;
+          
+          if (!isActiveResponder && requestObj.reviewer?.assignmentRule === 'coordinator-to-admin') {
+            const User = require('../../models/index').User;
+            const user = await User.findById(userIdStr).select('authority').lean();
+            const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
+            
+            if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+              const activeResponderRelationship = activeResponder.relationship;
+              
+              // Extract lastActorId with proper ObjectId handling
+              let lastActorId = null;
+              if (requestObj.lastAction?.actorId) {
+                if (typeof requestObj.lastAction.actorId === 'object' && requestObj.lastAction.actorId.toString) {
+                  lastActorId = requestObj.lastAction.actorId.toString();
+                } else if (typeof requestObj.lastAction.actorId === 'string') {
+                  lastActorId = requestObj.lastAction.actorId;
+                } else if (requestObj.lastAction.actorId._id) {
+                  lastActorId = requestObj.lastAction.actorId._id.toString();
+                }
+              }
+              
+              // If activeResponder.relationship === 'reviewer', ANY Admin can respond
+              // UNLESS this Admin was the one who rescheduled (then they're View only)
+              if (activeResponderRelationship === 'reviewer') {
+                if (lastActorId && lastActorId !== userIdStr) {
+                  // Admin can respond (did NOT reschedule last)
+                  isActiveResponder = true;
+                }
+                // If lastActorId === userIdStr, Admin rescheduled last, they remain View only
+              }
+            }
+          }
+          
           // If user is NOT the active responder, they can only view
-          if (userIdStr !== responderId && action !== REQUEST_ACTIONS.VIEW) {
+          if (!isActiveResponder && action !== REQUEST_ACTIONS.VIEW) {
             return {
               valid: false,
               reason: 'Only the active responder can perform actions on this request'
@@ -96,7 +132,7 @@ class ActionValidatorService {
           
           // If user IS the active responder, allow them to respond (confirm/decline/accept/reject/reschedule)
           // This handles the turn-based negotiation
-          if (userIdStr === responderId && [
+          if (isActiveResponder && [
             REQUEST_ACTIONS.ACCEPT,
             REQUEST_ACTIONS.REJECT,
             REQUEST_ACTIONS.CONFIRM,
@@ -970,14 +1006,35 @@ class ActionValidatorService {
     let isActiveResponder = userIdStr === responderId;
 
     // Special case: For coordinator-to-admin requests, handle Admin actions
+    // Core principle: activeResponder.relationship === 'reviewer' means "ANY Admin can respond"
+    // not "only the assigned reviewer can respond"
     if (!isActiveResponder && requestObj.reviewer?.assignmentRule === 'coordinator-to-admin') {
+      console.log(`[ACTION VALIDATOR] Entering coordinator-to-admin special case`, {
+        userId: userIdStr,
+        requestId: requestObj.Request_ID,
+        assignmentRule: requestObj.reviewer?.assignmentRule,
+        normalizedState,
+        currentIsActiveResponder: isActiveResponder,
+        activeResponder: activeResponder ? {
+          userId: activeResponder.userId?.toString(),
+          relationship: activeResponder.relationship
+        } : null
+      });
+      
       const user = await User.findById(userIdStr).select('authority').lean();
       const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
+      
+      console.log(`[ACTION VALIDATOR] User authority check`, {
+        userId: userIdStr,
+        userAuthority,
+        isAdmin: userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN,
+        threshold: AUTHORITY_TIERS.OPERATIONAL_ADMIN
+      });
       
       if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
         if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
           // PENDING_REVIEW: Any Admin can act as reviewer
-          console.debug(`[ACTION VALIDATOR] User is admin reviewing coordinator-to-admin request`, {
+          console.log(`[ACTION VALIDATOR] User is admin reviewing coordinator-to-admin request (PENDING_REVIEW)`, {
             userId: userIdStr,
             userAuthority,
             requestId: requestObj.Request_ID,
@@ -986,54 +1043,98 @@ class ActionValidatorService {
           });
           isActiveResponder = true; // Treat admin as active responder
         } else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
-          // REVIEW_RESCHEDULED: Complex logic for reschedule loop
-          const lastActorId = requestObj.lastAction?.actorId?.toString();
-          const requesterId = requestObj.requester?.userId?.toString();
-          const activeResponderRelationship = activeResponder.relationship;
+          // REVIEW_RESCHEDULED: Simplified logic for reschedule loop
+          // Extract lastActorId with proper ObjectId handling
+          let lastActorId = null;
+          if (requestObj.lastAction?.actorId) {
+            // Handle both ObjectId objects and string IDs
+            if (typeof requestObj.lastAction.actorId === 'object' && requestObj.lastAction.actorId.toString) {
+              lastActorId = requestObj.lastAction.actorId.toString();
+            } else if (typeof requestObj.lastAction.actorId === 'string') {
+              lastActorId = requestObj.lastAction.actorId;
+            } else if (requestObj.lastAction.actorId._id) {
+              lastActorId = requestObj.lastAction.actorId._id.toString();
+            }
+          }
           
-          // Case 1: If Admin rescheduled, they should be View only (requester is active responder)
-          if (lastActorId === userIdStr && lastActorId !== requesterId) {
-            // This Admin rescheduled, they should be View only
-            console.debug(`[ACTION VALIDATOR] Admin who rescheduled should be View only, requester is active responder`, {
+          const activeResponderRelationship = activeResponder?.relationship || null;
+          const requesterId = requestObj.requester?.userId?.toString() || null;
+          
+          console.log(`[ACTION VALIDATOR] REVIEW_RESCHEDULED state analysis`, {
+            userId: userIdStr,
+            userAuthority,
+            requestId: requestObj.Request_ID,
+            lastActorId,
+            lastActionExists: !!requestObj.lastAction,
+            lastActionActorIdType: requestObj.lastAction?.actorId ? typeof requestObj.lastAction.actorId : 'null',
+            activeResponderRelationship,
+            activeResponderUserId: activeResponder?.userId?.toString(),
+            requesterId,
+            conditionCheck: {
+              isReviewerRelationship: activeResponderRelationship === 'reviewer',
+              lastActorIdNotEqualToUserId: lastActorId !== userIdStr,
+              willSetActiveResponder: activeResponderRelationship === 'reviewer' && lastActorId !== userIdStr
+            }
+          });
+          
+          // If activeResponder.relationship === 'reviewer', ANY Admin can respond
+          // UNLESS this Admin was the one who rescheduled (then they're View only)
+          if (activeResponderRelationship === 'reviewer') {
+            // Admin can respond UNLESS they rescheduled last
+            if (lastActorId && lastActorId !== userIdStr) {
+              console.log(`[ACTION VALIDATOR] ✅ Admin can respond (activeResponder.relationship === 'reviewer' and Admin did NOT reschedule last)`, {
+                userId: userIdStr,
+                userAuthority,
+                requestId: requestObj.Request_ID,
+                lastActorId,
+                activeResponderRelationship,
+                activeResponderUserId: activeResponder?.userId?.toString(),
+                condition: `lastActorId (${lastActorId}) !== userIdStr (${userIdStr})`
+              });
+              isActiveResponder = true;
+            } else if (lastActorId === userIdStr) {
+              // Admin rescheduled last, they remain View only (requester is active responder)
+              console.log(`[ACTION VALIDATOR] ❌ Admin rescheduled last, they are View only (requester is active responder)`, {
+                userId: userIdStr,
+                userAuthority,
+                requestId: requestObj.Request_ID,
+                lastActorId,
+                activeResponderRelationship,
+                condition: `lastActorId (${lastActorId}) === userIdStr (${userIdStr})`
+              });
+            } else {
+              // lastActorId is null or undefined - log warning
+              console.warn(`[ACTION VALIDATOR] ⚠️ lastActorId is null/undefined, cannot determine if Admin rescheduled`, {
+                userId: userIdStr,
+                requestId: requestObj.Request_ID,
+                lastAction: requestObj.lastAction,
+                activeResponderRelationship
+              });
+            }
+          } else {
+            console.log(`[ACTION VALIDATOR] Active responder relationship is not 'reviewer'`, {
               userId: userIdStr,
-              userAuthority,
               requestId: requestObj.Request_ID,
-              lastActorId,
-              requesterId,
-              activeResponderUserId: activeResponder.userId?.toString()
+              activeResponderRelationship,
+              expected: 'reviewer'
             });
-            // Don't set isActiveResponder = true, Admin should remain View only
-          } 
-          // Case 2: If requester rescheduled, ANY Admin should be able to respond
-          // (activeResponder is set to assigned reviewer, but any Admin can act)
-          else if (lastActorId === requesterId && activeResponderRelationship === 'reviewer') {
-            // Requester rescheduled, activeResponder is set to assigned reviewer
-            // But in coordinator-to-admin requests, ANY Admin should be able to respond
-            console.debug(`[ACTION VALIDATOR] Requester rescheduled, any Admin can respond in coordinator-to-admin request`, {
-              userId: userIdStr,
-              userAuthority,
-              requestId: requestObj.Request_ID,
-              lastActorId,
-              requesterId,
-              activeResponderUserId: activeResponder.userId?.toString(),
-              activeResponderRelationship
-            });
-            isActiveResponder = true; // Treat any Admin as active responder
           }
-          // Case 3: If requester is active responder (after Admin rescheduled)
-          else if (userIdStr === requesterId && activeResponderRelationship === 'requester') {
-            // Requester should be active responder after Admin rescheduled
-            console.debug(`[ACTION VALIDATOR] Requester is active responder after Admin rescheduled`, {
-              userId: userIdStr,
-              requestId: requestObj.Request_ID,
-              lastActorId,
-              requesterId,
-              activeResponderRelationship
-            });
-            isActiveResponder = true;
-          }
+          // If activeResponder.relationship === 'requester', only requester can respond
+          // (This is handled by the initial userIdStr === responderId check above)
         }
+      } else {
+        console.log(`[ACTION VALIDATOR] User is not Admin (authority < ${AUTHORITY_TIERS.OPERATIONAL_ADMIN})`, {
+          userId: userIdStr,
+          userAuthority,
+          threshold: AUTHORITY_TIERS.OPERATIONAL_ADMIN
+        });
       }
+      
+      console.log(`[ACTION VALIDATOR] Exiting coordinator-to-admin special case`, {
+        userId: userIdStr,
+        requestId: requestObj.Request_ID,
+        finalIsActiveResponder: isActiveResponder
+      });
     }
 
     if (!isActiveResponder) {
@@ -1067,18 +1168,48 @@ class ActionValidatorService {
     // Get base actions for current state
     const baseActions = RequestStateService.getAvailableActions(normalizedState);
     
+    console.log(`[ACTION VALIDATOR] Computing actions for active responder`, {
+      userId: userIdStr,
+      requestId: requestObj.Request_ID,
+      normalizedState,
+      userAuthority,
+      baseActions,
+      isActiveResponder: true
+    });
+    
     // Map actions based on authority (accept/reject vs confirm/decline)
     const mappedActions = this._mapActionsByAuthority(userAuthority, baseActions);
+    
+    console.log(`[ACTION VALIDATOR] Mapped actions by authority`, {
+      userId: userIdStr,
+      requestId: requestObj.Request_ID,
+      mappedActions,
+      userAuthority
+    });
     
     // Check permissions for each action and add if valid
     for (const action of mappedActions) {
       if (action === REQUEST_ACTIONS.VIEW) continue; // Already added
       
       const validation = await this.validateAction(userId, action, request, context);
+      console.log(`[ACTION VALIDATOR] Action validation result`, {
+        userId: userIdStr,
+        requestId: requestObj.Request_ID,
+        action,
+        valid: validation.valid,
+        reason: validation.reason || 'N/A'
+      });
       if (validation.valid) {
         available.push(action);
       }
     }
+    
+    console.log(`[ACTION VALIDATOR] Final available actions`, {
+      userId: userIdStr,
+      requestId: requestObj.Request_ID,
+      availableActions: available,
+      availableActionsCount: available.length
+    });
     
     // Special handling for pending-review: requester can cancel and edit
     if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
@@ -1149,6 +1280,14 @@ class ActionValidatorService {
         }
       }
     }
+    
+    console.log(`[ACTION VALIDATOR] Returning available actions`, {
+      userId: userIdStr,
+      requestId: requestObj.Request_ID || requestObj.RequestId || requestObj._id,
+      availableActions: available,
+      availableActionsCount: available.length,
+      isActiveResponder: true
+    });
     
     return available;
   }
