@@ -5,7 +5,8 @@ const eventStaffSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    ref: 'Event'
+    ref: 'Event',
+    index: true // Add index for faster queries
   },
   Staff_FullName: {
     type: String,
@@ -20,6 +21,9 @@ const eventStaffSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Add compound index for faster lookups and potential uniqueness checks
+eventStaffSchema.index({ EventID: 1, Staff_FullName: 1, Role: 1 });
 
 const EventStaff = mongoose.model('EventStaff', eventStaffSchema);
 

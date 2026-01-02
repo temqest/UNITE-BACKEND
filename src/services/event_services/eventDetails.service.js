@@ -5,11 +5,7 @@ const {
   BloodDrive,
   Advocacy,
   Training,
-  EventStaff,
-  Coordinator,
-  Stakeholder,
-  BloodbankStaff,
-  SystemAdmin
+  EventStaff
 } = require('../../models/index');
 
 class EventDetailsService {
@@ -79,20 +75,23 @@ class EventDetailsService {
       // Get stakeholder information
       const stakeholder = await this.getStakeholderInfo(event.stakeholder_id);
       
-      // Get admin information (if approved)
+      // Get admin information (if approved) - using User model
       let admin = null;
       if (event.ApprovedByAdminID) {
-        const adminRecord = await SystemAdmin.findOne({ Admin_ID: event.ApprovedByAdminID });
-        if (adminRecord) {
-          const adminStaff = await BloodbankStaff.findOne({ ID: event.ApprovedByAdminID });
-          if (adminStaff) {
-            admin = {
-              id: event.ApprovedByAdminID,
-              name: `${adminStaff.First_Name} ${adminStaff.Last_Name}`,
-              email: adminStaff.Email,
-              access_level: adminRecord.AccessLevel
-            };
-          }
+        const { User } = require('../../models');
+        let adminUser = null;
+        if (require('mongoose').Types.ObjectId.isValid(event.ApprovedByAdminID)) {
+          adminUser = await User.findById(event.ApprovedByAdminID);
+        } else {
+          adminUser = await User.findByLegacyId(event.ApprovedByAdminID);
+        }
+        if (adminUser && adminUser.isSystemAdmin) {
+          admin = {
+            id: adminUser._id.toString(),
+            name: adminUser.fullName || `${adminUser.firstName} ${adminUser.lastName}`,
+            email: adminUser.email,
+            access_level: adminUser.metadata?.accessLevel || 'super'
+          };
         }
       }
 
@@ -170,44 +169,192 @@ class EventDetailsService {
   }
 
   /**
+   * Get public event details by ID (approved events only)
+   * Returns limited information for public calendar
+   * @param {string} eventId 
+   * @returns {Object} Public event details
+   */
+  async getPublicEventDetails(eventId) {
+    try {
+      const event = await Event.findOne({ Event_ID: eventId });
+      if (!event) {
+        throw new Error('Event not found');
+      }
+
+      // Only return approved events for public viewing
+      if (event.Status !== 'approved' && event.Status !== 'Approved') {
+        throw new Error('Event not found');
+      }
+
+      // Get category-specific data
+      const category = await this.getEventCategory(event.Event_ID);
+      
+      // Get coordinator information (limited)
+      const coordinator = await this.getCoordinatorInfo(event.coordinator_id);
+
+      return {
+        success: true,
+        event: {
+          Event_ID: event.Event_ID,
+          Event_Title: event.Event_Title,
+          Event_Description: event.Event_Description || event.EventDescription || event.Description || '',
+          Location: event.Location,
+          Start_Date: event.Start_Date,
+          End_Date: event.End_Date,
+          Status: event.Status,
+          Email: event.Email,
+          Phone_Number: event.Phone_Number,
+          category: category.type,
+          categoryData: category.data,
+          coordinator: coordinator ? {
+            id: coordinator.id,
+            name: coordinator.name,
+            email: coordinator.email,
+            phone: coordinator.phone
+          } : null,
+          created_at: event.createdAt
+        }
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to get event details: ${error.message}`);
+    }
+  }
+
+  /**
    * Get event category type and data
    * @param {string} eventId 
    * @returns {Object} Category info
    */
-  async getEventCategory(eventId) {
+  async getEventCategory(eventId, eventCategory = null) {
     try {
-      const bloodDrive = await BloodDrive.findOne({ BloodDrive_ID: eventId });
+      // First try to find category-specific records
+      const [bloodDrive, advocacy, training] = await Promise.all([
+        BloodDrive.findOne({ BloodDrive_ID: eventId }).lean(),
+        Advocacy.findOne({ Advocacy_ID: eventId }).lean(),
+        Training.findOne({ Training_ID: eventId }).lean()
+      ]);
+
+
       if (bloodDrive) {
+        const categoryData = {
+          Target_Donation: bloodDrive.Target_Donation,
+          VenueType: bloodDrive.VenueType
+        };
+        
         return {
           type: 'BloodDrive',
-          data: {
-            Target_Donation: bloodDrive.Target_Donation,
-            VenueType: bloodDrive.VenueType
-          }
+          data: categoryData
         };
       }
 
-      const advocacy = await Advocacy.findOne({ Advocacy_ID: eventId });
       if (advocacy) {
+        const categoryData = {
+          Topic: advocacy.Topic,
+          TargetAudience: advocacy.TargetAudience,
+          ExpectedAudienceSize: advocacy.ExpectedAudienceSize,
+          PartnerOrganization: advocacy.PartnerOrganization
+        };
+        
         return {
           type: 'Advocacy',
-          data: {
-            Topic: advocacy.Topic,
-            TargetAudience: advocacy.TargetAudience,
-            ExpectedAudienceSize: advocacy.ExpectedAudienceSize,
-            PartnerOrganization: advocacy.PartnerOrganization
-          }
+          data: categoryData
         };
       }
 
-      const training = await Training.findOne({ Training_ID: eventId });
       if (training) {
+        const categoryData = {
+          TrainingType: training.TrainingType,
+          MaxParticipants: training.MaxParticipants
+        };
+        
         return {
           type: 'Training',
-          data: {
-            TrainingType: training.TrainingType,
-            MaxParticipants: training.MaxParticipants
+          data: categoryData
+        };
+      }
+
+      // If no category-specific record found, try to use Event's Category field as fallback
+      // But also try to fetch the category record one more time using the known category type
+      let categoryStr = null;
+      
+      if (eventCategory) {
+        categoryStr = String(eventCategory).trim();
+      } else {
+        // Last resort: fetch Event document to check Category field
+        try {
+          const { Event } = require('../../models');
+          const event = await Event.findOne({ Event_ID: eventId }).select('Category').lean();
+          if (event && event.Category) {
+            categoryStr = String(event.Category).trim();
           }
+        } catch (eventFetchError) {
+          // Ignore errors when fetching Event document
+        }
+      }
+
+      // If we have a category type but no record found, try alternative search methods
+      if (categoryStr && categoryStr !== 'Unknown') {
+        // Try to find the record with case-insensitive or partial matching as a last resort
+        let alternativeRecord = null;
+        try {
+          if (categoryStr === 'BloodDrive' || categoryStr.toLowerCase().includes('blood')) {
+            // Try case-insensitive search
+            alternativeRecord = await BloodDrive.findOne({ 
+              BloodDrive_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
+            }).lean();
+            
+          } else if (categoryStr === 'Advocacy' || categoryStr.toLowerCase().includes('advoc')) {
+            alternativeRecord = await Advocacy.findOne({ 
+              Advocacy_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
+            }).lean();
+          } else if (categoryStr === 'Training' || categoryStr.toLowerCase().includes('train')) {
+            alternativeRecord = await Training.findOne({ 
+              Training_ID: { $regex: new RegExp(`^${eventId}$`, 'i') } 
+            }).lean();
+          }
+          
+          if (alternativeRecord) {
+            // Extract data based on category type
+            if (categoryStr === 'BloodDrive' || categoryStr.toLowerCase().includes('blood')) {
+              return {
+                type: 'BloodDrive',
+                data: {
+                  Target_Donation: alternativeRecord.Target_Donation,
+                  VenueType: alternativeRecord.VenueType
+                }
+              };
+            } else if (categoryStr === 'Advocacy' || categoryStr.toLowerCase().includes('advoc')) {
+              return {
+                type: 'Advocacy',
+                data: {
+                  Topic: alternativeRecord.Topic,
+                  TargetAudience: alternativeRecord.TargetAudience,
+                  ExpectedAudienceSize: alternativeRecord.ExpectedAudienceSize,
+                  PartnerOrganization: alternativeRecord.PartnerOrganization
+                }
+              };
+            } else if (categoryStr === 'Training' || categoryStr.toLowerCase().includes('train')) {
+              return {
+                type: 'Training',
+                data: {
+                  TrainingType: alternativeRecord.TrainingType,
+                  MaxParticipants: alternativeRecord.MaxParticipants
+                }
+              };
+            }
+          }
+        } catch (altSearchError) {
+          console.error(`[getEventCategory] Error in alternative search:`, altSearchError);
+        }
+        
+        console.log(`[getEventCategory] This means the ${categoryStr} record with ${categoryStr}_ID="${eventId}" does not exist in the database.`);
+        console.log(`[getEventCategory] The category-specific record needs to be created for this event to display category data.`);
+        
+        // Return the category type with null data (record doesn't exist)
+        return {
+          type: categoryStr,
+          data: null
         };
       }
 
@@ -217,6 +364,7 @@ class EventDetailsService {
       };
 
     } catch (error) {
+      console.error('[getEventCategory] Error:', error);
       return {
         type: 'Unknown',
         data: null
@@ -225,36 +373,37 @@ class EventDetailsService {
   }
 
   /**
-   * Get coordinator information
+   * Get coordinator information using User model
    * @param {string} coordinatorId 
    * @returns {Object} Coordinator info
    */
   async getCoordinatorInfo(coordinatorId) {
     try {
-      const coordinator = await Coordinator.findOne({ Coordinator_ID: coordinatorId })
-        .populate('district', 'name') // Populate district name
-        .populate('province', 'name'); // Also populate province if needed
+      const { User } = require('../../models');
+      let user = null;
       
-      if (!coordinator) {
+      if (require('mongoose').Types.ObjectId.isValid(coordinatorId)) {
+        user = await User.findById(coordinatorId);
+      } else {
+        user = await User.findByLegacyId(coordinatorId);
+      }
+      
+      if (!user) {
         return null;
       }
 
-      const staff = await BloodbankStaff.findOne({ ID: coordinatorId });
-      if (!staff) {
-        return {
-          id: coordinatorId,
-          district: coordinator.district,
-          province: coordinator.province
-        };
-      }
+      // Get user locations
+      const locationService = require('../utility_services/location.service');
+      const locations = await locationService.getUserLocations(user._id);
 
       return {
-        id: coordinatorId,
-        district: coordinator.district,
-        province: coordinator.province,
-        name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
-        email: staff.Email,
-        phone: staff.Phone_Number
+        id: user._id.toString(),
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: user.fullName || `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        phone: user.phoneNumber,
+        locations: locations
       };
 
     } catch (error) {
@@ -264,7 +413,7 @@ class EventDetailsService {
   }
 
   /**
-   * Get stakeholder information
+   * Get stakeholder information using User model
    * @param {string} stakeholderId 
    * @returns {Object} Stakeholder info
    */
@@ -274,30 +423,31 @@ class EventDetailsService {
         return null;
       }
 
-      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: stakeholderId })
-        .populate('district', 'name')
-        .populate('province', 'name');
+      const { User } = require('../../models');
+      let user = null;
       
-      if (!stakeholder) {
+      if (require('mongoose').Types.ObjectId.isValid(stakeholderId)) {
+        user = await User.findById(stakeholderId);
+      } else {
+        user = await User.findByLegacyId(stakeholderId);
+      }
+      
+      if (!user) {
         return null;
       }
 
-      const staff = await BloodbankStaff.findOne({ ID: stakeholderId });
-      if (!staff) {
-        return {
-          id: stakeholderId,
-          district: stakeholder.district,
-          province: stakeholder.province
-        };
-      }
+      // Get user locations
+      const locationService = require('../utility_services/location.service');
+      const locations = await locationService.getUserLocations(user._id);
 
       return {
-        id: stakeholderId,
-        district: stakeholder.district,
-        province: stakeholder.province,
-        name: `${staff.First_Name} ${staff.Middle_Name || ''} ${staff.Last_Name}`.trim(),
-        email: staff.Email,
-        phone: staff.Phone_Number
+        id: user._id.toString(),
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: user.fullName || `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        phone: user.phoneNumber,
+        locations: locations
       };
 
     } catch (error) {
@@ -416,30 +566,57 @@ class EventDetailsService {
         return { success: true, events: [] };
       }
 
-      // Fetch minimal event fields for requested ids
+      // Fetch minimal event fields for requested ids with location population
       const events = await Event.find({ Event_ID: { $in: ids } })
-        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role stakeholder Email Phone_Number')
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .select('Event_ID Event_Title Start_Date End_Date Location Status coordinator_id stakeholder_id made_by_id made_by_role stakeholder province district municipality Email Phone_Number')
         .lean();
 
       // Collect unique coordinator and stakeholder ids to resolve names in batch
-      const coordinatorIds = Array.from(new Set(events.map(e => e.coordinator_id || (e.made_by_role !== 'Stakeholder' ? e.made_by_id : null)).filter(Boolean)));
-      const stakeholderIds = Array.from(new Set(events.map(e => e.stakeholder_id || e.stakeholder?.toString() || (e.made_by_role === 'Stakeholder' ? e.made_by_id : null)).filter(Boolean)));
+      // Get coordinator and stakeholder IDs from events (role-agnostic)
+      const coordinatorIds = Array.from(new Set(events.map(e => e.coordinator_id || e.coordinator?.toString()).filter(Boolean)));
+      const stakeholderIds = Array.from(new Set(events.map(e => e.stakeholder_id || e.stakeholder?.toString()).filter(Boolean)));
 
-      const [staffDocs, coordDocs, stakeholderDocs] = await Promise.all([
-        // staff records may use ID
-        coordinatorIds.length ? BloodbankStaff.find({ ID: { $in: coordinatorIds } }).select('ID First_Name Middle_Name Last_Name Email Phone_Number').lean() : Promise.resolve([]),
-        coordinatorIds.length ? Coordinator.find({ Coordinator_ID: { $in: coordinatorIds } }).populate('district', 'name code').lean() : Promise.resolve([]),
-        stakeholderIds.length ? Stakeholder.find({ Stakeholder_ID: { $in: stakeholderIds } }).select('Stakeholder_ID firstName lastName').populate('district', 'name code').lean() : Promise.resolve([])
-      ]);
-
-      const staffById = new Map();
-      for (const s of staffDocs) staffById.set(String(s.ID), s);
+      // Use User model instead of legacy models
+      const { User } = require('../../models');
+      const coordUsers = [];
+      const stakeholderUsers = [];
+      
+      // Fetch coordinator users
+      for (const coordId of coordinatorIds) {
+        let user = null;
+        if (require('mongoose').Types.ObjectId.isValid(coordId)) {
+          user = await User.findById(coordId).lean();
+        } else {
+          user = await User.findByLegacyId(coordId).lean();
+        }
+        if (user) coordUsers.push(user);
+      }
+      
+      // Fetch stakeholder users
+      for (const stakeId of stakeholderIds) {
+        let user = null;
+        if (require('mongoose').Types.ObjectId.isValid(stakeId)) {
+          user = await User.findById(stakeId).lean();
+        } else {
+          user = await User.findByLegacyId(stakeId).lean();
+        }
+        if (user) stakeholderUsers.push(user);
+      }
 
       const coordById = new Map();
-      for (const c of coordDocs) coordById.set(String(c.Coordinator_ID), c);
+      for (const u of coordUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        coordById.set(String(id), u);
+      }
 
       const stakeholderById = new Map();
-      for (const st of stakeholderDocs) stakeholderById.set(String(st.Stakeholder_ID), st);
+      for (const u of stakeholderUsers) {
+        const id = u._id ? u._id.toString() : (u.userId || u.id);
+        stakeholderById.set(String(id), u);
+      }
 
       // Fetch categories in parallel to include category/type and categoryData
       const categories = await Promise.all(events.map(ev => this.getEventCategory(ev.Event_ID)));
@@ -448,21 +625,27 @@ class EventDetailsService {
         let coordId = e.coordinator_id;
         let stakeholderId = e.stakeholder_id || e.stakeholder?.toString();
         if (!coordId && !stakeholderId) {
-          if (e.made_by_role === 'Stakeholder') {
+          // Check if event has stakeholder (role-agnostic check)
+          if (e.stakeholder_id || e.stakeholder) {
             stakeholderId = e.made_by_id;
           } else {
             coordId = e.made_by_id;
           }
         }
-        const staff = coordId ? staffById.get(String(coordId)) : null;
         const coord = coordId ? coordById.get(String(coordId)) : null;
         const stakeholder = stakeholderId ? stakeholderById.get(String(stakeholderId)) : null;
 
-        const coordinatorName = staff
-          ? `${staff.First_Name || ''} ${staff.Middle_Name || ''} ${staff.Last_Name || ''}`.trim()
-          : (coord ? (coord.Name || coord.Coordinator_Name || null) : null);
+        // Resolve coordinator name from User model (coordById is already populated)
+        const coordinatorName = coord 
+          ? (coord.fullName || `${coord.firstName || ''} ${coord.lastName || ''}`.trim() || coord.Name || coord.Coordinator_Name || null)
+          : null;
 
         const category = categories[idx] || { type: 'Unknown', data: null };
+
+        // Extract location names from populated refs
+        const provinceName = e.province?.name || (typeof e.province === 'object' && e.province?.name) || null;
+        const districtName = e.district?.name || (typeof e.district === 'object' && e.district?.name) || null;
+        const municipalityName = e.municipality?.name || (typeof e.municipality === 'object' && e.municipality?.name) || null;
 
         return {
           Event_ID: e.Event_ID,
@@ -473,6 +656,9 @@ class EventDetailsService {
           Status: e.Status,
           MadeByCoordinatorID: coordId,
           MadeByStakeholderID: stakeholderId,
+          province: provinceName,
+          district: districtName,
+          municipality: municipalityName,
           coordinator: {
             id: coordId || null,
             name: coordinatorName || null,
@@ -480,9 +666,9 @@ class EventDetailsService {
             district_name: coord ? (coord.District_Name || null) : null
           },
           stakeholder: stakeholder ? ({
-            id: stakeholder.Stakeholder_ID || stakeholder._id,
-            name: `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim(),
-            district_number: stakeholder.district?.code || this.extractDistrictNumber(stakeholder.district?.name) || null
+            id: stakeholder._id ? stakeholder._id.toString() : (stakeholder.userId || stakeholder.id),
+            name: stakeholder.fullName || `${stakeholder.firstName || ''} ${stakeholder.lastName || ''}`.trim(),
+            district_number: null // District info would need to come from UserLocation if needed
           }) : null,
           category: category.type,
           categoryData: category.data || null,

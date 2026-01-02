@@ -7,6 +7,9 @@ const {
   eventStatisticsController
 } = require('../controller/events_controller');
 
+const authenticate = require('../middleware/authenticate');
+const { requirePermission } = require('../middleware/requirePermission');
+
 // Public events (calendar) - intentionally public so calendar can read approved events
 router.get('/public/events', async (req, res, next) => {
   try {
@@ -15,14 +18,54 @@ router.get('/public/events', async (req, res, next) => {
     next(error);
   }
 });
+
+/**
+ * @route   GET /api/public/events/:eventId
+ * @desc    Get public event details by ID (approved events only, no authentication required)
+ * @access  Public (returns only approved events)
+ */
+router.get('/public/events/:eventId', async (req, res, next) => {
+  try {
+    await eventDetailsController.getPublicEventDetails(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/events/all
+ * @desc    Get all approved events for calendar consumption (with populated location names and category data)
+ * @access  Public (returns only approved events)
+ */
+router.get('/events/all', async (req, res, next) => {
+  try {
+    await eventOverviewController.getAllEventsForCalendar(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/me/events
+ * @desc    Get events for logged-in user based on role (SysAdmin: all, Coordinator: own+coverage+org, Stakeholder: own only)
+ * @access  Private (requires authentication)
+ */
+router.get('/me/events', authenticate, async (req, res, next) => {
+  try {
+    await eventOverviewController.getUserEvents(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ==================== CALENDAR ROUTES ====================
 
 /**
  * @route   GET /api/calendar/month
- * @desc    Get month view - all events in a month
+ * @desc    Get month view - all events in a month (requires event.read permission)
  * @access  Private
  */
-router.get('/calendar/month', async (req, res, next) => {
+router.get('/calendar/month', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getMonthView(req, res);
   } catch (error) {
@@ -32,10 +75,10 @@ router.get('/calendar/month', async (req, res, next) => {
 
 /**
  * @route   GET /api/calendar/week
- * @desc    Get week view - all events in a week
+ * @desc    Get week view - all events in a week (requires event.read permission)
  * @access  Private
  */
-router.get('/calendar/week', async (req, res, next) => {
+router.get('/calendar/week', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getWeekView(req, res);
   } catch (error) {
@@ -45,10 +88,10 @@ router.get('/calendar/week', async (req, res, next) => {
 
 /**
  * @route   GET /api/calendar/day
- * @desc    Get day view - all events on a specific day
+ * @desc    Get day view - all events on a specific day (requires event.read permission)
  * @access  Private
  */
-router.get('/calendar/day', async (req, res, next) => {
+router.get('/calendar/day', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getDayView(req, res);
   } catch (error) {
@@ -86,10 +129,10 @@ router.get('/calendar/upcoming', async (req, res, next) => {
 
 /**
  * @route   GET /api/events/:eventId
- * @desc    Get complete event details by ID
+ * @desc    Get complete event details by ID (requires event.read permission)
  * @access  Private
  */
-router.get('/events/:eventId', async (req, res, next) => {
+router.get('/events/:eventId', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await eventDetailsController.getEventDetails(req, res);
   } catch (error) {
@@ -166,10 +209,10 @@ router.get('/events/:eventId/completeness', async (req, res, next) => {
 
 /**
  * @route   GET /api/events
- * @desc    Get all events with filtering, sorting, and pagination
+ * @desc    Get all events with filtering, sorting, and pagination (requires event.read permission)
  * @access  Private
  */
-router.get('/events', async (req, res, next) => {
+router.get('/events', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await eventOverviewController.getAllEvents(req, res);
   } catch (error) {
@@ -233,10 +276,10 @@ router.get('/events/search', async (req, res, next) => {
 
 /**
  * @route   GET /api/events/statistics
- * @desc    Get comprehensive event statistics
+ * @desc    Get comprehensive event statistics (requires event.read permission)
  * @access  Private
  */
-router.get('/events/statistics', async (req, res, next) => {
+router.get('/events/statistics', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await eventStatisticsController.getEventStatistics(req, res);
   } catch (error) {
@@ -330,6 +373,43 @@ router.get('/events/statistics/timeline', async (req, res, next) => {
 router.get('/events/statistics/dashboard', async (req, res, next) => {
   try {
     await eventStatisticsController.getDashboardStatistics(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== PHASE 2: UNIFIED EVENT ENDPOINTS ====================
+
+/**
+ * @route   POST /api/events
+ * @desc    UNIFIED event creation endpoint (decoupled from request workflow)
+ * @desc    Direct event creation for admin/coordinator; authority-based field locking
+ * @access  Private (requires event.initiate permission)
+ * @body    { title, location, startDate, endDate?, category, coordinatorId?, stakeholderId? }
+ * @note    Non-admins: coordinatorId forced to req.user.id, stakeholder scoped to jurisdiction
+ */
+router.post('/events', authenticate, requirePermission('event', 'initiate'), async (req, res, next) => {
+  try {
+    // Import controller here to avoid circular dependency
+    const { eventRequestController } = require('../controller/request_controller');
+    await eventRequestController.createEvent(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/events/:eventId/publish
+ * @desc    Publish/complete an event that has been approved
+ * @desc    Sets event Status to 'Completed' and linked request to 'APPROVED'
+ * @access  Private (requires event.publish OR request.approve permission)
+ * @body    {} (no body required)
+ */
+router.post('/events/:eventId/publish', authenticate, requirePermission('event', 'publish'), async (req, res, next) => {
+  try {
+    // Import controller here to avoid circular dependency
+    const { eventRequestController } = require('../controller/request_controller');
+    await eventRequestController.publishEvent(req, res);
   } catch (error) {
     next(error);
   }

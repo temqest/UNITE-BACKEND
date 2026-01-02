@@ -1,0 +1,282 @@
+Angas, Basud
+Bactas, Basud
+Binatagan, Basud
+Caayunan, Basud
+Guinatungan, Basud
+Hinampacan, Basud
+Langa, Basud
+Laniton, Basud
+Lidong, Basud
+Mampili, Basud
+Mandazo, Basud
+Mangcamagong, Basud
+Manmuntay, Basud
+Mantugawe, Basud
+Matnog, Basud
+Mocong, Basud
+Oliva, Basud
+Pagsangahan, Basud
+Pinagwarasan, Basud
+Plaridel, Basud
+Poblacion 1, Basud
+Poblacion 2, Basud
+San Felipe, Basud
+San Jose, Basud
+San Pascual, Basud
+Taba-taba, Basud
+Tacad, Basud
+Taisan, Basud
+Tuaca, Basud
+Alayao, Capalonga
+Binawangan, Capalonga
+Calabaca, Capalonga
+Camagsaan, Capalonga
+Catabaguangan, Capalonga
+Catioan, Capalonga
+Del Pilar, Capalonga
+Itok, Capalonga
+Lucbanan, Capalonga
+Mabini, Capalonga
+Mactang, Capalonga
+Magsaysay, Capalonga
+Mataque, Capalonga
+Old Camp, Capalonga
+Poblacion, Capalonga
+San Antonio, Capalonga
+San Isidro, Capalonga
+San Roque, Capalonga
+Tanawan, Capalonga
+Ubang, Capalonga
+Villa Aurora, Capalonga
+Villa Belen, Capalonga
+Alawihao, Daet
+Awitan, Daet
+Bagasbas, Daet
+Barangay I, Daet
+Barangay II, Daet
+Barangay III, Daet
+Barangay IV, Daet
+Barangay V, Daet
+Barangay VI, Daet
+Barangay VII, Daet
+Barangay VIII, Daet
+Bibirao, Daet
+Borabod, Daet
+Calasgasan, Daet
+Camambugan, Daet
+Cobangbang, Daet
+Dogongan, Daet
+Gahonon, Daet
+Gubat, Daet
+Lag-on, Daet
+Magang, Daet
+Mambalite, Daet
+Mancruz, Daet
+Pamorangon, Daet
+San Isidro, Daet
+Bagong Bayan, Jose Panganiban
+Calero, Jose Panganiban
+Dahican, Jose Panganiban
+Dayhagan, Jose Panganiban
+Larap, Jose Panganiban
+Luklukan Norte, Jose Panganiban
+Luklukan Sur, Jose Panganiban
+Motherlode, Jose Panganiban
+Nakalaya, Jose Panganiban
+North Poblacion, Jose Panganiban
+Osmeña, Jose Panganiban
+Pag-asa, Jose Panganiban
+Parang, Jose Panganiban
+Plaridel, Jose Panganiban
+Salvacion, Jose Panganiban
+San Isidro, Jose Panganiban
+San Jose, Jose Panganiban
+San Martin, Jose Panganiban
+San Pedro, Jose Panganiban
+San Rafael, Jose Panganiban
+Santa Cruz, Jose Panganiban
+Santa Elena, Jose Panganiban
+Santa Milagrosa, Jose Panganiban
+Santa Rosa Norte, Jose Panganiban
+Santa Rosa Sur, Jose Panganiban
+South Poblacion, Jose Panganiban
+Tamisan, Jose Panganiban
+Anahaw, Labo
+Anameam, Labo
+Awitan, Labo
+Baay, Labo
+Bagacay, Labo
+Bagong Silang I, Labo
+Bagong Silang II, Labo
+Bagong Silang III, Labo
+Bakiad, Labo
+Bautista, Labo
+Bayabas, Labo
+Bayan-bayan, Labo
+Benit, Labo
+Bulhao, Labo
+Cabatuhan, Labo
+Cabusay, Labo
+Calabasa, Labo
+Canapawan, Labo
+Daguit, Labo
+Dalas, Labo
+Dumagmang, Labo
+Exciban, Labo
+Fundado, Labo
+Guinacutan, Labo
+Guisican, Labo
+Gumamela, Labo
+Iberica, Labo
+Kalamunding, Labo
+Lugui, Labo
+Mabilo I, Labo
+Mabilo II, Labo
+Macogon, Labo
+Mahawan-hawan, Labo
+Malangcao-Basud, Labo
+Malasugui, Labo
+Malatap, Labo
+Malaya, Labo
+Malibago, Labo
+Maot, Labo
+Masalong, Labo
+Matanlang, Labo
+Napaod, Labo
+Pag-asa, Labo
+Pangpang, Labo
+Pinya, Labo
+San Antonio, Labo
+San Francisco, Labo
+Santa Cruz, Labo
+Submakin, Labo
+Talobatib, Labo
+Tigbinan, Labo
+Tulay na Lupa, Labo
+Apuao, Mercedes
+Barangay I, Mercedes
+Barangay II, Mercedes
+Barangay III, Mercedes
+Barangay IV, Mercedes
+Barangay V, Mercedes
+Barangay VI, Mercedes
+Barangay VII, Mercedes
+Caringo, Mercedes
+Catandunganon, Mercedes
+Cayucyucan, Mercedes
+Colasi, Mercedes
+Del Rosario, Mercedes
+Gaboc, Mercedes
+Hamoraon, Mercedes
+Hinipaan, Mercedes
+Lalawigan, Mercedes
+Lanot, Mercedes
+Mambungalon, Mercedes
+Manguisoc, Mercedes
+Masalongsalong, Mercedes
+Matoogtoog, Mercedes
+Pambuhan, Mercedes
+Quinapaguian, Mercedes
+San Roque, Mercedes
+Tarum, Mercedes
+Awitan, Paracale
+Bagumbayan, Paracale
+Bakal, Paracale
+Batobalani, Paracale
+Calaburnay, Paracale
+Capacuan, Paracale
+Casalugan, Paracale
+Dagang, Paracale
+Dalnac, Paracale
+Dancalan, Paracale
+Gumaus, Paracale
+Labnig, Paracale
+Macolabo Island, Paracale
+Malacbang, Paracale
+Malaguit, Paracale
+Mampungo, Paracale
+Mangkasay, Paracale
+Maybato, Paracale
+Palanas, Paracale
+Pinagbirayan Malaki, Paracale
+Pinagbirayan Munti, Paracale
+Poblacion Norte, Paracale
+Poblacion Sur, Paracale
+Tabas, Paracale
+Talusan, Paracale
+Tawig, Paracale
+Tugos, Paracale
+Daculang Bolo, San Lorenzo Ruiz
+Dagotdotan, San Lorenzo Ruiz
+Langga, San Lorenzo Ruiz
+Laniton, San Lorenzo Ruiz
+Maisog, San Lorenzo Ruiz
+Mampurog, San Lorenzo Ruiz
+Manlimonsito, San Lorenzo Ruiz
+Matacong, San Lorenzo Ruiz
+Salvacion, San Lorenzo Ruiz
+San Antonio, San Lorenzo Ruiz
+San Isidro, San Lorenzo Ruiz
+San Ramon, San Lorenzo Ruiz
+Asdum, San Vicente
+Cabanbanan, San Vicente
+Calabagas, San Vicente
+Fabrica, San Vicente
+Iraya Sur, San Vicente
+Man-ogob, San Vicente
+Poblacion District I, San Vicente
+Poblacion District II, San Vicente
+San Jose, San Vicente
+Basiad, Santa Elena
+Bulala, Santa Elena
+Don Tomas, Santa Elena
+Guitol, Santa Elena
+Kabuluan, Santa Elena
+Kagtalaba, Santa Elena
+Maulawin, Santa Elena
+Patag Ibaba, Santa Elena
+Patag Iraya, Santa Elena
+Plaridel, Santa Elena
+Polungguitguit, Santa Elena
+Rizal, Santa Elena
+Salvacion, Santa Elena
+San Lorenzo, Santa Elena
+San Pedro, Santa Elena
+San Vicente, Santa Elena
+Santa Elena, Santa Elena
+Tabugon, Santa Elena
+Villa San Isidro, Santa Elena
+Binanuaan, Talisay
+Caawigan, Talisay
+Cahabaan, Talisay
+Calintaan, Talisay
+Del Carmen, Talisay
+Gabon, Talisay
+Itomang, Talisay
+Poblacion, Talisay
+San Francisco, Talisay
+San Isidro, Talisay
+San Jose, Talisay
+San Nicolas, Talisay
+Santa Cruz, Talisay
+Santa Elena, Talisay
+Santo Niño, Talisay
+Aguit-it, Vinzons
+Banocboc, Vinzons
+Barangay I, Vinzons
+Barangay II, Vinzons
+Barangay III, Vinzons
+Cagbalogo, Vinzons
+Calangcawan Norte, Vinzons
+Calangcawan Sur, Vinzons
+Guinacutan, Vinzons
+Mangcawayan, Vinzons
+Mangcayo, Vinzons
+Manlucugan, Vinzons
+Matango, Vinzons
+Napilihan, Vinzons
+Pinagtigasan, Vinzons
+Sabang, Vinzons
+Santo Domingo, Vinzons
+Singi, Vinzons
+Sula, Vinzons

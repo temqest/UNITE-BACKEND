@@ -56,8 +56,12 @@ class CalendarService {
         // We'll filter by category after fetching
       }
 
-      // Get events
-      const events = await Event.find(query).sort({ Start_Date: 1 });
+      // Get events with location population
+      const events = await Event.find(query)
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .sort({ Start_Date: 1 });
 
       // Enrich events with category and color
       const enrichedEvents = await Promise.all(
@@ -101,17 +105,26 @@ class CalendarService {
             stakeholderInfo = null;
           }
 
+          // Extract location names from populated refs
+          const provinceName = event.province?.name || (typeof event.province === 'object' && event.province?.name) || null;
+          const districtName = event.district?.name || (typeof event.district === 'object' && event.district?.name) || null;
+          const municipalityName = event.municipality?.name || (typeof event.municipality === 'object' && event.municipality?.name) || null;
+
           return {
             Event_ID: event.Event_ID,
             Event_Title: event.Event_Title,
             Location: event.Location,
             Start_Date: event.Start_Date,
+            End_Date: event.End_Date || null,
             Status: event.Status,
             category: category.type,
             categoryData: category.data || null,
             color: this.getCategoryColor(category.type),
-            coordinator: coordinator
-            , stakeholder: stakeholderInfo
+            province: provinceName,
+            district: districtName,
+            municipality: municipalityName,
+            coordinator: coordinator,
+            stakeholder: stakeholderInfo
           };
         })
       );
@@ -185,7 +198,11 @@ class CalendarService {
         query.MadeByCoordinatorID = filters.coordinator_id;
       }
 
-      const events = await Event.find(query).sort({ Start_Date: 1 });
+      const events = await Event.find(query)
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .sort({ Start_Date: 1 });
 
         const enrichedEvents = await Promise.all(
           events.map(async (event) => {
@@ -214,15 +231,24 @@ class CalendarService {
               coordinator = null;
             }
 
+            // Extract location names from populated refs
+            const provinceName = event.province?.name || (typeof event.province === 'object' && event.province?.name) || null;
+            const districtName = event.district?.name || (typeof event.district === 'object' && event.district?.name) || null;
+            const municipalityName = event.municipality?.name || (typeof event.municipality === 'object' && event.municipality?.name) || null;
+
             return {
               Event_ID: event.Event_ID,
               Event_Title: event.Event_Title,
               Location: event.Location,
               Start_Date: event.Start_Date,
+              End_Date: event.End_Date || null,
               Status: event.Status,
               category: category.type,
               categoryData: category.data || null,
               color: this.getCategoryColor(category.type),
+              province: provinceName,
+              district: districtName,
+              municipality: municipalityName,
               coordinator: coordinator
             };
           })
@@ -286,7 +312,11 @@ class CalendarService {
         query.MadeByCoordinatorID = filters.coordinator_id;
       }
 
-      const events = await Event.find(query).sort({ Start_Date: 1 });
+      const events = await Event.find(query)
+        .populate('province', 'name code')
+        .populate('district', 'name code province')
+        .populate('municipality', 'name code district province')
+        .sort({ Start_Date: 1 });
 
       const enrichedEvents = await Promise.all(
         events.map(async (event) => {
@@ -294,14 +324,23 @@ class CalendarService {
           const coordinator = await Coordinator.findOne({ Coordinator_ID: event.MadeByCoordinatorID });
           const staff = coordinator ? await BloodbankStaff.findOne({ ID: event.MadeByCoordinatorID }) : null;
           
+          // Extract location names from populated refs
+          const provinceName = event.province?.name || (typeof event.province === 'object' && event.province?.name) || null;
+          const districtName = event.district?.name || (typeof event.district === 'object' && event.district?.name) || null;
+          const municipalityName = event.municipality?.name || (typeof event.municipality === 'object' && event.municipality?.name) || null;
+
           return {
             Event_ID: event.Event_ID,
             Event_Title: event.Event_Title,
             Location: event.Location,
             Start_Date: event.Start_Date,
+            End_Date: event.End_Date || null,
             Status: event.Status,
             category: category.type,
             color: this.getCategoryColor(category.type),
+            province: provinceName,
+            district: districtName,
+            municipality: municipalityName,
             coordinator: staff ? {
               id: event.MadeByCoordinatorID,
               name: `${staff.First_Name} ${staff.Last_Name}`

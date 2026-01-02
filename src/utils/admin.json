@@ -1,0 +1,19 @@
+{
+  "user": {
+    "firstName": "Admin",
+    "middleName": "",
+    "lastName": "User",
+    "email": "admin@example.com",
+    "phoneNumber": "+63 9123456789",
+    "password": "SecureAdmin123!@#"
+  },
+  "admin": {
+    "isSystemAdmin": true,
+    "accessLevel": "super",
+    "metadata": {
+      "notes": "Main admin account with full system access"
+    }
+  },
+  "roles": ["system-admin"],
+  "locations": []
+}

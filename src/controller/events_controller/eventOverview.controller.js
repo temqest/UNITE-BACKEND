@@ -215,6 +215,68 @@ class EventOverviewController {
       });
     }
   }
+
+  /**
+   * Get all approved events for calendar consumption
+   * GET /api/events/all
+   */
+  async getAllEventsForCalendar(req, res) {
+    try {
+      const filters = {
+        date_from: req.query.date_from,
+        date_to: req.query.date_to
+      };
+
+      // Remove undefined filters
+      Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+
+      const result = await eventOverviewService.getAllEventsForCalendar(filters);
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to retrieve events for calendar'
+      });
+    }
+  }
+
+  /**
+   * Get events for logged-in user based on role
+   * GET /api/me/events
+   */
+  async getUserEvents(req, res) {
+    try {
+      // Get user ID from request (should be set by authentication middleware)
+      const userId = req.user?.id || req.user?._id || req.user?.userId;
+      
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: 'Authentication required'
+        });
+      }
+
+      const filters = {
+        date_from: req.query.date_from,
+        date_to: req.query.date_to
+      };
+
+      // Remove undefined filters
+      Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+
+      const result = await eventOverviewService.getUserEventsForCalendar(userId, filters);
+
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error('[getUserEvents] Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to retrieve user events for calendar',
+        error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  }
 }
 
 module.exports = new EventOverviewController();

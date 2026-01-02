@@ -28,6 +28,28 @@ class EventDetailsController {
   }
 
   /**
+   * Get public event details by ID (approved events only)
+   * GET /api/public/events/:eventId
+   */
+  async getPublicEventDetails(req, res) {
+    try {
+      const { eventId } = req.params;
+      
+      const result = await eventDetailsService.getPublicEventDetails(eventId);
+
+      return res.status(200).json({
+        success: result.success,
+        data: result.event
+      });
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: error.message || 'Event not found'
+      });
+    }
+  }
+
+  /**
    * Get event category type and data
    * GET /api/events/:eventId/category
    */

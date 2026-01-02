@@ -1,0 +1,550 @@
+Ambolong, Aroroy
+Amoroy, Aroroy
+Amotag, Aroroy
+Bagauma, Aroroy
+Balawing, Aroroy
+Balete, Aroroy
+Bangon, Aroroy
+Cabangcalan, Aroroy
+Cabas-an, Aroroy
+Calanay, Aroroy
+Capsay, Aroroy
+Concepcion, Aroroy
+Dayhagan, Aroroy
+Don Pablo Dela Rosa, Aroroy
+Gumahang, Aroroy
+Jaboyoan, Aroroy
+Lanang, Aroroy
+Luy-a, Aroroy
+Macabug, Aroroy
+Malubi, Aroroy
+Managanaga, Aroroy
+Manamoc, Aroroy
+Mariposa, Aroroy
+Mataba, Aroroy
+Matalangtalang, Aroroy
+Matongog, Aroroy
+Nabongsoran, Aroroy
+Pangle, Aroroy
+Panique, Aroroy
+Pinanaan, Aroroy
+Poblacion, Aroroy
+Puro, Aroroy
+San Agustin, Aroroy
+San Isidro, Aroroy
+Sawang, Aroroy
+Syndicate, Aroroy
+Talabaan, Aroroy
+Talib, Aroroy
+Tigbao, Aroroy
+Tinago, Aroroy
+Tinigban, Aroroy
+Baao, Baleno
+Banase, Baleno
+Batuila, Baleno
+Cagara, Baleno
+Cagpandan, Baleno
+Cancahorao, Baleno
+Canjunday, Baleno
+Docol, Baleno
+Eastern Capsay, Baleno
+Gabi, Baleno
+Gangao, Baleno
+Lagta, Baleno
+Lahong Interior, Baleno
+Lahong Proper, Baleno
+Lipata, Baleno
+Madangcalan, Baleno
+Magdalena, Baleno
+Manoboc, Baleno
+Obongon Diot, Baleno
+Poblacion, Baleno
+Polot, Baleno
+Potoson, Baleno
+Sog-ong, Baleno
+Tinapian, Baleno
+Baybay, Balud
+Bongcanaway, Balud
+Calumpang, Balud
+Cantil, Balud
+Casamongan, Balud
+Danao, Balud
+Dao, Balud
+Guinbanwahan, Balud
+Ilaya, Balud
+Jangan, Balud
+Jintotolo, Balud
+Mabuhay, Balud
+Mapili, Balud
+Mapitogo, Balud
+Pajo, Balud
+Palane, Balud
+Panguiranan, Balud
+Panubigan, Balud
+Poblacion, Balud
+Pulanduta, Balud
+Quinayangan Diotay, Balud
+Quinayangan Tonga, Balud
+Salvacion, Balud
+Sampad, Balud
+San Andres, Balud
+San Antonio, Balud
+Sapatos, Balud
+Talisay, Balud
+Tonga, Balud
+Ubo, Balud
+Victory, Balud
+Villa Alvarez, Balud
+Burgos, Batuan
+Cambañez, Batuan
+Canares, Batuan
+Costa Rica, Batuan
+Danao, Batuan
+Gibraltar, Batuan
+Mabuhay, Batuan
+Matabao, Batuan
+Nasandig, Batuan
+Panisihan, Batuan
+Poblacion, Batuan
+Rizal, Batuan
+Royroy, Batuan
+Sawang, Batuan
+Abaca, Cataingan
+Aguada, Cataingan
+Badiang, Cataingan
+Bagumbayan, Cataingan
+Cadulawan, Cataingan
+Cagbatang, Cataingan
+Chimenea, Cataingan
+Concepcion, Cataingan
+Curvada, Cataingan
+Divisoria, Cataingan
+Domorog, Cataingan
+Estampar, Cataingan
+Gahit, Cataingan
+Libtong, Cataingan
+Liong, Cataingan
+Maanahao, Cataingan
+Madamba, Cataingan
+Malobago, Cataingan
+Matayum, Cataingan
+Matubinao, Cataingan
+Mintac, Cataingan
+Nadawisan, Cataingan
+Osmeña, Cataingan
+Pawican, Cataingan
+Pitogo, Cataingan
+Poblacion, Cataingan
+Quezon, Cataingan
+San Isidro, Cataingan
+San Jose, Cataingan
+San Pedro, Cataingan
+San Rafael, Cataingan
+Santa Teresita, Cataingan
+Santo Niño, Cataingan
+Tagboan, Cataingan
+Tuybo, Cataingan
+Villa Pogado, Cataingan
+Begia, Cawayan
+Cabayugan, Cawayan
+Cabungahan, Cawayan
+Calapayan, Cawayan
+Calumpang, Cawayan
+Chico Island, Cawayan
+Dalipe, Cawayan
+Divisoria, Cawayan
+Gilotongan, Cawayan
+Guiom, Cawayan
+Iraya, Cawayan
+Itombato, Cawayan
+Lague-lague, Cawayan
+Libertad, Cawayan
+Looc, Cawayan
+Mactan, Cawayan
+Madbad, Cawayan
+Mahayahay, Cawayan
+Maihao, Cawayan
+Malbug, Cawayan
+Naro, Cawayan
+Palobandera, Cawayan
+Pananawan, Cawayan
+Peña Island, Cawayan
+Pin-as, Cawayan
+Poblacion, Cawayan
+Pulot, Cawayan
+Punta Batsan, Cawayan
+R. M. Magbalon, Cawayan
+Recodo, Cawayan
+San Jose, Cawayan
+San Vicente, Cawayan
+Taberna, Cawayan
+Talisay, Cawayan
+Tubog, Cawayan
+Tuburan, Cawayan
+Villahermosa, Cawayan
+Albasan, Claveria
+Boca Engaño, Claveria
+Buyo, Claveria
+Calpi, Claveria
+Canomay, Claveria
+Cawayan, Claveria
+Imelda, Claveria
+Mababang Baybay, Claveria
+Mabiton, Claveria
+Manapao, Claveria
+Nabasagan, Claveria
+Nonoc, Claveria
+Osmeña, Claveria
+Pasig, Claveria
+Peñafrancia, Claveria
+Poblacion District I, Claveria
+Poblacion District II, Claveria
+Quezon, Claveria
+San Isidro, Claveria
+San Ramon, Claveria
+San Vicente, Claveria
+Taguilid, Claveria
+Balantay, Dimasalang
+Balocawe, Dimasalang
+Banahao, Dimasalang
+Buenaflor, Dimasalang
+Buracan, Dimasalang
+Cabanoyoan, Dimasalang
+Cabrera, Dimasalang
+Cadulan, Dimasalang
+Calabad, Dimasalang
+Canomay, Dimasalang
+Divisoria, Dimasalang
+Gaid, Dimasalang
+Gregorio Alino, Dimasalang
+Magcaraguit, Dimasalang
+Mambog, Dimasalang
+Poblacion, Dimasalang
+Rizal, Dimasalang
+San Vicente, Dimasalang
+Suba, Dimasalang
+T. R. Yangco, Dimasalang
+Agoho, Esperanza
+Almero, Esperanza
+Baras, Esperanza
+Domorog, Esperanza
+Guadalupe, Esperanza
+Iligan, Esperanza
+Labangtaytay, Esperanza
+Labrador, Esperanza
+Libertad, Esperanza
+Magsaysay, Esperanza
+Masbaranon, Esperanza
+Poblacion, Esperanza
+Potingbato, Esperanza
+Rizal, Esperanza
+San Roque, Esperanza
+Santiago, Esperanza
+Sorosimbajan, Esperanza
+Tawad, Esperanza
+Tunga, Esperanza
+Villa, Esperanza
+Alas, Mandaon
+Ayat, Mandaon
+Bat-ongan, Mandaon
+Bugtong, Mandaon
+Buri, Mandaon
+Cabitan, Mandaon
+Cagmasoso, Mandaon
+Canomoy, Mandaon
+Centro, Mandaon
+Dayao, Mandaon
+Guincaiptan, Mandaon
+Laguinbanwa, Mandaon
+Lantangan, Mandaon
+Looc, Mandaon
+Mabatobato, Mandaon
+Maolingon, Mandaon
+Nailaban, Mandaon
+Nanipsan, Mandaon
+Pinamangcaan, Mandaon
+Poblacion, Mandaon
+Polo Dacu, Mandaon
+San Juan, Mandaon
+San Pablo, Mandaon
+Santa Fe, Mandaon
+Tagpu, Mandaon
+Tumalaytay, Mandaon
+Anas, Masbate City
+Asid, Masbate City
+B. Titong, Masbate City
+Bagumbayan, Masbate City
+Bantigue, Masbate City
+Bapor, Masbate City
+Batuhan, Masbate City
+Bayombon, Masbate City
+Biyong, Masbate City
+Bolo, Masbate City
+Cagay, Masbate City
+Cawayan Exterior, Masbate City
+Cawayan Interior, Masbate City
+Centro, Masbate City
+Espinosa, Masbate City
+F. Magallanes, Masbate City
+Ibingay, Masbate City
+Igang, Masbate City
+Kalipay, Masbate City
+Kinamaligan, Masbate City
+Malinta, Masbate City
+Mapiña, Masbate City
+Mayngaran, Masbate City
+Nursery, Masbate City
+Pating, Masbate City
+Pawa, Masbate City
+Sinalongan, Masbate City
+Tugbo, Masbate City
+Ubongan Dacu, Masbate City
+Usab, Masbate City
+Bacolod, Milagros
+Bangad, Milagros
+Bara, Milagros
+Bonbon, Milagros
+Calasuche, Milagros
+Calumpang, Milagros
+Capaculan, Milagros
+Cayabon, Milagros
+Guinluthangan, Milagros
+Jamorawon, Milagros
+Magsalangi, Milagros
+Matagbac, Milagros
+Matanglad, Milagros
+Matiporon, Milagros
+Moises R. Espinosa, Milagros
+Narangasan, Milagros
+Pamangpangon, Milagros
+Paraiso, Milagros
+Poblacion East, Milagros
+Poblacion West, Milagros
+San Antonio, Milagros
+San Carlos, Milagros
+Sawmill, Milagros
+Tagbon, Milagros
+Tawad, Milagros
+Tigbao, Milagros
+Tinaclipan, Milagros
+Baang, Mobo
+Bagacay, Mobo
+Balatucan, Mobo
+Barag, Mobo
+Dacu, Mobo
+Fabrica, Mobo
+Guintorelan, Mobo
+Holjogon, Mobo
+Lalaguna, Mobo
+Lomocloc, Mobo
+Luyong Catungan, Mobo
+Mabuhay, Mobo
+Mandali, Mobo
+Mapuyo, Mobo
+Marintoc, Mobo
+Nasunduan, Mobo
+Pinamalatican, Mobo
+Pinamarbuhan, Mobo
+Poblacion Dist. I, Mobo
+Poblacion Dist. II, Mobo
+Polot, Mobo
+Sambulawan, Mobo
+Santa Maria, Mobo
+Sawmill, Mobo
+Tabuc, Mobo
+Tugawe, Mobo
+Tugbo, Mobo
+Umabay Exterior, Mobo
+Umabay Interior, Mobo
+Cantorna, Monreal
+Famosa, Monreal
+Guinhadap, Monreal
+Macarthur, Monreal
+Maglambong, Monreal
+Morocborocan, Monreal
+Poblacion, Monreal
+Real, Monreal
+Rizal, Monreal
+Santo Niño, Monreal
+Togoron, Monreal
+Antipolo, Palanas
+Banco, Palanas
+Biga-a, Palanas
+Bontod, Palanas
+Buenasuerte, Palanas
+Intusan, Palanas
+Jose A. Abenir Sr., Palanas
+Maanahao, Palanas
+Mabini, Palanas
+Malatawan, Palanas
+Malibas, Palanas
+Maravilla, Palanas
+Matugnao, Palanas
+Miabas, Palanas
+Nabangig, Palanas
+Nipa, Palanas
+Parina, Palanas
+Piña, Palanas
+Poblacion, Palanas
+Salvacion, Palanas
+San Antonio, Palanas
+San Carlos, Palanas
+San Isidro, Palanas
+Santa Cruz, Palanas
+Alegria, Pio V. Corpuz
+Buenasuerte, Pio V. Corpuz
+Bugang, Pio V. Corpuz
+Bugtong, Pio V. Corpuz
+Bunducan, Pio V. Corpuz
+Cabangrayan, Pio V. Corpuz
+Calongongan, Pio V. Corpuz
+Casabangan, Pio V. Corpuz
+Guindawahan, Pio V. Corpuz
+Labigan, Pio V. Corpuz
+Lampuyang, Pio V. Corpuz
+Mabuhay, Pio V. Corpuz
+Palho, Pio V. Corpuz
+Poblacion, Pio V. Corpuz
+Salvacion, Pio V. Corpuz
+Tanque, Pio V. Corpuz
+Tubigan, Pio V. Corpuz
+Tubog, Pio V. Corpuz
+Aguada, Placer
+Ban-ao, Placer
+Burabod, Placer
+Cabangcalan, Placer
+Calumpang, Placer
+Camayabsan, Placer
+Daanlungsod, Placer
+Dangpanan, Placer
+Daraga, Placer
+Guin-awayan, Placer
+Guinhan-ayan, Placer
+Katipunan, Placer
+Libas, Placer
+Locso-an, Placer
+Luna, Placer
+Mahayag, Placer
+Mahayahay, Placer
+Manlut-od, Placer
+Matagantang, Placer
+Naboctot, Placer
+Nagarao, Placer
+Nainday, Placer
+Naocondiot, Placer
+Pasiagon, Placer
+Pili, Placer
+Poblacion, Placer
+Puro, Placer
+Quibrada, Placer
+San Marcos, Placer
+Santa Cruz, Placer
+Taboc, Placer
+Tan-awan, Placer
+Taverna, Placer
+Tubod, Placer
+Villa Inocencio, Placer
+Altavista, San Fernando
+Bayanihan Poblacion, San Fernando
+Baybaydagat Poblacion, San Fernando
+Benitinan, San Fernando
+Buenasuerte, San Fernando
+Buenavista, San Fernando
+Buenos Aires, San Fernando
+Buyo, San Fernando
+Cañelas, San Fernando
+Corbada, San Fernando
+Daplian, San Fernando
+Del Rosario, San Fernando
+Ipil, San Fernando
+Lahong, San Fernando
+Lumbia, San Fernando
+Magkaipit, San Fernando
+Magsasaka Poblacion, San Fernando
+Minio, San Fernando
+Pinamoghaan, San Fernando
+Progreso, San Fernando
+Resurreccion, San Fernando
+Salvacion, San Fernando
+Silangan Poblacion, San Fernando
+Sowa, San Fernando
+Talisay, San Fernando
+Valparaiso, San Fernando
+Almiñe, San Jacinto
+Bagacay, San Jacinto
+Bagahanglad, San Jacinto
+Bartolabac, San Jacinto
+Burgos, San Jacinto
+Calipat-an, San Jacinto
+Danao, San Jacinto
+District I, San Jacinto
+District II, San Jacinto
+District III, San Jacinto
+District IV, San Jacinto
+Dorong-an Daplian, San Jacinto
+Interior, San Jacinto
+Jagna-an, San Jacinto
+Luna, San Jacinto
+Mabini, San Jacinto
+Piña, San Jacinto
+Roosevelt, San Jacinto
+San Isidro, San Jacinto
+Santa Rosa, San Jacinto
+Washington, San Jacinto
+Boca Chica, San Pascual
+Bolod, San Pascual
+Busing, San Pascual
+Cueva, San Pascual
+Dangcalan, San Pascual
+Halabangbaybay, San Pascual
+Iniwaran, San Pascual
+Ki-Buaya, San Pascual
+Ki-Romero, San Pascual
+Laurente, San Pascual
+Mabini, San Pascual
+Mabuhay, San Pascual
+Malaking Ilog, San Pascual
+Mapanique, San Pascual
+Nazareno, San Pascual
+Pinamasingan, San Pascual
+Quintina, San Pascual
+San Jose, San Pascual
+San Pedro, San Pascual
+San Rafael, San Pascual
+Santa Cruz, San Pascual
+Terraplin, San Pascual
+Arado, Uson
+Armenia, Uson
+Aurora, Uson
+Badling, Uson
+Bonifacio, Uson
+Buenasuerte, Uson
+Buenavista, Uson
+Campana, Uson
+Candelaria, Uson
+Centro, Uson
+Crossing, Uson
+Dapdap, Uson
+Del Carmen, Uson
+Del Rosario, Uson
+Libertad, Uson
+Mabini, Uson
+Mabuhay, Uson
+Madao, Uson
+Magsaysay, Uson
+Marcella, Uson
+Miaga, Uson
+Mongahay, Uson
+Morocborocan, Uson
+Paguihaman, Uson
+Panicijan, Uson
+Poblacion, Uson
+Quezon, Uson
+San Isidro, Uson
+San Jose, Uson
+San Mateo, Uson
+San Ramon, Uson
+San Vicente, Uson
+Santo Cristo, Uson
+Sawang, Uson
+Simawa, Uson

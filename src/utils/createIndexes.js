@@ -1,15 +1,14 @@
 const mongoose = require('mongoose');
-require('dotenv').config();
-
-const uri = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL;
+const { connect, disconnect, getConnectionUri } = require('./dbConnection');
 
 async function createIndexes() {
   try {
-    await mongoose.connect(uri);
+    const uri = getConnectionUri();
+    await connect(uri);
     console.log('Connected to MongoDB');
 
     const Event = require('../models/events_models/event.model');
-    const EventRequest = require('../models/request_models/eventRequest.model');
+    const { EventRequest } = require('../models/index'); // Use new model from index
     const Message = require('../models/chat_models/message.model');
     const Conversation = require('../models/chat_models/conversation.model');
     const Presence = require('../models/chat_models/presence.model');
@@ -26,6 +25,13 @@ async function createIndexes() {
     await EventRequest.collection.createIndex({ Status: 1 });
     await EventRequest.collection.createIndex({ createdAt: 1 });
     await EventRequest.collection.createIndex({ coordinator_id: 1 });
+    // Composite indexes for performance optimization
+    await EventRequest.collection.createIndex({ status: 1, createdAt: -1 });
+    await EventRequest.collection.createIndex({ status: 1, district: 1 });
+    await EventRequest.collection.createIndex({ status: 1, province: 1 });
+    await EventRequest.collection.createIndex({ Category: 1, status: 1 });
+    await EventRequest.collection.createIndex({ 'requester.userId': 1, status: 1 });
+    await EventRequest.collection.createIndex({ 'reviewer.userId': 1, status: 1 });
     console.log('EventRequest indexes created');
 
     // Create indexes for Message
@@ -48,7 +54,7 @@ async function createIndexes() {
   } catch (error) {
     console.error('Error creating indexes:', error);
   } finally {
-    await mongoose.disconnect();
+    await disconnect();
   }
 }
 

@@ -4,8 +4,11 @@ const router = express.Router();
 const { bloodBagController } = require('../controller/inventory_controller');
 const { validateCreateBloodBag, validateUpdateBloodBag } = require('../validators/utility_validators/bloodbag.validators');
 
-// Create blood bag
-router.post('/bloodbags', validateCreateBloodBag, async (req, res, next) => {
+const authenticate = require('../middleware/authenticate');
+const { requirePermission } = require('../middleware/requirePermission');
+
+// Create blood bag (requires appropriate permission - can be customized)
+router.post('/bloodbags', authenticate, validateCreateBloodBag, async (req, res, next) => {
   try {
     await bloodBagController.createBloodBag(req, res);
   } catch (error) {
@@ -13,8 +16,8 @@ router.post('/bloodbags', validateCreateBloodBag, async (req, res, next) => {
   }
 });
 
-// Get all blood bags
-router.get('/bloodbags', async (req, res, next) => {
+// Get all blood bags (requires read permission)
+router.get('/bloodbags', authenticate, requirePermission('request', 'read'), async (req, res, next) => {
   try {
     await bloodBagController.getAllBloodBags(req, res);
   } catch (error) {
@@ -22,8 +25,8 @@ router.get('/bloodbags', async (req, res, next) => {
   }
 });
 
-// Get blood bag by id
-router.get('/bloodbags/:bloodBagId', async (req, res, next) => {
+// Get blood bag by id (requires read permission)
+router.get('/bloodbags/:bloodBagId', authenticate, requirePermission('request', 'read'), async (req, res, next) => {
   try {
     await bloodBagController.getBloodBagById(req, res);
   } catch (error) {
@@ -31,8 +34,8 @@ router.get('/bloodbags/:bloodBagId', async (req, res, next) => {
   }
 });
 
-// Update blood bag
-router.put('/bloodbags/:bloodBagId', validateUpdateBloodBag, async (req, res, next) => {
+// Update blood bag (requires update permission)
+router.put('/bloodbags/:bloodBagId', authenticate, requirePermission('request', 'update'), validateUpdateBloodBag, async (req, res, next) => {
   try {
     await bloodBagController.updateBloodBag(req, res);
   } catch (error) {
@@ -40,8 +43,8 @@ router.put('/bloodbags/:bloodBagId', validateUpdateBloodBag, async (req, res, ne
   }
 });
 
-// Delete blood bag
-router.delete('/bloodbags/:bloodBagId', async (req, res, next) => {
+// Delete blood bag (requires delete permission)
+router.delete('/bloodbags/:bloodBagId', authenticate, requirePermission('request', 'delete'), async (req, res, next) => {
   try {
     await bloodBagController.deleteBloodBag(req, res);
   } catch (error) {
