@@ -20,6 +20,19 @@ router.get('/public/events', async (req, res, next) => {
 });
 
 /**
+ * @route   GET /api/public/events/:eventId
+ * @desc    Get public event details by ID (approved events only, no authentication required)
+ * @access  Public (returns only approved events)
+ */
+router.get('/public/events/:eventId', async (req, res, next) => {
+  try {
+    await eventDetailsController.getPublicEventDetails(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   GET /api/events/all
  * @desc    Get all approved events for calendar consumption (with populated location names and category data)
  * @access  Public (returns only approved events)

@@ -169,6 +169,59 @@ class EventDetailsService {
   }
 
   /**
+   * Get public event details by ID (approved events only)
+   * Returns limited information for public calendar
+   * @param {string} eventId 
+   * @returns {Object} Public event details
+   */
+  async getPublicEventDetails(eventId) {
+    try {
+      const event = await Event.findOne({ Event_ID: eventId });
+      if (!event) {
+        throw new Error('Event not found');
+      }
+
+      // Only return approved events for public viewing
+      if (event.Status !== 'approved' && event.Status !== 'Approved') {
+        throw new Error('Event not found');
+      }
+
+      // Get category-specific data
+      const category = await this.getEventCategory(event.Event_ID);
+      
+      // Get coordinator information (limited)
+      const coordinator = await this.getCoordinatorInfo(event.coordinator_id);
+
+      return {
+        success: true,
+        event: {
+          Event_ID: event.Event_ID,
+          Event_Title: event.Event_Title,
+          Event_Description: event.Event_Description || event.EventDescription || event.Description || '',
+          Location: event.Location,
+          Start_Date: event.Start_Date,
+          End_Date: event.End_Date,
+          Status: event.Status,
+          Email: event.Email,
+          Phone_Number: event.Phone_Number,
+          category: category.type,
+          categoryData: category.data,
+          coordinator: coordinator ? {
+            id: coordinator.id,
+            name: coordinator.name,
+            email: coordinator.email,
+            phone: coordinator.phone
+          } : null,
+          created_at: event.createdAt
+        }
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to get event details: ${error.message}`);
+    }
+  }
+
+  /**
    * Get event category type and data
    * @param {string} eventId 
    * @returns {Object} Category info
