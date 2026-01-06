@@ -1180,22 +1180,16 @@ class EventRequestService {
       // Note: getNote() helper is defined at the start of this method
       const note = getNote();
       
+      // Track whether we must publish an event after saving the request
+      let shouldPublishEvent = false;
+
       if (action === REQUEST_ACTIONS.ACCEPT) {
         request.status = nextState;
         request.addDecisionHistory('accept', actorSnapshot, note);
         
-        // Accept action always goes directly to approved and publishes event
-        // Note: publishEvent is made non-blocking to avoid timeout issues
+        // Accept action always goes directly to approved and should publish event
         if (nextState === REQUEST_STATES.APPROVED) {
-          // Fire-and-forget: publish event asynchronously after response is sent
-          setImmediate(async () => {
-            try {
-              await eventPublisherService.publishEvent(request, actorSnapshot);
-            } catch (publishError) {
-              console.error(`[EVENT REQUEST SERVICE] Error publishing event (non-blocking): ${publishError.message}`);
-              // Don't fail action execution if event publishing fails
-            }
-          });
+          shouldPublishEvent = true;
         }
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
@@ -1211,17 +1205,8 @@ class EventRequestService {
         }
         
         // Auto-publish event if approved (from pending-review, review-accepted, or review-rescheduled)
-        // Note: publishEvent is made non-blocking to avoid timeout issues
         if (nextState === REQUEST_STATES.APPROVED) {
-          // Fire-and-forget: publish event asynchronously after response is sent
-          setImmediate(async () => {
-            try {
-              await eventPublisherService.publishEvent(request, actorSnapshot);
-            } catch (publishError) {
-              console.error(`[EVENT REQUEST SERVICE] Error publishing event (non-blocking): ${publishError.message}`);
-              // Don't fail action execution if event publishing fails
-            }
-          });
+          shouldPublishEvent = true;
         }
       } else if (action === REQUEST_ACTIONS.DECLINE) {
         request.status = nextState;
@@ -1307,6 +1292,24 @@ class EventRequestService {
 
       // 8. Save request and verify save completed
       await request.save();
+
+      // 8.1 Ensure an event exists for approved requests (synchronous, fail-fast)
+      if (shouldPublishEvent) {
+        const hasEventRef = request.Event_ID || request.eventId;
+        if (!hasEventRef) {
+          try {
+            await eventPublisherService.publishEvent(request, actorSnapshot);
+          } catch (publishError) {
+            console.error(`[EVENT REQUEST SERVICE] Error publishing event (synchronous): ${publishError.message}`, {
+              requestId,
+              status: request.status,
+              hasEventRef,
+            });
+            // Bubble up so caller knows approval failed to materialize an event
+            throw new Error(`Failed to publish event: ${publishError.message}`);
+          }
+        }
+      }
       
       // Verify status was updated correctly (use already-updated request object)
       if (request.status !== nextState) {
@@ -1503,8 +1506,19 @@ class EventRequestService {
         }
       }
       
-      // Verify event exists
-      const event = await Event.findOne({ Event_ID: eventId }).session(session);
+      // Verify event exists.
+      // Accept either the external Event_ID or a MongoDB _id (24-hex) for robustness
+      let event = await Event.findOne({ Event_ID: eventId }).session(session);
+      if (!event && eventId && typeof eventId === 'string' && /^[0-9a-fA-F]{24}$/.test(eventId)) {
+        // frontend may send the Mongo _id in some shapes — try lookup by _id as a fallback
+        try {
+          event = await Event.findById(eventId).session(session);
+        } catch (e) {
+          // ignore and continue to throw below if not found
+          event = null;
+        }
+      }
+
       if (!event) {
         throw new Error('Event not found');
       }

@@ -60,10 +60,12 @@ const userSchema = new mongoose.Schema({
   },
   
   // Organization Information
+  // Note: No enum validation here - Organization model is the source of truth for valid types
+  // This allows adding new organization types without updating User model
   organizationType: {
     type: String,
-    enum: ['LGU', 'NGO', 'Hospital', 'RedCross', 'Non-LGU', 'Other'],
-    required: false // Can be set later for existing users
+    required: false, // Can be set later for existing users
+    trim: true
   },
   
   organizationId: {
@@ -163,7 +165,8 @@ const userSchema = new mongoose.Schema({
     organizationType: {
       type: String,
       required: true,
-      enum: ['LGU', 'NGO', 'Hospital', 'BloodBank', 'RedCross', 'Non-LGU', 'Other']
+      trim: true
+      // No enum validation - Organization.type is the source of truth
     },
     isPrimary: {
       type: Boolean,

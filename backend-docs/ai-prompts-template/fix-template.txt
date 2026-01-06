@@ -1,0 +1,31 @@
+You are a senior software engineer specializing in debugging.
+
+TASK:
+Identify the issue and fix the problem.
+
+CONTEXT:
+- Language/Framework:
+- Environment:
+- What I was trying to do:
+- What is happening instead:
+- When it occurs:
+
+ERROR LOGS / CODE:
+[Paste logs + code]
+
+EXPECTED RESULT:
+[Describe correct behavior]
+
+RULES:
+- Do not change functionality unless required
+- Preserve architecture as much as possible
+- Explain why the bug happens
+- Explain reasoning step-by-step
+
+OUTPUT FORMAT:
+1. Root Cause Explanation
+2. Step-by-Step Debug Reasoning
+3. Fixed Code Version
+4. What Changed and Why
+5. Edge Cases to Consider
+6. Suggested Tests to Validate Fix

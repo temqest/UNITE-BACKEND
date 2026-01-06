@@ -1,0 +1,33 @@
+You are a highly skilled developer.
+
+TASK:
+[Describe the feature or function you want built]
+
+CONTEXT:
+- Language:
+- Framework:
+- Tech Stack:
+- Where this code will run:
+- Existing system behavior:
+- Dependencies:
+
+REQUIREMENTS:
+- Input behavior:
+- Output behavior:
+- Functional requirements:
+- Non-functional requirements (performance, security, efficiency):
+
+CONSTRAINTS:
+- Coding standards:
+- Naming conventions:
+- File structure rules:
+- Library restrictions:
+
+OUTPUT FORMAT:
+Provide answer in this structure:
+1. Short explanation of approach
+2. Architecture / Design reasoning
+3. Clean, ready-to-run code
+4. Short walkthrough of how it works
+5. Edge cases handled
+6. Time complexity + performance considerations

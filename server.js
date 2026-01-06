@@ -544,6 +544,17 @@ const startServer = async () => {
     // Connect to database first
     await connectDB();
     
+    // Initialize location cache for high-performance hierarchical lookups
+    try {
+      const locationCache = require('./src/utils/locationCache');
+      const { Location } = require('./src/models');
+      await locationCache.initCache(Location, { includeInactive: false });
+      console.log('✅ Location cache initialized');
+    } catch (cacheError) {
+      console.warn('⚠️  Failed to initialize location cache:', cacheError.message);
+      // Don't fail server startup if cache fails - routes will work without cache optimization
+    }
+    
     // Initialize notification scheduler
     try {
       const notificationScheduler = require('./src/services/utility_services/notificationScheduler.service');

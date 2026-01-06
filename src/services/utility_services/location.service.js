@@ -5,6 +5,7 @@ const { signToken, verifyToken } = require('../../utils/jwt');
 const jwt = require('jsonwebtoken');
 const emailService = require('./email.service');
 const bcrypt = require('bcrypt');
+const locationCache = require('../../utils/locationCache');
 
 class LocationService {
   async getProvinces() {
@@ -12,10 +13,28 @@ class LocationService {
   }
 
   async getDistrictsByProvince(provinceId) {
+    // Try cache first (O(1) lookup)
+    if (locationCache.isCacheReady()) {
+      const districtIds = locationCache.getDistrictsByProvince(provinceId);
+      if (districtIds.length > 0) {
+        // Fetch full objects from DB using cached IDs
+        return Location.find({ _id: { $in: districtIds }, type: 'district', isActive: true }).sort({ name: 1 });
+      }
+    }
+    // Fallback to standard query if cache not ready
     return Location.find({ type: 'district', province: provinceId }).sort({ name: 1 });
   }
 
   async getMunicipalitiesByDistrict(districtId) {
+    // Try cache first (O(1) lookup)
+    if (locationCache.isCacheReady()) {
+      const munIds = locationCache.getMunicipalitiesByDistrict(districtId);
+      if (munIds.length > 0) {
+        // Fetch full objects from DB using cached IDs
+        return Location.find({ _id: { $in: munIds }, type: 'municipality', isActive: true }).sort({ name: 1 });
+      }
+    }
+    // Fallback to standard query if cache not ready
     return Location.find({ type: 'municipality', parent: districtId }).sort({ name: 1 });
   }
 
@@ -169,6 +188,21 @@ class LocationService {
     req.passwordActivationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
     await req.save();
 
+    // CRITICAL: Send activation email NOW, before potentially failing organization/location operations
+    // This ensures email is sent even if subsequent saves fail due to validation errors
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const activationLink = `${frontendUrl}/auth/activate-account?token=${encodeURIComponent(activationToken)}`;
+    const userName = `${req.firstName} ${req.lastName}`;
+
+    try {
+      await emailService.sendPasswordActivationEmail(req.email, activationLink, userName);
+      console.log(`[approveRequest] Password activation email sent successfully to ${req.email}`);
+    } catch (emailError) {
+      // Log error but don't fail the approval process
+      console.error(`[approveRequest] Failed to send password activation email to ${req.email}:`, emailError.message);
+      // Continue with approval - email can be resent later if needed
+    }
+
     // Assign role from signup request
     if (req.roleId) {
       // Verify the role is actually a stakeholder role (authority < 60)
@@ -257,42 +291,56 @@ class LocationService {
     if (req.organizationId) {
       const { UserOrganization } = require('../../models');
       const organization = req.organizationId; // Already populated
-      
-      // Use proper assignment method (matches pattern from user.controller.js)
-      await UserOrganization.assignOrganization(
-        user._id,
-        organization._id,
-        {
-          roleInOrg: 'member',
-          isPrimary: true,
-          assignedBy: approverId || null
-        }
-      );
-      
+
+      // Validate organization exists and is active (provides type safety without hard-coded enums)
+      if (!organization || !organization.isActive) {
+        throw new Error('Organization not found or is not active');
+      }
+
+      // Attempt to assign via UserOrganization; if it fails, continue and still set embedded fields
+      try {
+        await UserOrganization.assignOrganization(
+          user._id,
+          organization._id,
+          {
+            roleInOrg: 'member',
+            isPrimary: true,
+            assignedBy: approverId || null
+          }
+        );
+      } catch (assignErr) {
+        console.error(`[approveRequest] Warning: UserOrganization.assignOrganization failed for ${user.email}:`, assignErr.message || assignErr);
+        // continue - we'll still set embedded organization fields so the user record is usable
+      }
+
       // Set top-level organizationId and organizationType (required for backward compatibility and queries)
-      user.organizationId = organization._id;
-      user.organizationType = organization.type;
-      
-      // Update embedded organizations array
-      user.organizations = [{
-        organizationId: organization._id,
-        organizationName: organization.name,
-        organizationType: organization.type,
-        isPrimary: true,
-        assignedAt: new Date(),
-        assignedBy: approverId || null
-      }];
-      
-      // organizationInstitution is already set (line 152) - keep it as reference only
-      // Do NOT let it override organizationId - organizationId is the source of truth
-      
-      await user.save();
-      console.log(`[approveRequest] Assigned organization to ${user.email}:`, {
-        organizationId: organization._id.toString(),
-        organizationName: organization.name,
-        organizationType: organization.type,
-        assignedBy: approverId ? approverId.toString() : null
-      });
+      try {
+        user.organizationId = organization._id;
+        user.organizationType = organization.type;
+
+        // Update embedded organizations array
+        user.organizations = [{
+          organizationId: organization._id,
+          organizationName: organization.name,
+          organizationType: organization.type,
+          isPrimary: true,
+          assignedAt: new Date(),
+          assignedBy: approverId || null
+        }];
+
+        // organizationInstitution is already set (line 152) - keep it as reference only
+        // Do NOT let it override organizationId - organizationId is the source of truth
+
+        await user.save();
+        console.log(`[approveRequest] Assigned organization to ${user.email}:`, {
+          organizationId: organization._id.toString(),
+          organizationName: organization.name,
+          organizationType: organization.type,
+          assignedBy: approverId ? approverId.toString() : null
+        });
+      } catch (saveErr) {
+        console.error(`[approveRequest] Error saving user organization fields for ${user.email}:`, saveErr.message || saveErr);
+      }
     }
 
     // Assign locations via UserLocation collection (for location hierarchy queries)
@@ -335,18 +383,8 @@ class LocationService {
       }
     }
 
-    // Send password activation email
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const activationLink = `${frontendUrl}/auth/activate-account?token=${encodeURIComponent(activationToken)}`;
-    const userName = `${req.firstName} ${req.lastName}`;
-
-    try {
-      await emailService.sendPasswordActivationEmail(req.email, activationLink, userName);
-      console.log(`Password activation email sent successfully to ${req.email}`);
-    } catch (emailError) {
-      // Log error but don't fail the approval process
-      console.error(`Failed to send password activation email to ${req.email}:`, emailError.message);
-    }
+    // Email was already sent earlier (after token generation) to ensure it's sent even if later saves fail
+    // See lines after token generation for email sending logic
 
     // Create notification for the new stakeholder
     const { Notification } = require('../../models');
@@ -954,6 +992,18 @@ class LocationService {
       });
 
       await location.save();
+
+      // Trigger cache rebuild after successful creation
+      try {
+        if (locationCache.isCacheReady()) {
+          await locationCache.rebuildCache(Location);
+          console.log(`[createLocation] Location cache rebuilt after creating location: ${location.name}`);
+        }
+      } catch (cacheError) {
+        console.warn(`[createLocation] Failed to rebuild cache: ${cacheError.message}`);
+        // Don't fail the request due to cache rebuild failure
+      }
+
       return location;
     } catch (error) {
       throw new Error(`Failed to create location: ${error.message}`);
