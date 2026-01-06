@@ -290,6 +290,18 @@ async function seed() {
     }
 
     console.log(dryRun ? 'Dry-run completed. No changes written.' : 'Seeding completed');
+
+    // Rebuild location cache after seeding
+    if (!dryRun) {
+      try {
+        const locationCache = require('./locationCache');
+        const { Location } = require('../models');
+        await locationCache.rebuildCache(Location, { includeInactive: false });
+        console.log('✅ Location cache rebuilt after seeding');
+      } catch (cacheError) {
+        console.warn('⚠️  Failed to rebuild location cache after seeding:', cacheError.message);
+      }
+    }
   } catch (err) {
     console.error('Seeding error', err);
   } finally {

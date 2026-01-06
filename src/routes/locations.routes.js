@@ -233,6 +233,19 @@ router.put('/locations/:locationId', authenticate, requirePermission('location',
     if (!location) {
       return res.status(404).json({ success: false, message: 'Location not found' });
     }
+
+    // Rebuild cache after successful update
+    try {
+      const locationCache = require('../utils/locationCache');
+      if (locationCache.isCacheReady()) {
+        await locationCache.rebuildCache(Location);
+        console.log(`[PUT /locations] Location cache rebuilt after updating location: ${location.name}`);
+      }
+    } catch (cacheError) {
+      console.warn(`[PUT /locations] Failed to rebuild cache: ${cacheError.message}`);
+      // Don't fail the request due to cache rebuild failure
+    }
+
     return res.status(200).json({ success: true, data: location });
   } catch (error) {
     next(error);
@@ -251,6 +264,19 @@ router.delete('/locations/:locationId', authenticate, requirePermission('locatio
     if (!location) {
       return res.status(404).json({ success: false, message: 'Location not found' });
     }
+
+    // Rebuild cache after successful soft delete
+    try {
+      const locationCache = require('../utils/locationCache');
+      if (locationCache.isCacheReady()) {
+        await locationCache.rebuildCache(Location);
+        console.log(`[DELETE /locations] Location cache rebuilt after deleting location: ${location.name}`);
+      }
+    } catch (cacheError) {
+      console.warn(`[DELETE /locations] Failed to rebuild cache: ${cacheError.message}`);
+      // Don't fail the request due to cache rebuild failure
+    }
+
     return res.status(200).json({ success: true, message: 'Location deleted', data: location });
   } catch (error) {
     next(error);
@@ -347,6 +373,59 @@ router.get('/users/:userId/locations/:locationId/access', authenticate, requireP
     return res.status(200).json({ success: true, data: { hasAccess } });
   } catch (error) {
     next(error);
+  }
+});
+
+// ==================== LOCATION CACHE MANAGEMENT ROUTES ====================
+
+/**
+ * @route   GET /api/cache/locations/status
+ * @desc    Get location cache status and statistics (admin monitoring)
+ * @access  Private (requires location.read permission)
+ */
+router.get('/cache/locations/status', authenticate, requirePermission('location', 'read'), (req, res) => {
+  try {
+    const locationCache = require('../utils/locationCache');
+    const status = locationCache.getCacheStatus();
+    return res.status(200).json({ success: true, data: status });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to get cache status', error: error.message });
+  }
+});
+
+/**
+ * @route   POST /api/cache/locations/rebuild
+ * @desc    Rebuild location cache (admin-only endpoint for when locations are updated)
+ * @access  Private (requires location.update permission and admin role)
+ */
+router.post('/cache/locations/rebuild', authenticate, requirePermission('location', 'update'), async (req, res, next) => {
+  try {
+    const locationCache = require('../utils/locationCache');
+    const { Location } = require('../models');
+    
+    const updatedStatus = await locationCache.rebuildCache(Location, { includeInactive: false });
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Location cache rebuilt successfully',
+      data: updatedStatus 
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   POST /api/cache/locations/clear
+ * @desc    Clear location cache (admin-only, useful for debugging)
+ * @access  Private (requires location.update permission)
+ */
+router.post('/cache/locations/clear', authenticate, requirePermission('location', 'update'), (req, res) => {
+  try {
+    const locationCache = require('../utils/locationCache');
+    locationCache.clearCache();
+    return res.status(200).json({ success: true, message: 'Location cache cleared' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to clear cache', error: error.message });
   }
 });
 
