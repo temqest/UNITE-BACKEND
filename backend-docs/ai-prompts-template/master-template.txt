@@ -1,0 +1,41 @@
+You are an expert [programming role: e.g., Senior Full-Stack Developer / Backend Engineer / DevOps Architect].
+
+TASK:
+[Explain clearly what you want done]
+
+CONTEXT / PROJECT DETAILS:
+- Language/Framework:
+- Tech stack:
+- Platform:
+- Repository / Code Reference:
+- Current behavior:
+- Desired behavior:
+
+INPUT:
+[Provide code, logs, errors, or description here]
+
+GOAL:
+[Explain the expected output/result]
+
+CONSTRAINTS:
+- Coding style or standards:
+- Performance requirements:
+- Security requirements:
+- Version constraints:
+- Avoid:
+- Must include:
+
+OUTPUT FORMAT:
+Provide the answer in this exact structure:
+1. Explanation / Reasoning
+2. Final Solution
+3. Step-by-step Implementation Instructions
+4. Final Code (clean and ready to run)
+5. Additional Improvements or Best Practices
+
+TONE:
+Clear, concise, developer-friendly.
+
+IMPORTANT:
+- Do not hallucinate libraries that don’t exist
+- If information is missing, list required clarifications instead of assuming

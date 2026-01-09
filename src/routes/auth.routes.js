@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { bloodbankStaffController, stakeholderController } = require('../controller/users_controller');
+const { userController } = require('../controller/users_controller');
 const authenticate = require('../middleware/authenticate');
 const rateLimiter = require('../middleware/rateLimiter');
 
@@ -21,7 +21,20 @@ router.post('/login', rateLimiter.auth, async (req, res, next) => {
         message: 'Email and password are required'
       });
     }
-    await bloodbankStaffController.authenticateUser(req, res);
+    await userController.authenticateUser(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route POST /api/auth/refresh
+ * @desc  Refresh access token
+ * @access Private (requires valid token)
+ */
+router.post('/refresh', authenticate, async (req, res, next) => {
+  try {
+    await userController.refreshToken(req, res);
   } catch (error) {
     next(error);
   }
@@ -34,7 +47,7 @@ router.post('/login', rateLimiter.auth, async (req, res, next) => {
  */
 router.get('/me', authenticate, async (req, res, next) => {
   try {
-    await bloodbankStaffController.getCurrentUser(req, res);
+    await userController.getCurrentUser(req, res);
   } catch (error) {
     next(error);
   }
@@ -68,19 +81,56 @@ router.post('/logout', async (req, res, next) => {
   }
 });
 
-module.exports = router;
+// Password activation endpoints
+const locationService = require('../services/utility_services/location.service');
 
 /**
- * Stakeholder auth endpoints
+ * @route GET /api/auth/activate-account
+ * @desc  Verify activation token and return user info
+ * @access Public
  */
-router.post('/stakeholders/login', rateLimiter.auth, async (req, res, next) => {
+router.get('/activate-account', async (req, res, next) => {
   try {
-    if (!req.body.email || !req.body.password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required' });
+    const { token } = req.query;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Activation token is required' });
     }
-    await stakeholderController.login(req, res);
+    
+    const result = await locationService.verifyActivationToken(token);
+    return res.status(200).json({ success: true, data: result });
   } catch (error) {
-    next(error);
+    return res.status(400).json({ success: false, message: error.message });
   }
 });
+
+/**
+ * @route POST /api/auth/activate-account
+ * @desc  Set password and activate account
+ * @access Public
+ */
+router.post('/activate-account', async (req, res, next) => {
+  try {
+    const { token, password, confirmPassword } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Activation token is required' });
+    }
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'Password is required' });
+    }
+    if (password !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+    }
+    
+    const result = await locationService.activateAccount(token, password);
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+module.exports = router;
 

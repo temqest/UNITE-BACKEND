@@ -1,216 +1,34 @@
+/**
+ * Legacy Requests Routes
+ * 
+ * NOTE: Event request routes have been moved to eventRequests.routes.js
+ * This file now only contains:
+ * - Blood bag request routes
+ * - System settings routes
+ * 
+ * All event request routes are commented out below for reference.
+ */
+
 const express = require('express');
 const router = express.Router();
 const {
-  eventRequestController,
   systemSettingsController
 } = require('../controller/request_controller');
 const { bloodBagRequestController } = require('../controller/request_controller');
 
 const authenticate = require('../middleware/authenticate');
-const { requireAdmin } = require('../middleware/requireRoles');
+const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
 
-const {
-  validateCreateEventRequest,
-  validateUpdateEventRequest
-} = require('../validators/request_validators/eventRequest.validators');
 const { validateCreate: validateCreateBloodBagRequest, validateUpdate: validateUpdateBloodBagRequest } = require('../validators/request_validators/bloodBagRequest.validators');
 
-// ==================== EVENT REQUEST ROUTES ====================
-
-/**
- * @route   POST /api/requests
- * @desc    Coordinator submits event request
- * @access  Private (Coordinator)
- */
-// Protect this route so server can derive actor identity (coordinator/stakeholder)
-router.post('/requests', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.createEventRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/events/direct
- * @desc    Create and publish event immediately (Admin or Coordinator)
- * @access  Private
- */
-// Require authentication so the server can derive creator identity from token
-router.post('/events/direct', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.createImmediateEvent(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/pending
- * @desc    Get all pending requests for admin
- * @access  Private (Admin only)
- */
-router.get('/requests/pending', async (req, res, next) => {
-  try {
-    await eventRequestController.getPendingRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/me
- * @desc    Get requests for the authenticated user (role-aware)
- * @access  Private
- */
-router.get('/requests/me', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.getMyRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/all
- * @desc    Get all requests (admin view)
- * @access  Private (Admin)
- */
-router.get('/requests/all', async (req, res, next) => {
-  try {
-    await eventRequestController.getAllRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-
-
-/**
- * @route   GET /api/requests/coordinator/:coordinatorId
- * @desc    Get all requests for coordinator
- * @access  Private (Coordinator)
- */
-router.get('/requests/coordinator/:coordinatorId', async (req, res, next) => {
-  try {
-    await eventRequestController.getCoordinatorRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/stakeholder/:stakeholderId
- * @desc    Get all requests created by a stakeholder
- * @access  Private (Stakeholder)
- */
-router.get('/requests/stakeholder/:stakeholderId', async (req, res, next) => {
-  try {
-    await eventRequestController.getStakeholderRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/:requestId/coordinator-action
- * @desc    Coordinator accepts/rejects the request
- * @access  Private (Coordinator)
- */
-router.post('/requests/:requestId/coordinator-action', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.coordinatorAcceptRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/:requestId/coordinator-confirm
- * @desc    Coordinator confirms admin's decision (finalize)
- * @access  Private (Coordinator)
- */
-router.post('/requests/:requestId/coordinator-confirm', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.coordinatorConfirmRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/:requestId/stakeholder-action
- * @desc    Stakeholder accepts/rejects the request
- * @access  Private (Stakeholder)
- */
-router.post('/requests/:requestId/stakeholder-action', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.stakeholderAcceptRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-
-
-/**
- * @route   GET /api/requests/check-overlap
- * @desc    Check if coordinator has overlapping requests
- * @access  Private
- */
-router.get('/requests/check-overlap', async (req, res, next) => {
-  try {
-    await eventRequestController.checkCoordinatorOverlappingRequests(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/check-double-booking
- * @desc    Check if date has double booking (location/venue)
- * @access  Private
- */
-router.get('/requests/check-double-booking', async (req, res, next) => {
-  try {
-    await eventRequestController.checkDoubleBooking(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/validate
- * @desc    Validate all scheduling rules
- * @access  Private
- */
-router.post('/requests/validate', async (req, res, next) => {
-  try {
-    await eventRequestController.validateSchedulingRules(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/requests/blood-bags/:date
- * @desc    Get total blood bags for a specific date
- * @access  Private
- */
-router.get('/requests/blood-bags/:date', async (req, res, next) => {
-  try {
-    await eventRequestController.getTotalBloodBagsForDate(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
+// ==================== BLOOD BAG REQUEST ROUTES ====================
 
 /**
  * @route   POST /api/requests/blood
- * @desc    Create a blood bag request (requester -> requestee)
+ * @desc    Create a blood bag request (requires request.create permission)
  * @access  Private
  */
-router.post('/requests/blood', authenticate, validateCreateBloodBagRequest, async (req, res, next) => {
+router.post('/requests/blood', authenticate, requirePermission('request', 'create'), validateCreateBloodBagRequest, async (req, res, next) => {
   try {
     await bloodBagRequestController.createRequest(req, res);
   } catch (error) {
@@ -220,10 +38,10 @@ router.post('/requests/blood', authenticate, validateCreateBloodBagRequest, asyn
 
 /**
  * @route   GET /api/requests/blood
- * @desc    List blood bag requests with optional filters
+ * @desc    List blood bag requests with optional filters (requires request.read permission)
  * @access  Private
  */
-router.get('/requests/blood', authenticate, async (req, res, next) => {
+router.get('/requests/blood', authenticate, requirePermission('request', 'read'), async (req, res, next) => {
   try {
     await bloodBagRequestController.getAllRequests(req, res);
   } catch (error) {
@@ -233,10 +51,10 @@ router.get('/requests/blood', authenticate, async (req, res, next) => {
 
 /**
  * @route   GET /api/requests/blood/:requestId
- * @desc    Get blood bag request by ID
+ * @desc    Get blood bag request by ID (requires request.read permission)
  * @access  Private
  */
-router.get('/requests/blood/:requestId', authenticate, async (req, res, next) => {
+router.get('/requests/blood/:requestId', authenticate, requirePermission('request', 'read'), async (req, res, next) => {
   try {
     await bloodBagRequestController.getRequestById(req, res);
   } catch (error) {
@@ -246,10 +64,10 @@ router.get('/requests/blood/:requestId', authenticate, async (req, res, next) =>
 
 /**
  * @route   PUT /api/requests/blood/:requestId
- * @desc    Update a blood bag request
+ * @desc    Update a blood bag request (requires request.update permission)
  * @access  Private
  */
-router.put('/requests/blood/:requestId', authenticate, validateUpdateBloodBagRequest, async (req, res, next) => {
+router.put('/requests/blood/:requestId', authenticate, requirePermission('request', 'update'), validateUpdateBloodBagRequest, async (req, res, next) => {
   try {
     await bloodBagRequestController.updateRequest(req, res);
   } catch (error) {
@@ -259,108 +77,12 @@ router.put('/requests/blood/:requestId', authenticate, validateUpdateBloodBagReq
 
 /**
  * @route   DELETE /api/requests/blood/:requestId
- * @desc    Delete a blood bag request
+ * @desc    Delete a blood bag request (requires request.delete permission)
  * @access  Private
  */
-router.delete('/requests/blood/:requestId', authenticate, async (req, res, next) => {
+router.delete('/requests/blood/:requestId', authenticate, requirePermission('request', 'delete'), async (req, res, next) => {
   try {
     await bloodBagRequestController.deleteRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * Parameterized request routes - placed after all specific routes to avoid
- * Express treating static paths like 'pending' or 'coordinator' as a requestId.
- */
-/**
- * @route   GET /api/requests/:requestId
- * @desc    Get event request by ID with full details
- * @access  Private
- */
-router.get('/requests/:requestId', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.getEventRequestById(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   PUT /api/requests/:requestId
- * @desc    Update pending event request
- * @access  Private (Coordinator)
- */
-router.put('/requests/:requestId', authenticate, validateUpdateEventRequest, async (req, res, next) => {
-  try {
-    await eventRequestController.updateEventRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/:requestId/admin-action
- * @desc    Admin accepts/rejects/reschedules the request
- * @access  Private (Admin only)
- */
-router.post('/requests/:requestId/admin-action', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.adminAcceptRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/:requestId/staff
- * @desc    Assign staff to event (Admin only)
- * @access  Private (Admin only)
- */
-// Protect staff assignment with authentication so server can derive admin from token
-router.post('/requests/:requestId/staff', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.assignStaffToEvent(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   POST /api/requests/:requestId/stakeholder-confirm
- * @desc    Stakeholder confirms admin/coordinator decision
- * @access  Private (Stakeholder)
- */
-router.post('/requests/:requestId/stakeholder-confirm', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.stakeholderConfirmRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   DELETE /api/requests/:requestId
- * @desc    Cancel/Delete pending request
- * @access  Private (Coordinator)
- */
-router.delete('/requests/:requestId', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.cancelEventRequest(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   DELETE /api/requests/:requestId/delete
- * @desc    Delete a cancelled or rejected request
- * @access  Private
- */
-router.delete('/requests/:requestId/delete', authenticate, async (req, res, next) => {
-  try {
-    await eventRequestController.deleteEventRequest(req, res);
   } catch (error) {
     next(error);
   }
@@ -383,10 +105,10 @@ router.get('/settings', authenticate, async (req, res, next) => {
 
 /**
  * @route   POST /api/settings
- * @desc    Update system settings (admin only)
- * @access  Private (Admin)
+ * @desc    Update system settings (requires system.settings permission)
+ * @access  Private
  */
-router.post('/settings', authenticate, requireAdmin, async (req, res, next) => {
+router.post('/settings', authenticate, requirePermission('system', 'settings'), async (req, res, next) => {
   try {
     await systemSettingsController.updateSettings(req, res);
   } catch (error) {
@@ -512,4 +234,3 @@ router.post('/settings/validate-all-rules', async (req, res, next) => {
 });
 
 module.exports = router;
-

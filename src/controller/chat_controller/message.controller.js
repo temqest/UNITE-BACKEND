@@ -39,9 +39,24 @@ class MessageController {
         data: message
       });
     } catch (error) {
+      console.error('[MessageController] Error sending message:', {
+        error: error.message,
+        stack: error.stack,
+        senderId: req.user?.id,
+        receiverId: req.body?.receiverId
+      });
+      
+      // Return the actual error message if it's a permission error
+      if (error.message && error.message.includes('permission')) {
+        return res.status(403).json({
+          success: false,
+          message: error.message
+        });
+      }
+      
       res.status(500).json({
         success: false,
-        message: 'Failed to send message'
+        message: error.message || 'Failed to send message'
       });
     }
   }

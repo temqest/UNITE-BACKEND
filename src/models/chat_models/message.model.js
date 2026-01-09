@@ -13,13 +13,13 @@ const messageSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    ref: 'BloodbankStaff'
+    ref: 'User'
   },
   receiverId: {
     type: String,
     required: true,
     trim: true,
-    ref: 'BloodbankStaff'
+    ref: 'User'
   },
   content: {
     type: String,

@@ -10,9 +10,14 @@ class MessageService {
   async sendMessage(senderId, receiverId, content, messageType = 'text', attachments = []) {
     try {
       // Validate permissions
+      console.log('[MessageService] Validating send message permission:', {
+        senderId: senderId.toString(),
+        receiverId: receiverId.toString()
+      });
       const canSend = await permissionsService.canSendMessage(senderId, receiverId);
+      console.log('[MessageService] canSendMessage result:', canSend);
       if (!canSend) {
-        throw new Error('You do not have permission to send messages to this user');
+        throw new Error('You do not have permission to send messages');
       }
 
       // Generate conversation ID (sorted to ensure consistency)
@@ -233,30 +238,34 @@ class MessageService {
     }
   }
 
-  // Helper method to get user details
+  // Helper method to get user details using User model
   async getUserDetails(userId) {
     try {
-      const { BloodbankStaff, Stakeholder } = require('../../models');
+      const { User } = require('../../models');
+      const mongoose = require('mongoose');
 
-      const staff = await BloodbankStaff.findOne({ ID: userId });
-      if (staff) {
-        return {
-          id: userId,
-          name: `${staff.First_Name} ${staff.Last_Name}`,
-          role: staff.StaffType,
-          email: staff.Email,
-          type: 'staff'
-        };
+      let user = null;
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        user = await User.findById(userId);
+      } else {
+        user = await User.findByLegacyId(userId);
       }
 
-      const stakeholder = await Stakeholder.findOne({ Stakeholder_ID: userId });
-      if (stakeholder) {
+      if (user) {
+        // Get primary role from embedded roles array
+        const activeRoles = (user.roles || []).filter(r => r.isActive !== false);
+        const primaryRole = activeRoles.length > 0 ? activeRoles[0].roleCode : 'user';
+
+        // Format name from firstName and lastName
+        const name = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown';
+
         return {
-          id: userId,
-          name: `${stakeholder.firstName} ${stakeholder.lastName}`,
-          role: 'Stakeholder',
-          email: stakeholder.email,
-          type: 'stakeholder'
+          id: user._id.toString(),
+          name: name,
+          role: primaryRole,
+          email: user.email || '',
+          type: primaryRole,
+          authority: user.authority || 20
         };
       }
 
@@ -264,14 +273,19 @@ class MessageService {
         id: userId,
         name: 'Unknown User',
         role: 'Unknown',
-        type: 'unknown'
+        type: 'unknown',
+        email: '',
+        authority: 20
       };
     } catch (error) {
+      console.error('[MessageService] Error getting user details:', error);
       return {
         id: userId,
         name: 'Unknown User',
         role: 'Unknown',
-        type: 'unknown'
+        type: 'unknown',
+        email: '',
+        authority: 20
       };
     }
   }

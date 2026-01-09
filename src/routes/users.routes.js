@@ -1,88 +1,20 @@
 const express = require('express');
 const router = express.Router();
-const {
-  systemAdminController,
-  coordinatorController,
-  bloodbankStaffController,
-  stakeholderController
-} = require('../controller/users_controller');
+const { userController, notificationPreferencesController } = require('../controller/users_controller');
 
 const registrationCodeService = require('../services/users_services/registrationCode.service');
-const { District } = require('../models/index');
+const { Location } = require('../models/index');
 
 const authenticate = require('../middleware/authenticate');
-const { requireAdmin, requireCoordinator, requireAdminOrCoordinator } = require('../middleware/requireRoles');
+const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
+const { requireStaffManagement, validatePageContext } = require('../middleware/requireStaffManagement');
+const validateJurisdiction = require('../middleware/validateJurisdiction');
 
-const {
-  validateCreateBloodbankStaff,
-  validateUpdateBloodbankStaff
-} = require('../validators/users_validators/bloodbank_users.validators');
-
-const {
-  validateCreateSystemAdmin,
-  validateUpdateSystemAdmin
-} = require('../validators/users_validators/systemAdmin.validators');
-
-const {
-  validateCreateCoordinator,
-  validateUpdateCoordinator
-} = require('../validators/users_validators/coordinator.validators');
+const { validateCreateUser, validateUpdateUser } = require('../validators/users_validators/user.validators');
+const { validateAssignUserCoverageArea } = require('../validators/users_validators/userCoverageAssignment.validators');
+const userCoverageAssignmentController = require('../controller/users_controller/userCoverageAssignment.controller');
 
 // ==================== AUTHENTICATION & PROFILE ====================
-
-/**
- * @route   POST /api/users/verify-password
- * @desc    Verify password for a user
- * @access  Private
- */
-router.post('/users/:userId/verify-password', async (req, res, next) => {
-  try {
-    await bloodbankStaffController.verifyPassword(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   PUT /api/users/:userId/password
- * @desc    Change user password
- * @access  Private
- */
-router.put('/users/:userId/password', authenticate, async (req, res, next) => {
-  try {
-    await bloodbankStaffController.changePassword(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   PUT /api/users/:userId/reset-password
- * @desc    Reset password (admin operation)
- * @access  Private (Admin only)
- */
-router.put('/users/:userId/reset-password', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await bloodbankStaffController.resetPassword(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/users/:userId
- * @desc    Get user by ID
- * @access  Private
- */
-router.get('/users/:userId', authenticate, async (req, res, next) => {
-  try {
-    await bloodbankStaffController.getUserById(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Username-related endpoints removed (username no longer used)
 
 /**
  * @route   GET /api/users/check-email/:email
@@ -91,301 +23,360 @@ router.get('/users/:userId', authenticate, async (req, res, next) => {
  */
 router.get('/users/check-email/:email', async (req, res, next) => {
   try {
-    await bloodbankStaffController.isEmailAvailable(req, res);
+    const { User } = require('../models');
+    const { email } = req.params;
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    return res.status(200).json({
+      success: true,
+      available: !existingUser
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== UNIFIED USER ROUTES ====================
+
+/**
+ * @route   GET /api/users
+ * @desc    List users (unified user model)
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
+  try {
+    await userController.listUsers(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   PUT /api/users/:userId/profile
- * @desc    Update user profile
- * @access  Private
+ * @route   GET /api/users/create-context
+ * @desc    Get create context for user creation forms (allowedRoles, lockedFields, etc.)
+ * @access  Private (requires authentication)
  */
-router.put('/users/:userId/profile', validateUpdateBloodbankStaff, async (req, res, next) => {
+router.get('/users/create-context', authenticate, async (req, res, next) => {
   try {
-    await bloodbankStaffController.updateProfile(req, res);
+    await userController.getCreateContext(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/users/:userId/full-name
- * @desc    Get full name of user
- * @access  Private
+ * @route   GET /api/users/creation-context/municipalities
+ * @desc    Get municipalities with nested barangays for coordinator creation
+ * @access  Private (requires authentication)
  */
-router.get('/users/:userId/full-name', async (req, res, next) => {
+router.get('/users/creation-context/municipalities', authenticate, async (req, res, next) => {
   try {
-    await bloodbankStaffController.getFullName(req, res);
+    await userController.getMunicipalitiesWithBarangays(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/users/search
- * @desc    Search users by name or username
- * @access  Private
+ * @route   GET /api/users/by-capability
+ * @desc    List users filtered by permission capabilities
+ * @access  Private (requires user.read permission)
  */
-router.get('/users/search', async (req, res, next) => {
+router.get('/users/by-capability', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
-    await bloodbankStaffController.searchUsers(req, res);
+    await userController.listUsersByCapability(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/users/check-staff/:staffId
- * @desc    Check if staff ID exists
- * @access  Private
+ * @route   GET /api/users/:userId/coordinator
+ * @desc    Resolve coordinator(s) for a stakeholder (finds all coordinators who manage this stakeholder)
+ * @access  Private (requires user.read permission, or self-read allowed for stakeholders)
+ * 
+ * NOTE: This route MUST be defined BEFORE /users/:userId to avoid route conflicts.
+ * Express matches routes in order, so more specific routes must come first.
  */
-router.get('/users/check-staff/:staffId', authenticate, async (req, res, next) => {
-  try {
-    await bloodbankStaffController.staffExists(req, res);
-  } catch (error) {
-    next(error);
-  }
+// Add middleware to log ALL requests to this route, even before authentication
+// This catches requests even if they fail authentication or other middleware
+router.use('/users/:userId/coordinator', (req, res, next) => {
+  console.log('[DIAG] Coordinator endpoint request intercepted:', {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    path: req.path,
+    baseUrl: req.baseUrl,
+    url: req.url,
+    params: req.params,
+    query: req.query,
+    hasAuthHeader: !!req.headers.authorization,
+    authHeader: req.headers.authorization ? 'Bearer ***' : 'none',
+    userAgent: req.headers['user-agent'],
+    timestamp: new Date().toISOString()
+  });
+  next();
 });
 
-// ==================== SYSTEM ADMIN ROUTES ====================
-
-/**
- * @route   POST /api/admin
- * @desc    Create a new system admin account
- * @access  Private (Admin only)
- */
-router.post('/admin', authenticate, requireAdmin, validateCreateSystemAdmin, async (req, res, next) => {
+router.get('/users/:userId/coordinator', authenticate, async (req, res, next) => {
   try {
-    await systemAdminController.createSystemAdminAccount(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
+    // Log immediately to confirm route is being hit
+    console.log('[resolveCoordinatorForStakeholder] Route hit:', {
+      method: req.method,
+      path: req.path,
+      params: req.params,
+      userId: req.params.userId,
+      hasUser: !!req.user,
+      timestamp: new Date().toISOString()
+    });
 
-/**
- * @route   GET /api/admin/:adminId
- * @desc    Get admin by ID
- * @access  Private (Admin only)
- */
-router.get('/admin/:adminId', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await systemAdminController.getAdminById(req, res);
+    // Allow stakeholders to read their own coordinator assignment without user.read permission
+    const requesterId = req.user?.id || req.user?._id;
+    const targetUserId = req.params.userId;
+    
+    // Normalize both IDs to strings for reliable comparison
+    // Handle both ObjectId and string formats
+    const requesterIdStr = requesterId ? (requesterId.toString ? requesterId.toString() : String(requesterId)) : null;
+    const targetUserIdStr = targetUserId ? (targetUserId.toString ? targetUserId.toString() : String(targetUserId)) : null;
+    
+    console.log('[resolveCoordinatorForStakeholder] Route authorization check:', {
+      requesterId: requesterIdStr,
+      targetUserId: targetUserIdStr,
+      requesterIdType: requesterId ? typeof requesterId : 'null',
+      targetUserIdType: targetUserId ? typeof targetUserId : 'null',
+      hasUser: !!req.user,
+      timestamp: new Date().toISOString()
+    });
+    
+    if (requesterIdStr && targetUserIdStr && requesterIdStr === targetUserIdStr) {
+      // Self-read: bypass permission check
+      console.log('[resolveCoordinatorForStakeholder] Self-read bypass granted:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: true,
+        bypassReason: 'Self-read allowed for stakeholders'
+      });
+      return await userController.resolveCoordinatorForStakeholder(req, res);
+    }
+    
+    // Log when self-read bypass doesn't match (for debugging)
+    if (requesterIdStr && targetUserIdStr) {
+      console.log('[resolveCoordinatorForStakeholder] Self-read check failed - requiring permission:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: false,
+        reason: 'IDs do not match - not a self-read request',
+        willRequirePermission: 'user.read'
+      });
+    } else {
+      console.log('[resolveCoordinatorForStakeholder] Self-read check skipped - missing IDs:', {
+        hasRequesterId: !!requesterIdStr,
+        hasTargetUserId: !!targetUserIdStr,
+        willRequirePermission: 'user.read'
+      });
+    }
+    
+    // Otherwise require user.read permission
+    return requirePermission('user', 'read')(req, res, next);
   } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/admin
- * @desc    Get all admins
- * @access  Private (Admin only)
- */
-router.get('/admin', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await systemAdminController.getAllAdmins(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   PUT /api/admin/:adminId
- * @desc    Update admin information
- * @access  Private (Admin only)
- */
-router.put('/admin/:adminId', authenticate, requireAdmin, validateUpdateSystemAdmin, async (req, res, next) => {
-  try {
-    await systemAdminController.updateAdmin(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/admin/:adminId/dashboard
- * @desc    Get admin dashboard
- * @access  Private (Admin only)
- */
-router.get('/admin/:adminId/dashboard', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await systemAdminController.getAdminDashboard(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/admin/statistics
- * @desc    Get system-wide statistics
- * @access  Private (Admin only)
- */
-router.get('/admin/statistics', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await systemAdminController.getSystemStatistics(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   DELETE /api/admin/:adminId
- * @desc    Delete admin account
- * @access  Private (Admin only)
- */
-router.delete('/admin/:adminId', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await systemAdminController.deleteAdmin(req, res);
-  } catch (error) {
+    console.error('[resolveCoordinatorForStakeholder] Error in route handler:', {
+      error: error.message,
+      stack: error.stack,
+      targetUserId: req.params.userId,
+      hasUser: !!req.user
+    });
     next(error);
   }
 });
 
 /**
- * @route   GET /api/admin/:adminId/coordinators
- * @desc    Get managed coordinators
- * @access  Private (Admin only)
+ * @route   GET /api/users/:userId/coordinator/diagnostic
+ * @desc    Diagnostic endpoint to check stakeholder data and coordinator resolution
+ * @access  Private (requires authentication)
  */
-router.get('/admin/:adminId/coordinators', authenticate, requireAdmin, async (req, res, next) => {
+router.get('/users/:userId/coordinator/diagnostic', authenticate, async (req, res, next) => {
   try {
-    await systemAdminController.getManagedCoordinators(req, res);
+    console.log('[DIAG] Diagnostic endpoint called:', {
+      userId: req.params.userId,
+      requesterId: req.user?.id || req.user?._id,
+      timestamp: new Date().toISOString()
+    });
+    await userController.diagnoseCoordinatorResolution(req, res);
   } catch (error) {
+    console.error('[DIAG] Diagnostic endpoint error:', error);
     next(error);
   }
 });
 
 /**
- * @route   POST /api/admin/:adminId/coordinators
- * @desc    Create coordinator account
- * @access  Private (Admin only)
+ * @route   GET /api/users/:userId
+ * @desc    Get user by ID (unified model)
+ * @access  Private (requires user.read permission, or self-read allowed)
+ * 
+ * NOTE: This route MUST be defined AFTER /users/:userId/coordinator to avoid route conflicts.
+ * Express matches routes in order, so more specific routes must come first.
  */
-router.post('/admin/:adminId/coordinators', authenticate, requireAdmin, async (req, res, next) => {
+router.get('/users/:userId', authenticate, async (req, res, next) => {
   try {
-    await systemAdminController.createCoordinatorAccount(req, res);
+    // Allow users to read their own data without user.read permission
+    const requesterId = req.user?.id || req.user?._id;
+    const targetUserId = req.params.userId;
+    
+    // Normalize both IDs to strings for reliable comparison
+    const requesterIdStr = requesterId ? requesterId.toString() : null;
+    const targetUserIdStr = targetUserId ? targetUserId.toString() : null;
+    
+    if (requesterIdStr && targetUserIdStr && requesterIdStr === targetUserIdStr) {
+      // Self-read: bypass permission check
+      console.log('[getUserById] Self-read bypass:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: true
+      });
+      return await userController.getUserById(req, res);
+    }
+    
+    // Log when self-read bypass doesn't match (for debugging)
+    if (requesterIdStr && targetUserIdStr) {
+      console.log('[getUserById] Self-read check failed - requiring permission:', {
+        requesterId: requesterIdStr,
+        targetUserId: targetUserIdStr,
+        match: false
+      });
+    }
+    
+    // Otherwise require user.read permission
+    return requirePermission('user', 'read')(req, res, next);
   } catch (error) {
+    console.error('[getUserById] Error in route handler:', error);
     next(error);
   }
 });
 
 /**
- * @route   GET /api/admin/:adminId/requests/attention
- * @desc    Get requests requiring admin attention
- * @access  Private (Admin only)
+ * @route   GET /api/users/:userId/capabilities
+ * @desc    Get user capabilities (diagnostic endpoint)
+ * @access  Private (requires user.read permission)
  */
-router.get('/admin/:adminId/requests/attention', authenticate, requireAdmin, async (req, res, next) => {
+router.get('/users/:userId/capabilities', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
-    await systemAdminController.getRequestsRequiringAttention(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ==================== COORDINATOR ROUTES ====================
-
-/**
- * @route   POST /api/coordinators
- * @desc    Create a new coordinator account
- * @access  Private (Admin only)
- */
-router.post('/coordinators', authenticate, requireAdmin, async (req, res, next) => {
-  try {
-    await coordinatorController.createCoordinatorAccount(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/coordinators/:coordinatorId
- * @desc    Get coordinator by ID
- * @access  Private
- */
-router.get('/coordinators/:coordinatorId', authenticate, async (req, res, next) => {
-  try {
-    await coordinatorController.getCoordinatorById(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * @route   GET /api/coordinators
- * @desc    Get all coordinators with filtering and pagination
- * @access  Private
- */
-router.get('/coordinators', authenticate, async (req, res, next) => {
-  try {
-    await coordinatorController.getAllCoordinators(req, res);
+    await userController.getUserCapabilities(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   PUT /api/coordinators/:coordinatorId
- * @desc    Update coordinator information
- * @access  Private (Admin only)
+ * @route   GET /api/users/:userId/edit-context
+ * @desc    Get user edit context (complete, consistent data for editing)
+ * @access  Private (requires user.read permission)
  */
-router.put('/coordinators/:coordinatorId', authenticate, requireAdmin, validateUpdateCoordinator, async (req, res, next) => {
+router.get('/users/:userId/edit-context', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
-    await coordinatorController.updateCoordinator(req, res);
+    await userController.getUserEditContext(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/coordinators/:coordinatorId/dashboard
- * @desc    Get coordinator dashboard
- * @access  Private (Coordinator)
+ * @route   GET /api/users/:userId/diagnostics
+ * @desc    Get comprehensive diagnostic information for a user
+ * @access  Private (requires user.read permission or viewing own diagnostics)
  */
-router.get('/coordinators/:coordinatorId/dashboard', authenticate, requireCoordinator, async (req, res, next) => {
+router.get('/users/:userId/diagnostics', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
-    await coordinatorController.getCoordinatorDashboard(req, res);
+    await userController.getUserDiagnostics(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   DELETE /api/coordinators/:coordinatorId
- * @desc    Delete/deactivate coordinator account
- * @access  Private (Admin only)
+ * @route   POST /api/users
+ * @desc    Create a new user (unified model with RBAC)
+ * @access  Private (requires staff.create permission with appropriate staff type)
  */
-router.delete('/coordinators/:coordinatorId', authenticate, requireAdmin, async (req, res, next) => {
+router.post('/users', 
+  authenticate, 
+  requireStaffManagement('create', 'staffType'), 
+  validatePageContext(), 
+  validateJurisdiction,
+  validateCreateUser, 
+  async (req, res, next) => {
+    try {
+      // Map role code to staff type for validation
+      const permissionService = require('../services/users_services/permission.service');
+      let requestedStaffType = req.body.staffType;
+      
+      if (!requestedStaffType && req.body.roles && req.body.roles.length > 0) {
+        const roleCode = req.body.roles[0];
+        const role = await permissionService.getRoleByCode(roleCode);
+        
+        if (role) {
+          // Determine staff type from role capabilities
+          const hasReview = await permissionService.roleHasCapability(role._id, 'request.review');
+          const hasOperational = await permissionService.roleHasCapability(role._id, 'request.create') ||
+                                 await permissionService.roleHasCapability(role._id, 'event.create');
+          
+          if (hasReview && !hasOperational) {
+            requestedStaffType = 'stakeholder';
+          } else if (hasOperational) {
+            requestedStaffType = 'coordinator';
+          }
+        }
+      }
+      
+      const allowedTypes = req.allowedStaffTypes || [];
+      
+      if (requestedStaffType && allowedTypes.length > 0 && !allowedTypes.includes('*')) {
+        if (!allowedTypes.includes(requestedStaffType)) {
+          return res.status(403).json({
+            success: false,
+            message: `Cannot create staff of type '${requestedStaffType}'. Allowed types: ${allowedTypes.join(', ')}`
+          });
+        }
+      }
+      
+      await userController.createUser(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @route   PUT /api/users/:userId
+ * @desc    Update user (unified model)
+ * @access  Private (requires staff.update permission with appropriate staff type)
+ */
+router.put('/users/:userId', authenticate, requireStaffManagement('update', 'staffType'), validateUpdateUser, async (req, res, next) => {
   try {
-    await coordinatorController.deleteCoordinator(req, res);
+    // Check if updating staff type and if it's allowed
+    const requestedStaffType = req.body.roles?.[0] || req.body.staffType;
+    const allowedTypes = req.allowedStaffTypes || [];
+    
+    if (requestedStaffType && allowedTypes.length > 0 && !allowedTypes.includes('*')) {
+      if (!allowedTypes.includes(requestedStaffType)) {
+        return res.status(403).json({
+          success: false,
+          message: `Cannot update user to staff type '${requestedStaffType}'. Allowed types: ${allowedTypes.join(', ')}`
+        });
+      }
+    }
+    
+    await userController.updateUser(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/coordinators/:coordinatorId/events/history
- * @desc    Get coordinator event history
- * @access  Private (Coordinator)
+ * @route   DELETE /api/users/:userId
+ * @desc    Delete user (unified model)
+ * @access  Private (requires staff.delete permission)
  */
-router.get('/coordinators/:coordinatorId/events/history', authenticate, requireCoordinator, async (req, res, next) => {
+router.delete('/users/:userId', authenticate, requireStaffManagement('delete'), async (req, res, next) => {
   try {
-    await coordinatorController.getCoordinatorEventHistory(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Registration code management (Coordinator or Admin)
-router.post('/coordinators/:coordinatorId/registration-codes', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
-  try {
-    await coordinatorController.createRegistrationCode(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get('/coordinators/:coordinatorId/registration-codes', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
-  try {
-    await coordinatorController.listRegistrationCodes(req, res);
+    await userController.deleteUser(req, res);
   } catch (error) {
     next(error);
   }
@@ -399,15 +390,22 @@ router.get('/registration-codes/validate', async (req, res, next) => {
 
     const result = await registrationCodeService.validate(String(code));
     const reg = result.code;
-    const district = await District.findOne({ District_ID: reg.District_ID });
+    // Try to get location info if available
+    let locationInfo = null;
+    if (reg.locationId) {
+      const location = await Location.findById(reg.locationId);
+      if (location) {
+        locationInfo = { name: location.name, type: location.type };
+      }
+    }
 
     return res.status(200).json({
       success: true,
       data: {
         Code: reg.Code,
-        Coordinator_ID: reg.Coordinator_ID,
-        District_ID: reg.District_ID,
-        Province_Name: district?.Province_Name || null
+        coordinatorId: reg.Coordinator_ID || reg.coordinatorId,
+        locationId: reg.locationId,
+        locationInfo: locationInfo
       }
     });
   } catch (error) {
@@ -415,81 +413,150 @@ router.get('/registration-codes/validate', async (req, res, next) => {
   }
 });
 
-// ==================== STAKEHOLDER ROUTES ====================
+// ==================== USER COVERAGE AREA ASSIGNMENT ROUTES ====================
 
 /**
- * @route   POST /api/stakeholders/register
- * @desc    Register stakeholder (optionally via registration code)
- * @access  Public or Coordinator (depending on flow)
+ * @route   POST /api/users/:userId/coverage-areas
+ * @desc    Assign user to coverage area
+ * @access  Private (requires user.manage-roles permission)
  */
-router.post('/stakeholders/register', async (req, res, next) => {
+router.post('/users/:userId/coverage-areas', 
+  authenticate, 
+  requirePermission('user', 'manage-roles'), 
+  validateAssignUserCoverageArea, 
+  userCoverageAssignmentController.assignUserToCoverageArea.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/users/:userId/coverage-areas
+ * @desc    Get all coverage areas assigned to a user
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/coverage-areas', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getUserCoverageAreas.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/users/:userId/coverage-areas/primary
+ * @desc    Get primary coverage area for a user
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/coverage-areas/primary', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getPrimaryCoverageArea.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/users/:userId/coverage-areas/geographic-units
+ * @desc    Get all geographic units a user can access via coverage areas
+ * @access  Private (requires user.read permission)
+ */
+router.get('/users/:userId/coverage-areas/geographic-units', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getUserAccessibleGeographicUnits.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   DELETE /api/users/:userId/coverage-areas/:coverageAreaId
+ * @desc    Revoke user's coverage area assignment
+ * @access  Private (requires user.manage-roles permission)
+ */
+router.delete('/users/:userId/coverage-areas/:coverageAreaId', 
+  authenticate, 
+  requirePermission('user', 'manage-roles'), 
+  userCoverageAssignmentController.revokeUserCoverageAssignment.bind(userCoverageAssignmentController)
+);
+
+/**
+ * @route   GET /api/coverage-areas/:coverageAreaId/users
+ * @desc    Get all users assigned to a coverage area
+ * @access  Private (requires user.read permission)
+ */
+router.get('/coverage-areas/:coverageAreaId/users', 
+  authenticate, 
+  requirePermission('user', 'read'), 
+  userCoverageAssignmentController.getUsersInCoverageArea.bind(userCoverageAssignmentController)
+);
+
+// ==================== NOTIFICATION PREFERENCES ROUTES ====================
+
+/**
+ * @route   GET /api/users/me/notification-preferences
+ * @desc    Get current user's notification preferences
+ * @access  Private (authenticated users only)
+ */
+router.get('/users/me/notification-preferences', authenticate, async (req, res, next) => {
   try {
-    await stakeholderController.register(req, res);
+    await notificationPreferencesController.getMyPreferences(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/stakeholders
- * @desc    List stakeholders (filter by district_id/email)
- * @access  Private (Admin/Coordinator)
+ * @route   GET /api/users/:userId/notification-preferences
+ * @desc    Get user notification preferences
+ * @access  Private (self-read allowed, or requires user.read permission)
  */
-router.get('/stakeholders', authenticate, async (req, res, next) => {
+router.get('/users/:userId/notification-preferences', authenticate, async (req, res, next) => {
   try {
-    await stakeholderController.list(req, res);
+    await notificationPreferencesController.getPreferences(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/stakeholders/:stakeholderId
- * @desc    Get stakeholder by ID
- * @access  Private
+ * @route   PUT /api/users/me/notification-preferences
+ * @desc    Update current user's notification preferences
+ * @access  Private (authenticated users only)
  */
-router.get('/stakeholders/:stakeholderId', authenticate, async (req, res, next) => {
+router.put('/users/me/notification-preferences', authenticate, async (req, res, next) => {
   try {
-    await stakeholderController.getById(req, res);
+    await notificationPreferencesController.updateMyPreferences(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   PUT /api/stakeholders/:stakeholderId
- * @desc    Update stakeholder by ID
- * @access  Private
+ * @route   PUT /api/users/:userId/notification-preferences
+ * @desc    Update user notification preferences
+ * @access  Private (self-update allowed, or requires user.update permission)
  */
-router.put('/stakeholders/:stakeholderId', authenticate, async (req, res, next) => {
+router.put('/users/:userId/notification-preferences', authenticate, async (req, res, next) => {
   try {
-    await stakeholderController.update(req, res);
+    await notificationPreferencesController.updatePreferences(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   DELETE /api/stakeholders/:stakeholderId
- * @desc    Delete stakeholder by ID
- * @access  Private
+ * @route   POST /api/users/me/notification-preferences/mute
+ * @desc    Mute or unmute notifications for current user
+ * @access  Private (authenticated users only)
  */
-router.delete('/stakeholders/:stakeholderId', authenticate, async (req, res, next) => {
+router.post('/users/me/notification-preferences/mute', authenticate, async (req, res, next) => {
   try {
-    await stakeholderController.remove(req, res);
+    await notificationPreferencesController.muteNotifications(req, res);
   } catch (error) {
     next(error);
   }
 });
 
 /**
- * @route   GET /api/users
- * @desc    List users for admin or coordinator
- * @access  Private (Admin/Coordinator)
+ * @route   POST /api/users/:userId/notification-preferences/toggle-digest
+ * @desc    Toggle digest mode for user
+ * @access  Private (self-update only)
  */
-router.get('/users', authenticate, async (req, res, next) => {
+router.post('/users/:userId/notification-preferences/toggle-digest', authenticate, async (req, res, next) => {
   try {
-    await require('../controller/users_controller').bloodbankStaffController.listUsers(req, res);
+    await notificationPreferencesController.toggleDigestMode(req, res);
   } catch (error) {
     next(error);
   }

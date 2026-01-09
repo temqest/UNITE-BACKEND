@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/authenticate');
-const { requireAdminOrCoordinator } = require('../middleware/requireRoles');
+const { requirePermission, requireAnyPermission } = require('../middleware/requirePermission');
 
 const {
   districtController,
@@ -24,10 +24,10 @@ const {
 
 /**
  * @route   POST /api/districts
- * @desc    Create a new district
- * @access  Private (Admin only)
+ * @desc    Create a new district (requires location.create permission)
+ * @access  Private
  */
-router.post('/districts', validateCreateDistrict, async (req, res, next) => {
+router.post('/districts', authenticate, requirePermission('location', 'create'), validateCreateDistrict, async (req, res, next) => {
   try {
     await districtController.createDistrict(req, res);
   } catch (error) {
@@ -37,10 +37,10 @@ router.post('/districts', validateCreateDistrict, async (req, res, next) => {
 
 /**
  * @route   GET /api/districts/:districtId
- * @desc    Get district by ID
+ * @desc    Get district by ID (requires location.read permission)
  * @access  Private
  */
-router.get('/districts/:districtId', async (req, res, next) => {
+router.get('/districts/:districtId', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
   try {
     await districtController.getDistrictById(req, res);
   } catch (error) {
@@ -50,10 +50,10 @@ router.get('/districts/:districtId', async (req, res, next) => {
 
 /**
  * @route   GET /api/districts
- * @desc    Get all districts with filtering and pagination
+ * @desc    Get all districts with filtering and pagination (requires location.read permission)
  * @access  Private
  */
-router.get('/districts', async (req, res, next) => {
+router.get('/districts', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
   try {
     await districtController.getAllDistricts(req, res);
   } catch (error) {
@@ -76,10 +76,10 @@ router.get('/districts/by-region', async (req, res, next) => {
 
 /**
  * @route   PUT /api/districts/:districtId
- * @desc    Update district
- * @access  Private (Admin only)
+ * @desc    Update district (requires location.update permission)
+ * @access  Private
  */
-router.put('/districts/:districtId', validateUpdateDistrict, async (req, res, next) => {
+router.put('/districts/:districtId', authenticate, requirePermission('location', 'update'), validateUpdateDistrict, async (req, res, next) => {
   try {
     await districtController.updateDistrict(req, res);
   } catch (error) {
@@ -89,10 +89,10 @@ router.put('/districts/:districtId', validateUpdateDistrict, async (req, res, ne
 
 /**
  * @route   DELETE /api/districts/:districtId
- * @desc    Delete district
- * @access  Private (Admin only)
+ * @desc    Delete district (requires location.delete permission)
+ * @access  Private
  */
-router.delete('/districts/:districtId', async (req, res, next) => {
+router.delete('/districts/:districtId', authenticate, requirePermission('location', 'delete'), async (req, res, next) => {
   try {
     await districtController.deleteDistrict(req, res);
   } catch (error) {
@@ -156,7 +156,7 @@ router.post('/notifications', validateCreateNotification, async (req, res, next)
 
 /**
  * @route   GET /api/notifications
- * @desc    Get notifications for a user (Admin or Coordinator)
+ * @desc    Get notifications for a user (requires appropriate permissions)
  * @access  Private
  */
 router.get('/notifications', async (req, res, next) => {
@@ -470,10 +470,10 @@ router.post('/signup-requests', async (req, res, next) => {
 
 /**
  * @route   PUT /api/signup-requests/:id/approve
- * @desc    Approve a signup request
- * @access  Private (Coordinator or Admin)
+ * @desc    Approve a signup request (requires staff.create permission and authority >= 60, checked in controller)
+ * @access  Private
  */
-router.put('/signup-requests/:id/approve', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
+router.put('/signup-requests/:id/approve', authenticate, async (req, res, next) => {
   try {
     await locationController.approveRequest(req, res);
   } catch (error) {
@@ -483,10 +483,10 @@ router.put('/signup-requests/:id/approve', authenticate, requireAdminOrCoordinat
 
 /**
  * @route   PUT /api/signup-requests/:id/reject
- * @desc    Reject a signup request
- * @access  Private (Coordinator or Admin)
+ * @desc    Reject a signup request (requires staff.create permission and authority >= 60, checked in controller)
+ * @access  Private
  */
-router.put('/signup-requests/:id/reject', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
+router.put('/signup-requests/:id/reject', authenticate, async (req, res, next) => {
   try {
     await locationController.rejectRequest(req, res);
   } catch (error) {
@@ -496,10 +496,10 @@ router.put('/signup-requests/:id/reject', authenticate, requireAdminOrCoordinato
 
 /**
  * @route   GET /api/signup-requests
- * @desc    Get signup requests (for coordinators: their assigned, for admins: all)
- * @access  Private (Coordinator or Admin)
+ * @desc    Get signup requests (requires user.read permission)
+ * @access  Private
  */
-router.get('/signup-requests', authenticate, requireAdminOrCoordinator, async (req, res, next) => {
+router.get('/signup-requests', authenticate, requirePermission('user', 'read'), async (req, res, next) => {
   try {
     await locationController.getSignUpRequests(req, res);
   } catch (error) {
@@ -515,6 +515,34 @@ router.get('/signup-requests', authenticate, requireAdminOrCoordinator, async (r
 router.get('/signup-requests/verify-email', async (req, res, next) => {
   try {
     await locationController.verifyEmail(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== PUBLIC ENDPOINTS FOR SIGNUP ====================
+
+/**
+ * @route   GET /api/public/roles/stakeholder
+ * @desc    Get stakeholder roles (authority <= 59) for signup
+ * @access  Public
+ */
+router.get('/public/roles/stakeholder', async (req, res, next) => {
+  try {
+    await locationController.getStakeholderRoles(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/public/organizations
+ * @desc    Get active organizations for signup
+ * @access  Public
+ */
+router.get('/public/organizations', async (req, res, next) => {
+  try {
+    await locationController.getPublicOrganizations(req, res);
   } catch (error) {
     next(error);
   }

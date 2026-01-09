@@ -1,0 +1,27 @@
+You are a senior software architect.
+
+TASK:
+Create a development plan for:
+[feature / system / migration / refactor]
+
+PROJECT CONTEXT:
+- Current system:
+- Goals:
+- Constraints:
+- Users:
+- Tech stack:
+- Performance expectations:
+
+DELIVERABLE EXPECTATION:
+I want a structured, professional plan that is realistic, scalable, and maintainable.
+
+OUTPUT FORMAT:
+1. Problem Understanding
+2. Key Requirements
+3. Recommended Architecture / Approach
+4. Detailed Step-by-Step Plan
+5. Tools / Technologies to Use
+6. Risks + Mitigation
+7. Testing Strategy
+8. Deployment Strategy
+9. Maintenance & Scalability Considerations

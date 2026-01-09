@@ -31,15 +31,49 @@ class NotificationController {
   /**
    * Get notifications for a user (Admin or Coordinator)
    * GET /api/notifications
+   * Supports both new format (recipientUserId) and legacy format (recipientId + recipientType)
    */
   async getNotifications(req, res) {
     try {
-      const { recipientId, recipientType } = req.query;
+      const { recipientUserId, recipientId, recipientType } = req.query;
 
+      // New format: use recipientUserId (ObjectId)
+      if (recipientUserId) {
+        const filters = {
+          isRead: req.query.isRead !== undefined ? (req.query.isRead === 'true' || req.query.isRead === true) : undefined,
+          type: req.query.type,
+          date_from: req.query.date_from,
+          date_to: req.query.date_to,
+          request_id: req.query.request_id,
+          event_id: req.query.event_id
+        };
+
+        // Remove undefined filters
+        Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+
+        const options = {
+          page: parseInt(req.query.page) || 1,
+          limit: parseInt(req.query.limit) || 20,
+          sortBy: req.query.sortBy || 'createdAt',
+          sortOrder: req.query.sortOrder || 'desc'
+        };
+
+        // Use recipientUserId as recipientId (service will handle ObjectId resolution)
+        const result = await notificationService.getNotifications(recipientUserId, null, filters, options);
+
+        return res.status(200).json({
+          success: result.success,
+          data: result.notifications,
+          pagination: result.pagination,
+          filters: result.filters
+        });
+      }
+
+      // Legacy format: recipientId + recipientType
       if (!recipientId || !recipientType) {
         return res.status(400).json({
           success: false,
-          message: 'Recipient ID and recipient type are required'
+          message: 'Either recipientUserId (new format) or both recipientId and recipientType (legacy format) are required'
         });
       }
 
@@ -81,15 +115,26 @@ class NotificationController {
   /**
    * Get unread notifications count
    * GET /api/notifications/unread-count
+   * Supports both new format (recipientUserId) and legacy format (recipientId + recipientType)
    */
   async getUnreadCount(req, res) {
     try {
-      const { recipientId, recipientType } = req.query;
+      const { recipientUserId, recipientId, recipientType } = req.query;
 
+      // New format: use recipientUserId (ObjectId)
+      if (recipientUserId) {
+        const result = await notificationService.getUnreadCount(recipientUserId, null);
+        return res.status(200).json({
+          success: result.success,
+          data: result
+        });
+      }
+
+      // Legacy format: recipientId + recipientType
       if (!recipientId || !recipientType) {
         return res.status(400).json({
           success: false,
-          message: 'Recipient ID and recipient type are required'
+          message: 'Either recipientUserId (new format) or both recipientId and recipientType (legacy format) are required'
         });
       }
 
@@ -178,15 +223,27 @@ class NotificationController {
   /**
    * Mark all notifications as read for a user
    * PUT /api/notifications/mark-all-read
+   * Supports both new format (recipientUserId) and legacy format (recipientId + recipientType)
    */
   async markAllAsRead(req, res) {
     try {
-      const { recipientId, recipientType } = req.body;
+      const { recipientUserId, recipientId, recipientType } = req.body;
 
+      // New format: use recipientUserId (ObjectId)
+      if (recipientUserId) {
+        const result = await notificationService.markAllAsRead(recipientUserId, null);
+        return res.status(200).json({
+          success: result.success,
+          message: result.message,
+          modified_count: result.modified_count
+        });
+      }
+
+      // Legacy format: recipientId + recipientType
       if (!recipientId || !recipientType) {
         return res.status(400).json({
           success: false,
-          message: 'Recipient ID and recipient type are required'
+          message: 'Either recipientUserId (new format) or both recipientId and recipientType (legacy format) are required'
         });
       }
 

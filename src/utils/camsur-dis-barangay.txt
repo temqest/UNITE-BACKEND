@@ -1,0 +1,1063 @@
+Agdangan Poblacion, Baao
+Antipolo, Baao
+Bagumbayan, Baao
+Buluang, Baao
+Caranday, Baao
+Cristo Rey, Baao
+Del Pilar, Baao
+Del Rosario, Baao
+Iyagan, Baao
+La Medalla, Baao
+Lourdes, Baao
+Nababarera, Baao
+Pugay, Baao
+Sagrada, Baao
+Salvacion, Baao
+San Francisco, Baao
+San Isidro, Baao
+San Jose, Baao
+San Juan, Baao
+San Nicolas, Baao
+San Rafael, Baao
+San Ramon, Baao
+San Roque, Baao
+San Vicente, Baao
+Santa Cruz, Baao
+Santa Eulalia, Baao
+Santa Isabel, Baao
+Santa Teresa, Baao
+Santa Teresita, Baao
+Tapol, Baao
+Cabanbanan, Balatan
+Cabungan, Balatan
+Camangahan, Balatan
+Cayogcog, Balatan
+Coguit, Balatan
+Duran, Balatan
+Laganac, Balatan
+Luluasan, Balatan
+Montenegro, Balatan
+Pararao, Balatan
+Pulang Daga, Balatan
+Sagrada Nacacale, Balatan
+San Francisco, Balatan
+Santiago Nacacale, Balatan
+Siramag, Balatan
+Tapayas, Balatan
+Tomatarayo, Balatan
+Agos, Bato
+Bacolod, Bato
+Buluang, Bato
+Caricot, Bato
+Cawacagan, Bato
+Cotmon, Bato
+Cristo Rey, Bato
+Del Rosario, Bato
+Divina Pastora, Bato
+Goyudan, Bato
+Lobong, Bato
+Lubigan, Bato
+Mainit, Bato
+Manga, Bato
+Masoli, Bato
+Neighborhood, Bato
+Niño Jesus, Bato
+Pagatpatan, Bato
+Palo, Bato
+Payak, Bato
+Sagrada, Bato
+Salvacion, Bato
+San Isidro, Bato
+San Juan, Bato
+San Miguel, Bato
+San Rafael, Bato
+San Roque, Bato
+San Vicente, Bato
+Santa Cruz, Bato
+Santiago, Bato
+Sooc, Bato
+Tagpolo, Bato
+Tres Reyes, Bato
+Pagao, Bombon
+San Antonio, Bombon
+San Francisco, Bombon
+San Isidro, Bombon
+San Jose, Bombon
+San Roque, Bombon
+Santo Domingo, Bombon
+Siembre, Bombon
+Amlongan, Buhi
+Antipolo, Buhi
+Burocbusoc, Buhi
+Cabatuan, Buhi
+Cagmaslog, Buhi
+De La Fe, Buhi
+Delos Angeles, Buhi
+Divino Rostro, Buhi
+Gabas, Buhi
+Ibayugan, Buhi
+Igbac, Buhi
+Ipil, Buhi
+Iraya, Buhi
+Labawon, Buhi
+Lourdes, Buhi
+Macaangay, Buhi
+Monte Calvario, Buhi
+Namurabod, Buhi
+Sagrada Familia, Buhi
+Salvacion, Buhi
+San Antonio, Buhi
+San Buenaventura, Buhi
+San Francisco, Buhi
+San Isidro, Buhi
+San Jose Baybayon, Buhi
+San Jose Salay, Buhi
+San Pascual, Buhi
+San Pedro, Buhi
+San Rafael, Buhi
+San Ramon, Buhi
+San Roque, Buhi
+San Vicente, Buhi
+Santa Clara, Buhi
+Santa Cruz, Buhi
+Santa Elena, Buhi
+Santa Isabel, Buhi
+Santa Justina, Buhi
+Tambo, Buhi
+Bagoladio, Bula
+Bagumbayan, Bula
+Balaogan, Bula
+Caorasan, Bula
+Casugad, Bula
+Causip, Bula
+Fabrica, Bula
+Inoyonan, Bula
+Itangon, Bula
+Kinalabasahan, Bula
+La Purisima, Bula
+La Victoria, Bula
+Lanipga, Bula
+Lubgan, Bula
+Ombao Heights, Bula
+Ombao Polpog, Bula
+Palsong, Bula
+Panoypoyan, Bula
+Pawili, Bula
+Sagrada, Bula
+Salvacion, Bula
+San Agustin, Bula
+San Francisco, Bula
+San Isidro, Bula
+San Jose, Bula
+San Miguel, Bula
+San Ramon, Bula
+San Roque, Bula
+San Roque Heights, Bula
+Santa Elena, Bula
+Santo Domingo, Bula
+Santo Niño, Bula
+Taisan, Bula
+Barcelonita, Cabusao
+Biong, Cabusao
+Camagong, Cabusao
+Castillo, Cabusao
+New Poblacion, Cabusao
+Pandan, Cabusao
+San Pedro, Cabusao
+Santa Cruz, Cabusao
+Santa Lutgarda, Cabusao
+Balatasan, Calabanga
+Balombon, Calabanga
+Balongay, Calabanga
+Belen, Calabanga
+Bigaas, Calabanga
+Binaliw, Calabanga
+Binanuaanan Grande, Calabanga
+Binanuaanan Pequeño, Calabanga
+Bonot-Santa Rosa, Calabanga
+Burabod, Calabanga
+Cabanbanan, Calabanga
+Cagsao, Calabanga
+Camuning, Calabanga
+Comaguingking, Calabanga
+Del Carmen, Calabanga
+Dominorog, Calabanga
+Fabrica, Calabanga
+Harobay, Calabanga
+La Purisima, Calabanga
+Lugsad, Calabanga
+Manguiring, Calabanga
+Pagatpat, Calabanga
+Paolbo, Calabanga
+Pinada, Calabanga
+Punta Tarawal, Calabanga
+Quinale, Calabanga
+Sabang, Calabanga
+Salvacion-Baybay, Calabanga
+San Antonio, Calabanga
+San Antonio Poblacion, Calabanga
+San Bernardino, Calabanga
+San Francisco, Calabanga
+San Isidro, Calabanga
+San Lucas, Calabanga
+San Miguel, Calabanga
+San Pablo, Calabanga
+San Roque, Calabanga
+San Vicente, Calabanga
+Santa Cruz Poblacion, Calabanga
+Santa Cruz Ratay, Calabanga
+Santa Isabel, Calabanga
+Santa Salud, Calabanga
+Santo Domingo, Calabanga
+Santo Niño, Calabanga
+Siba-o, Calabanga
+Sibobo, Calabanga
+Sogod, Calabanga
+Tomagodtod, Calabanga
+Dugcal, Camaligan
+Marupit, Camaligan
+San Francisco, Camaligan
+San Jose-San Pablo, Camaligan
+San Juan-San Ramon, Camaligan
+San Lucas, Camaligan
+San Marcos, Camaligan
+San Mateo, Camaligan
+San Roque, Camaligan
+Santo Domingo, Camaligan
+Santo Tomas, Camaligan
+Sua, Camaligan
+Tarosanan, Camaligan
+Baras, Canaman
+Del Rosario, Canaman
+Dinaga, Canaman
+Fundado, Canaman
+Haring, Canaman
+Iquin, Canaman
+Linaga, Canaman
+Mangayawan, Canaman
+Palo, Canaman
+Pangpang, Canaman
+Poro, Canaman
+San Agustin, Canaman
+San Francisco, Canaman
+San Jose East, Canaman
+San Jose West, Canaman
+San Juan, Canaman
+San Nicolas, Canaman
+San Roque, Canaman
+San Vicente, Canaman
+Santa Cruz, Canaman
+Santa Teresita, Canaman
+Sua, Canaman
+Talidtid, Canaman
+Tibgao, Canaman
+Agaas, Caramoan
+Antolon, Caramoan
+Bacgong, Caramoan
+Bahay, Caramoan
+Bikal, Caramoan
+Binanuahan, Caramoan
+Cabacongan, Caramoan
+Cadong, Caramoan
+Canatuan, Caramoan
+Caputatan, Caramoan
+Colongcogong, Caramoan
+Daraga, Caramoan
+Gata, Caramoan
+Gibgos, Caramoan
+Gogon, Caramoan
+Guijalo, Caramoan
+Hanopol, Caramoan
+Hanoy, Caramoan
+Haponan, Caramoan
+Ilawod, Caramoan
+Ili-Centro, Caramoan
+Lidong, Caramoan
+Lubas, Caramoan
+Malabog, Caramoan
+Maligaya, Caramoan
+Mampirao, Caramoan
+Mandiclum, Caramoan
+Maqueda, Caramoan
+Minalaba, Caramoan
+Oring, Caramoan
+Oroc-Osoc, Caramoan
+Pagolinan, Caramoan
+Pandanan, Caramoan
+Paniman, Caramoan
+Patag-Belen, Caramoan
+Pili-Centro, Caramoan
+Pili-Tabiguian, Caramoan
+Poloan, Caramoan
+Salvacion, Caramoan
+San Roque, Caramoan
+San Vicente, Caramoan
+Santa Cruz, Caramoan
+Solnopan, Caramoan
+Tabgon, Caramoan
+Tabiguian, Caramoan
+Tabog, Caramoan
+Tawog, Caramoan
+Terogo, Caramoan
+Toboan, Caramoan
+Bagong Silang, Del Gallego
+Bucal, Del Gallego
+Cabasag, Del Gallego
+Comadaycaday, Del Gallego
+Comadogcadog, Del Gallego
+Domagondong, Del Gallego
+Kinalangan, Del Gallego
+Mabini, Del Gallego
+Magais I, Del Gallego
+Magais II, Del Gallego
+Mansalaya, Del Gallego
+Nagkalit, Del Gallego
+Palaspas, Del Gallego
+Pamplona, Del Gallego
+Pasay, Del Gallego
+Pinagdapian, Del Gallego
+Pinugusan, Del Gallego
+Poblacion Zone III, Del Gallego
+Sabang, Del Gallego
+Salvacion, Del Gallego
+San Juan, Del Gallego
+San Pablo, Del Gallego
+Santa Rita I, Del Gallego
+Santa Rita II, Del Gallego
+Sinagawsawan, Del Gallego
+Sinuknipan I, Del Gallego
+Sinuknipan II, Del Gallego
+Sugsugin, Del Gallego
+Tabion, Del Gallego
+Tomagoktok, Del Gallego
+Zone I Fatima, Del Gallego
+Zone II San Antonio, Del Gallego
+Cagbunga, Gainza
+Dahilig, Gainza
+District I, Gainza
+District II, Gainza
+Loob, Gainza
+Malbong, Gainza
+Namuat, Gainza
+Sampaloc, Gainza
+Ason, Garchitorena
+Bahi, Garchitorena
+Barangay I, Garchitorena
+Barangay II, Garchitorena
+Barangay III, Garchitorena
+Barangay IV, Garchitorena
+Binagasbasan, Garchitorena
+Burabod, Garchitorena
+Cagamutan, Garchitorena
+Cagnipa, Garchitorena
+Canlong, Garchitorena
+Dangla, Garchitorena
+Del Pilar, Garchitorena
+Denrica, Garchitorena
+Harrison, Garchitorena
+Mansangat, Garchitorena
+Pambuhan, Garchitorena
+Sagrada, Garchitorena
+Salvacion, Garchitorena
+San Vicente, Garchitorena
+Sumaoy, Garchitorena
+Tamiawon, Garchitorena
+Toytoy, Garchitorena
+Abucayan, Goa
+Bagumbayan Grande, Goa
+Bagumbayan Pequeño, Goa
+Balaynan, Goa
+Belen, Goa
+Buyo, Goa
+Cagaycay, Goa
+Catagbacan, Goa
+Digdigon, Goa
+Gimaga, Goa
+Halawig-Gogon, Goa
+Hiwacloy, Goa
+La Purisima, Goa
+Lamon, Goa
+Matacla, Goa
+Maymatan, Goa
+Maysalay, Goa
+Napawon, Goa
+Panday, Goa
+Payatan, Goa
+Pinaglabanan, Goa
+Salog, Goa
+San Benito, Goa
+San Isidro, Goa
+San Isidro West, Goa
+San Jose, Goa
+San Juan Bautista, Goa
+San Juan Evangelista, Goa
+San Pedro, Goa
+Scout Fuentebella, Goa
+Tabgon, Goa
+Tagongtong, Goa
+Tamban, Goa
+Taytay, Goa
+Antipolo, Iriga
+Cristo Rey, Iriga
+Del Rosario, Iriga
+Francia, Iriga
+La Anunciacion, Iriga
+La Medalla, Iriga
+La Purisima, Iriga
+La Trinidad, Iriga
+Niño Jesus, Iriga
+Perpetual Help, Iriga
+Sagrada, Iriga
+Salvacion, Iriga
+San Agustin, Iriga
+San Andres, Iriga
+San Antonio, Iriga
+San Francisco, Iriga
+San Isidro, Iriga
+San Jose, Iriga
+San Juan, Iriga
+San Miguel, Iriga
+San Nicolas, Iriga
+San Pedro, Iriga
+San Rafael, Iriga
+San Ramon, Iriga
+San Roque, Iriga
+San Vicente Norte, Iriga
+San Vicente Sur, Iriga
+Santa Cruz Norte, Iriga
+Santa Cruz Sur, Iriga
+Santa Elena, Iriga
+Santa Isabel, Iriga
+Santa Maria, Iriga
+Santa Teresita, Iriga
+Santiago, Iriga
+Santo Domingo, Iriga
+Santo Niño, Iriga
+Agosais, Lagonoy
+Agpo-Camagong-Tabog, Lagonoy
+Amoguis, Lagonoy
+Balaton, Lagonoy
+Binanuahan, Lagonoy
+Bocogan, Lagonoy
+Burabod, Lagonoy
+Cabotonan, Lagonoy
+Dahat, Lagonoy
+Del Carmen, Lagonoy
+Gimagtocon, Lagonoy
+Ginorangan, Lagonoy
+Gubat, Lagonoy
+Guibahoy, Lagonoy
+Himanag, Lagonoy
+Kinahologan, Lagonoy
+Loho, Lagonoy
+Manamoc, Lagonoy
+Mangogon, Lagonoy
+Mapid, Lagonoy
+Olas, Lagonoy
+Omalo, Lagonoy
+Panagan, Lagonoy
+Panicuan, Lagonoy
+Pinamihagan, Lagonoy
+San Francisco, Lagonoy
+San Isidro, Lagonoy
+San Isidro Norte, Lagonoy
+San Isidro Sur, Lagonoy
+San Rafael, Lagonoy
+San Ramon, Lagonoy
+San Roque, Lagonoy
+San Sebastian, Lagonoy
+San Vicente, Lagonoy
+Santa Cruz, Lagonoy
+Santa Maria, Lagonoy
+Saripongpong, Lagonoy
+Sipaco, Lagonoy
+Aslong, Libmanan
+Awayan, Libmanan
+Bagacay, Libmanan
+Bagadion, Libmanan
+Bagamelon, Libmanan
+Bagumbayan, Libmanan
+Bahao, Libmanan
+Bahay, Libmanan
+Begajo Norte, Libmanan
+Begajo Sur, Libmanan
+Beguito Nuevo, Libmanan
+Beguito Viejo, Libmanan
+Bikal, Libmanan
+Busak, Libmanan
+Caima, Libmanan
+Calabnigan, Libmanan
+Camambugan, Libmanan
+Cambalidio, Libmanan
+Candami, Libmanan
+Candato, Libmanan
+Cawayan, Libmanan
+Concepcion, Libmanan
+Cuyapi, Libmanan
+Danawan, Libmanan
+Duang Niog, Libmanan
+Handong, Libmanan
+Ibid, Libmanan
+Inalahan, Libmanan
+Labao, Libmanan
+Libod I, Libmanan
+Libod II, Libmanan
+Loba-loba, Libmanan
+Mabini, Libmanan
+Malansad Nuevo, Libmanan
+Malansad Viejo, Libmanan
+Malbogon, Libmanan
+Malinao, Libmanan
+Mambalite, Libmanan
+Mambayawas, Libmanan
+Mambulo Nuevo, Libmanan
+Mambulo Viejo, Libmanan
+Mancawayan, Libmanan
+Mandacanan, Libmanan
+Mantalisay, Libmanan
+Padlos, Libmanan
+Pag-oring Nuevo, Libmanan
+Pag-oring Viejo, Libmanan
+Palangon, Libmanan
+Palong, Libmanan
+Patag, Libmanan
+Planza, Libmanan
+Poblacion, Libmanan
+Potot, Libmanan
+Puro-Batia, Libmanan
+Rongos, Libmanan
+Salvacion, Libmanan
+San Isidro, Libmanan
+San Juan, Libmanan
+San Pablo, Libmanan
+San Vicente, Libmanan
+Sibujo, Libmanan
+Sigamot, Libmanan
+Station-Church Site, Libmanan
+Taban-Fundado, Libmanan
+Tampuhan, Libmanan
+Tanag, Libmanan
+Tarum, Libmanan
+Tinalmud Nuevo, Libmanan
+Tinalmud Viejo, Libmanan
+Tinangkihan, Libmanan
+Udoc, Libmanan
+Umalo, Libmanan
+Uson, Libmanan
+Villadima, Libmanan
+Villasocorro, Libmanan
+Alleomar, Lupi
+Bagangan Sr., Lupi
+Bagong Sikat, Lupi
+Bangon, Lupi
+Barrera Jr., Lupi
+Barrera Sr., Lupi
+Bel-Cruz, Lupi
+Belwang, Lupi
+Buenasuerte, Lupi
+Bulawan Jr., Lupi
+Bulawan Sr., Lupi
+Cabutagan, Lupi
+Casay, Lupi
+Colacling, Lupi
+Cristo Rey, Lupi
+Del Carmen, Lupi
+Haguimit, Lupi
+Haluban, Lupi
+Kaibigan, Lupi
+La Purisima, Lupi
+Lourdes, Lupi
+Mangcawayan, Lupi
+Napolidan, Lupi
+Poblacion, Lupi
+Polantuna, Lupi
+Sagrada, Lupi
+Salvacion, Lupi
+San Isidro, Lupi
+San Jose, Lupi
+San Pedro, Lupi
+San Rafael Norte, Lupi
+San Rafael Sur, Lupi
+San Ramon, Lupi
+San Vicente, Lupi
+Sooc, Lupi
+Tanawan, Lupi
+Tapi, Lupi
+Tible, Lupi
+Barobaybay, Magarao
+Bell, Magarao
+Carangcang, Magarao
+Carigsa, Magarao
+Casuray, Magarao
+Monserrat, Magarao
+Ponong, Magarao
+San Francisco, Magarao
+San Isidro, Magarao
+San Juan, Magarao
+San Miguel, Magarao
+San Pantaleon, Magarao
+Santa Lucia, Magarao
+Santa Rosa, Magarao
+Santo Tomas, Magarao
+Alimbuyog, Milaor
+Amparado, Milaor
+Balagbag, Milaor
+Borongborongan, Milaor
+Cabugao, Milaor
+Capucnasan, Milaor
+Dalipay, Milaor
+Del Rosario, Milaor
+Flordeliz, Milaor
+Lipot, Milaor
+Mayaopayawan, Milaor
+Maycatmon, Milaor
+Maydaso, Milaor
+San Antonio, Milaor
+San Jose, Milaor
+San Miguel, Milaor
+San Roque, Milaor
+San Vicente, Milaor
+Santo Domingo, Milaor
+Tarusanan, Milaor
+Antipolo, Minalabac
+Bagolatao, Minalabac
+Bagongbong, Minalabac
+Baliuag Nuevo, Minalabac
+Baliuag Viejo, Minalabac
+Catanusan, Minalabac
+Del Carmen-Del Rosario, Minalabac
+Del Socorro, Minalabac
+Hamoraon, Minalabac
+Hobo, Minalabac
+Irayang Solong, Minalabac
+Magadap, Minalabac
+Malitbog, Minalabac
+Manapao, Minalabac
+Mataoroc, Minalabac
+Sagrada, Minalabac
+Salingogon, Minalabac
+San Antonio, Minalabac
+San Felipe-Santiago, Minalabac
+San Francisco, Minalabac
+San Jose, Minalabac
+San Juan-San Lorenzo, Minalabac
+Taban, Minalabac
+Tariric, Minalabac
+Timbang, Minalabac
+Angustia, Nabua
+Antipolo Old, Nabua
+Antipolo Young, Nabua
+Aro-aldao, Nabua
+Bustrac, Nabua
+Dolorosa, Nabua
+Duran, Nabua
+Inapatan, Nabua
+La Opinion, Nabua
+La Purisima, Nabua
+Lourdes Old, Nabua
+Lourdes Young, Nabua
+Malawag, Nabua
+Paloyon Oriental, Nabua
+Paloyon Proper, Nabua
+Salvacion Que Gatos, Nabua
+San Antonio, Nabua
+San Antonio Ogbon, Nabua
+San Esteban, Nabua
+San Francisco, Nabua
+San Isidro, Nabua
+San Isidro Inapatan, Nabua
+San Jose, Nabua
+San Juan, Nabua
+San Luis, Nabua
+San Miguel, Nabua
+San Nicolas, Nabua
+San Roque, Nabua
+San Roque Madawon, Nabua
+San Roque Sagumay, Nabua
+San Vicente Gorong-Gorong, Nabua
+San Vicente Ogbon, Nabua
+Santa Barbara, Nabua
+Santa Cruz, Nabua
+Santa Elena Baras, Nabua
+Santa Lucia Baras, Nabua
+Santiago Old, Nabua
+Santiago Young, Nabua
+Santo Domingo, Nabua
+Tandaay, Nabua
+Topas Proper, Nabua
+Topas Sogod, Nabua
+Abella, Naga
+Bagumbayan Norte, Naga
+Bagumbayan Sur, Naga
+Balatas, Naga
+Calauag, Naga
+Cararayan, Naga
+Carolina, Naga
+Concepcion Grande, Naga
+Concepcion Pequeña, Naga
+Dayangdang, Naga
+Del Rosario, Naga
+Dinaga, Naga
+Igualdad Interior, Naga
+Lerma, Naga
+Liboton, Naga
+Mabolo, Naga
+Pacol, Naga
+Panicuason, Naga
+Peñafrancia, Naga
+Sabang, Naga
+San Felipe, Naga
+San Francisco, Naga
+San Isidro, Naga
+Santa Cruz, Naga
+Tabuco, Naga
+Tinago, Naga
+Triangulo, Naga
+Ayugan, Ocampo
+Cabariwan, Ocampo
+Cagmanaba, Ocampo
+Del Rosario, Ocampo
+Gatbo, Ocampo
+Guinaban, Ocampo
+Hanawan, Ocampo
+Hibago, Ocampo
+La Purisima Nuevo, Ocampo
+May-ogob, Ocampo
+New Moriones, Ocampo
+Old Moriones, Ocampo
+Pinit, Ocampo
+Poblacion Central, Ocampo
+Poblacion East, Ocampo
+Poblacion West, Ocampo
+Salvacion, Ocampo
+San Antonio, Ocampo
+San Francisco, Ocampo
+San Jose Oras, Ocampo
+San Roque Commonal, Ocampo
+San Vicente, Ocampo
+Santa Cruz, Ocampo
+Santo Niño, Ocampo
+Villaflorida, Ocampo
+Batang, Pamplona
+Burabod, Pamplona
+Cagbibi, Pamplona
+Cagbunga, Pamplona
+Calawat, Pamplona
+Del Rosario, Pamplona
+Patong, Pamplona
+Poblacion, Pamplona
+Salvacion, Pamplona
+San Gabriel, Pamplona
+San Isidro, Pamplona
+San Rafael, Pamplona
+San Ramon, Pamplona
+San Vicente, Pamplona
+Tambo, Pamplona
+Tampadong, Pamplona
+Veneracion, Pamplona
+Antipolo, Pasacao
+Bagong Silang, Pasacao
+Bahay, Pasacao
+Balogo, Pasacao
+Caranan, Pasacao
+Cuco, Pasacao
+Dalupaon, Pasacao
+Hubo, Pasacao
+Itulan, Pasacao
+Macad, Pasacao
+Odicon, Pasacao
+Quitang, Pasacao
+Salvacion, Pasacao
+San Antonio, Pasacao
+San Cirilo, Pasacao
+Santa Rosa del Norte, Pasacao
+Santa Rosa del Sur, Pasacao
+Tilnac, Pasacao
+Tinalmud, Pasacao
+Anayan, Pili
+Bagong Sirang, Pili
+Binanwaanan, Pili
+Binobong, Pili
+Cadlan, Pili
+Caroyroyan, Pili
+Curry, Pili
+Del Rosario, Pili
+Himaao, Pili
+La Purisima, Pili
+New San Roque, Pili
+Old San Roque, Pili
+Palestina, Pili
+Pawili, Pili
+Sagrada, Pili
+Sagurong, Pili
+San Agustin, Pili
+San Antonio, Pili
+San Isidro, Pili
+San Jose, Pili
+San Juan, Pili
+San Vicente, Pili
+Santiago, Pili
+Santo Niño, Pili
+Tagbong, Pili
+Tinangis, Pili
+Ayugao, Presentacion
+Bagong Sirang, Presentacion
+Baliguian, Presentacion
+Bantugan, Presentacion
+Bicalen, Presentacion
+Bitaogan, Presentacion
+Buenavista, Presentacion
+Bulalacao, Presentacion
+Cagnipa, Presentacion
+Lagha, Presentacion
+Lidong, Presentacion
+Liwacsa, Presentacion
+Maangas, Presentacion
+Pagsangahan, Presentacion
+Patrocinio, Presentacion
+Pili, Presentacion
+Santa Maria, Presentacion
+Tanawan, Presentacion
+Agao-ao, Ragay
+Agrupacion, Ragay
+Amomokpok, Ragay
+Apad, Ragay
+Apale, Ragay
+Banga Caves, Ragay
+Baya, Ragay
+Binahan Proper, Ragay
+Binahan Upper, Ragay
+Buenasuerte, Ragay
+Cabadisan, Ragay
+Cabinitan, Ragay
+Cabugao, Ragay
+Caditaan, Ragay
+Cale, Ragay
+Catabangan Proper, Ragay
+F. Simeon, Ragay
+Godofredo Reyes Sr., Ragay
+Inandawa, Ragay
+Laguio, Ragay
+Lanipga-Cawayan, Ragay
+Liboro, Ragay
+Lohong, Ragay
+Lower Omon, Ragay
+Lower Santa Cruz, Ragay
+Panaytayan, Ragay
+Panaytayan Nuevo, Ragay
+Patalunan, Ragay
+Poblacion Ilaod, Ragay
+Poblacion Iraya, Ragay
+Port Junction Norte, Ragay
+Port Junction Sur, Ragay
+Salvacion, Ragay
+Samay, Ragay
+San Rafael, Ragay
+Tagbac, Ragay
+Upper Omon, Ragay
+Upper Santa Cruz, Ragay
+Aniog, Sagñay
+Atulayan, Sagñay
+Bongalon, Sagñay
+Buracan, Sagñay
+Catalotoan, Sagñay
+Del Carmen, Sagñay
+Kilantaao, Sagñay
+Kilomaon, Sagñay
+Mabca, Sagñay
+Minadongjol, Sagñay
+Nato, Sagñay
+Patitinan, Sagñay
+San Antonio, Sagñay
+San Isidro, Sagñay
+San Roque, Sagñay
+Santo Niño, Sagñay
+Sibaguan, Sagñay
+Tinorongan, Sagñay
+Turague, Sagñay
+Alianza, San Fernando
+Beberon, San Fernando
+Bical, San Fernando
+Bocal, San Fernando
+Bonifacio, San Fernando
+Buenavista, San Fernando
+Calascagas, San Fernando
+Cotmo, San Fernando
+Daculang Tubig, San Fernando
+Del Pilar, San Fernando
+Grijalvo, San Fernando
+Gñaran, San Fernando
+Lupi, San Fernando
+Maragñi, San Fernando
+Pamukid, San Fernando
+Pinamasagan, San Fernando
+Pipian, San Fernando
+Planza, San Fernando
+Rizal, San Fernando
+San Joaquin, San Fernando
+Santa Cruz, San Fernando
+Tagpocol, San Fernando
+Adiangao, San Jose
+Bagacay, San Jose
+Bahay, San Jose
+Boclod, San Jose
+Calalahan, San Jose
+Calawit, San Jose
+Camagong, San Jose
+Catalotoan, San Jose
+Danlog, San Jose
+Del Carmen, San Jose
+Dolo, San Jose
+Kinalansan, San Jose
+Mampirao, San Jose
+Manzana, San Jose
+Minoro, San Jose
+Palale, San Jose
+Ponglon, San Jose
+Pugay, San Jose
+Sabang, San Jose
+Salogon, San Jose
+San Antonio, San Jose
+San Juan, San Jose
+San Vicente, San Jose
+Santa Cruz, San Jose
+Soledad, San Jose
+Tagas, San Jose
+Tambangan, San Jose
+Telegrafo, San Jose
+Tominawog, San Jose
+Aldezar, Sipocot
+Alteza, Sipocot
+Anib, Sipocot
+Awayan, Sipocot
+Azucena, Sipocot
+Bagong Sirang, Sipocot
+Binahian, Sipocot
+Bolo Norte, Sipocot
+Bolo Sur, Sipocot
+Bulan, Sipocot
+Bulawan, Sipocot
+Cabuyao, Sipocot
+Caima, Sipocot
+Calagbangan, Sipocot
+Calampinay, Sipocot
+Carayrayan, Sipocot
+Cotmo, Sipocot
+Gabi, Sipocot
+Gaongan, Sipocot
+Impig, Sipocot
+Lipilip, Sipocot
+Lubigan Jr., Sipocot
+Lubigan Sr., Sipocot
+Malaguico, Sipocot
+Malubago, Sipocot
+Manangle, Sipocot
+Mangapo, Sipocot
+Mangga, Sipocot
+Manlubang, Sipocot
+Mantila, Sipocot
+North Centro, Sipocot
+North Villazar, Sipocot
+Sagrada Familia, Sipocot
+Salanda, Sipocot
+Salvacion, Sipocot
+San Isidro, Sipocot
+San Vicente, Sipocot
+Serranzana, Sipocot
+South Centro, Sipocot
+South Villazar, Sipocot
+Taisan, Sipocot
+Tara, Sipocot
+Tible, Sipocot
+Tula-tula, Sipocot
+Vigaan, Sipocot
+Yabo, Sipocot
+Bagong Sirang, Siruma
+Bahao, Siruma
+Boboan, Siruma
+Butawanan, Siruma
+Cabugao, Siruma
+Fundado, Siruma
+Homestead, Siruma
+La Purisima, Siruma
+Mabuhay, Siruma
+Malaconini, Siruma
+Matandang Siruma, Siruma
+Nalayahan, Siruma
+Pamintan-Bantilan, Siruma
+Pinitan, Siruma
+Poblacion, Siruma
+Salvacion, Siruma
+San Andres, Siruma
+San Ramon, Siruma
+Sulpa, Siruma
+Tandoc, Siruma
+Tongo-Bantigue, Siruma
+Vito, Siruma
+Abo, Tigaon
+Cabalinadan, Tigaon
+Caraycayon, Tigaon
+Casuna, Tigaon
+Consocep, Tigaon
+Coyaoyao, Tigaon
+Gaao, Tigaon
+Gingaroy, Tigaon
+Gubat, Tigaon
+Huyonhuyon, Tigaon
+Libod, Tigaon
+Mabalodbalod, Tigaon
+May-anao, Tigaon
+Panagan, Tigaon
+Poblacion, Tigaon
+Salvacion, Tigaon
+San Antonio, Tigaon
+San Francisco, Tigaon
+San Miguel, Tigaon
+San Rafael, Tigaon
+Talojongon, Tigaon
+Tinawagan, Tigaon
+Vinagre, Tigaon
+Agay-ayan, Tinambac
+Antipolo, Tinambac
+Bagacay, Tinambac
+Banga, Tinambac
+Bani, Tinambac
+Bataan, Tinambac
+Binalay, Tinambac
+Bolaobalite, Tinambac
+Buenavista, Tinambac
+Buyo, Tinambac
+Cagliliog, Tinambac
+Caloco, Tinambac
+Camagong, Tinambac
+Canayonan, Tinambac
+Cawaynan, Tinambac
+Daligan, Tinambac
+Filarca, Tinambac
+La Medalla, Tinambac
+La Purisima, Tinambac
+Lupi, Tinambac
+Magsaysay, Tinambac
+Magtang, Tinambac
+Mananao, Tinambac
+New Caaluan, Tinambac
+Olag Grande, Tinambac
+Olag Pequeño, Tinambac
+Old Caaluan, Tinambac
+Pag-asa, Tinambac
+Pantat, Tinambac
+Sagrada, Tinambac
+Salvacion, Tinambac
+Salvacion Poblacion, Tinambac
+San Antonio, Tinambac
+San Isidro, Tinambac
+San Jose, Tinambac
+San Pascual, Tinambac
+San Ramon, Tinambac
+San Roque, Tinambac
+San Vicente, Tinambac
+Santa Cruz, Tinambac
+Sogod, Tinambac
+Tambang, Tinambac
+Tierra Nevada, Tinambac
+Union, Tinambac
