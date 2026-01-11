@@ -13,7 +13,7 @@ const notificationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: false, // Optional during migration, will be required for new notifications
-    index: true
+    
   },
   
   // DEPRECATED: Legacy string ID (keep for migration)
@@ -21,7 +21,7 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     required: false, // Make optional for new notifications
     trim: true,
-    index: true
+    
   },
   
   // DEPRECATED: Legacy role enum (keep for migration)
@@ -37,7 +37,7 @@ const notificationSchema = new mongoose.Schema({
     required: false, // Make optional (event-only notifications)
     trim: true,
     ref: 'EventRequest',
-    index: true
+    
   },
   
   // Event reference
@@ -46,7 +46,7 @@ const notificationSchema = new mongoose.Schema({
     required: false, // Make optional (request-only notifications)
     trim: true,
     ref: 'Event',
-    index: true
+    
   },
   Title: {
     type: String,
@@ -94,8 +94,7 @@ const notificationSchema = new mongoose.Schema({
       'NewMessage',           // New chat message received
       'MessageRead'           // Message marked as read
     ],
-    required: true,
-    index: true
+    required: true
   },
   IsRead: {
     type: Boolean,
@@ -142,7 +141,7 @@ const notificationSchema = new mongoose.Schema({
   batchId: {
     type: String,
     trim: true,
-    index: true
+    
   },
   
   // Chat-specific fields (keep for backward compatibility)

@@ -4,7 +4,6 @@ const roleSchema = new mongoose.Schema({
   code: {
     type: String,
     required: true,
-    unique: true,
     trim: true,
     lowercase: true
   },
@@ -26,7 +25,6 @@ const roleSchema = new mongoose.Schema({
     type: Number,
     required: true,
     default: 20,
-    index: true,
     min: 20,
     max: 100
   },

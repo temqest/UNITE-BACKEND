@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const registrationCodeSchema = new mongoose.Schema({
-  Code: { type: String, required: true, unique: true, trim: true },
+  Code: { type: String, required: true, trim: true },
   Coordinator_ID: { type: String, required: true, trim: true, ref: 'Coordinator' },
   District_ID: { type: String, required: true, trim: true, ref: 'District' },
   Max_Uses: { type: Number, required: true, default: 1, min: 1 },

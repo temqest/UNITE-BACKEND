@@ -6,7 +6,7 @@ const eventStaffSchema = new mongoose.Schema({
     required: true,
     trim: true,
     ref: 'Event',
-    index: true // Add index for faster queries
+    
   },
   Staff_FullName: {
     type: String,
