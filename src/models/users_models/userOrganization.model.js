@@ -27,7 +27,7 @@ const userOrganizationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    index: true
+    
   },
   
   // Organization reference
@@ -35,7 +35,7 @@ const userOrganizationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
     required: true,
-    index: true
+    
   },
   
   // Role within the organization (e.g., 'coordinator', 'member', 'admin')
@@ -50,7 +50,7 @@ const userOrganizationSchema = new mongoose.Schema({
   isPrimary: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
   
   // User who assigned this organization (admin/system)
@@ -71,14 +71,14 @@ const userOrganizationSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     required: false,
-    index: true
+    
   },
   
   // Active status (for soft deletion)
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   }
 }, {
   timestamps: true

@@ -20,18 +20,16 @@ const organizationSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    index: true
+    
   },
   
   // Unique code (slug-based, e.g., 'red-cross-bicol', 'naga-blood-bank')
   code: {
     type: String,
     required: false,
-    unique: true,
-    sparse: true, // Allows multiple null values
     trim: true,
     lowercase: true,
-    index: true
+    
   },
   
   // Organization type
@@ -39,7 +37,7 @@ const organizationSchema = new mongoose.Schema({
     type: String,
     enum: ['LGU', 'NGO', 'Hospital', 'BloodBank', 'RedCross', 'Non-LGU', 'Other'],
     required: true,
-    index: true
+    
   },
   
   // Description of the organization
@@ -73,7 +71,7 @@ const organizationSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   },
   
   // Flexible metadata for custom organization-specific data

@@ -27,18 +27,15 @@ const coverageAreaSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    index: true
+    
   },
   
   // Unique code (slug-based, e.g., 'camarines-norte-unified', 'naga-iriga')
   code: {
     type: String,
     required: false,
-    unique: true,
-    sparse: true, // Allows multiple null values
     trim: true,
-    lowercase: true,
-    index: true
+    lowercase: true
   },
   
   // Description of the coverage area
@@ -61,14 +58,14 @@ const coverageAreaSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
     required: false,
-    index: true
+    
   },
   
   // Active status
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   },
   
   // Metadata for additional configuration

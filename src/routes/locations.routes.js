@@ -20,6 +20,15 @@ const { validateCreateLocation } = require('../validators/utility_validators/loc
 router.post('/locations', authenticate, requirePermission('location', 'create'), validateCreateLocation, async (req, res, next) => {
   try {
     const location = await locationService.createLocation(req.validatedData || req.body);
+    
+    // Clear service-level tree cache after creating a location
+    try {
+      const locationServiceInstance = require('../services/utility_services/location.service');
+      locationServiceInstance.clearTreeCache();
+    } catch (cacheError) {
+      console.warn(`[POST /locations] Failed to clear tree cache: ${cacheError.message}`);
+    }
+    
     return res.status(201).json({ success: true, data: location });
   } catch (error) {
     next(error);
@@ -28,12 +37,23 @@ router.post('/locations', authenticate, requirePermission('location', 'create'),
 
 /**
  * @route   GET /api/locations/tree
- * @desc    Get location tree (hierarchical structure)
+ * @desc    Get location tree (hierarchical structure) - OPTIMIZED with caching
  * @access  Private (requires location.read permission)
  */
 router.get('/locations/tree', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
   try {
-    const { rootId, includeInactive, maxDepth } = req.query;
+    const { rootId, includeInactive, maxDepth, useCache } = req.query;
+    
+    // If no rootId, use optimized complete tree method
+    if (!rootId) {
+      const tree = await locationService.getCompleteTreeOptimized({
+        includeInactive: includeInactive === 'true',
+        useCache: useCache !== 'false' // Default to using cache
+      });
+      return res.status(200).json({ success: true, data: tree });
+    }
+    
+    // For specific rootId, use the original method (but consider optimizing this too)
     const tree = await locationService.getLocationTree(
       rootId || null,
       { includeInactive: includeInactive === 'true', maxDepth: maxDepth ? parseInt(maxDepth) : null }
@@ -101,13 +121,49 @@ router.get('/locations/:locationId/descendants', authenticate, requirePermission
 
 /**
  * @route   GET /api/locations/provinces
- * @desc    Get all provinces (using new Location model)
+ * @desc    Get all provinces (OPTIMIZED - lightweight, no nested children)
  * @access  Private (requires location.read permission)
  */
 router.get('/locations/provinces', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
   try {
-    const provinces = await locationService.getProvinces({ includeInactive: req.query.includeInactive === 'true' });
+    const provinces = await locationService.getProvincesOptimized({ 
+      includeInactive: req.query.includeInactive === 'true' 
+    });
     return res.status(200).json({ success: true, data: provinces });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/locations/provinces/:provinceId/tree
+ * @desc    Get single province tree with ALL descendants (OPTIMIZED - single aggregation query)
+ * @access  Private (requires location.read permission)
+ */
+router.get('/locations/provinces/:provinceId/tree', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
+  try {
+    const tree = await locationService.getProvinceTreeOptimized(req.params.provinceId, {
+      includeInactive: req.query.includeInactive === 'true'
+    });
+    return res.status(200).json({ success: true, data: tree });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/locations/lazy-children/:parentId
+ * @desc    Get immediate children of a location (OPTIMIZED - for lazy loading/progressive expansion)
+ * @access  Private (requires location.read permission)
+ */
+router.get('/locations/lazy-children/:parentId', authenticate, requirePermission('location', 'read'), async (req, res, next) => {
+  try {
+    const { types } = req.query;
+    const children = await locationService.getLocationChildrenOptimized(req.params.parentId, {
+      includeInactive: req.query.includeInactive === 'true',
+      types: types ? types.split(',') : null
+    });
+    return res.status(200).json({ success: true, data: children });
   } catch (error) {
     next(error);
   }
@@ -237,10 +293,15 @@ router.put('/locations/:locationId', authenticate, requirePermission('location',
     // Rebuild cache after successful update
     try {
       const locationCache = require('../utils/locationCache');
+      const locationServiceInstance = require('../services/utility_services/location.service');
+      
       if (locationCache.isCacheReady()) {
         await locationCache.rebuildCache(Location);
         console.log(`[PUT /locations] Location cache rebuilt after updating location: ${location.name}`);
       }
+      
+      // Clear service-level tree cache
+      locationServiceInstance.clearTreeCache();
     } catch (cacheError) {
       console.warn(`[PUT /locations] Failed to rebuild cache: ${cacheError.message}`);
       // Don't fail the request due to cache rebuild failure
@@ -268,10 +329,15 @@ router.delete('/locations/:locationId', authenticate, requirePermission('locatio
     // Rebuild cache after successful soft delete
     try {
       const locationCache = require('../utils/locationCache');
+      const locationServiceInstance = require('../services/utility_services/location.service');
+      
       if (locationCache.isCacheReady()) {
         await locationCache.rebuildCache(Location);
         console.log(`[DELETE /locations] Location cache rebuilt after deleting location: ${location.name}`);
       }
+      
+      // Clear service-level tree cache
+      locationServiceInstance.clearTreeCache();
     } catch (cacheError) {
       console.warn(`[DELETE /locations] Failed to rebuild cache: ${cacheError.message}`);
       // Don't fail the request due to cache rebuild failure
