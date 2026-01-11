@@ -14,8 +14,6 @@ const userSchema = new mongoose.Schema({
   userId: {
     type: String,
     required: false, // Optional for new users, required for migrated users
-    unique: true,
-    sparse: true, // Allows multiple null values
     trim: true
   },
   
@@ -23,10 +21,9 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
-    unique: true,
     trim: true,
     lowercase: true,
-    index: true
+    
   },
   
   password: {
@@ -72,7 +69,7 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
     required: false,
-    index: true
+    
   },
   
   // Additional organization details (from Stakeholder model)
@@ -99,7 +96,6 @@ const userSchema = new mongoose.Schema({
     type: Number,
     required: true,
     default: 20,
-    index: true,
     min: 20,
     max: 100
   },
@@ -247,14 +243,14 @@ const userSchema = new mongoose.Schema({
   isSystemAdmin: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
   
   // Account Status
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   },
   
   lastLoginAt: {

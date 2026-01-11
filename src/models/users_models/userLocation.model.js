@@ -26,7 +26,7 @@ const userLocationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    index: true
+    
   },
   
   // Location reference
@@ -34,7 +34,7 @@ const userLocationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
     required: true,
-    index: true
+    
   },
   
   // Coverage scope
@@ -43,14 +43,14 @@ const userLocationSchema = new mongoose.Schema({
     enum: ['exact', 'descendants', 'ancestors', 'all'],
     required: true,
     default: 'exact',
-    index: true
+    
   },
   
   // Primary location flag (user's main/primary location assignment)
   isPrimary: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
   
   // Assignment timestamp
@@ -71,14 +71,14 @@ const userLocationSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     required: false,
-    index: true
+    
   },
   
   // Active status (for soft deletion)
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   }
 }, {
   timestamps: true

@@ -154,7 +154,7 @@ const eventRequestSchema = new mongoose.Schema({
     required: true,
     unique: true,
     trim: true,
-    index: true
+    
   },
   
   Event_ID: {
@@ -162,7 +162,7 @@ const eventRequestSchema = new mongoose.Schema({
     required: false, // Optional - will be generated when request is approved and event is created
     trim: true,
     ref: 'Event',
-    index: true
+    
   },
   
   // Requester information (ObjectId reference to User)
@@ -171,7 +171,7 @@ const eventRequestSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId, 
       ref: 'User', 
       required: true,
-      index: true
+      
     },
     name: { 
       type: String, 
@@ -197,31 +197,31 @@ const eventRequestSchema = new mongoose.Schema({
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
-    index: true
+    
   },
   
   coverageAreaId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'CoverageArea',
-    index: true
+    
   },
   
   municipalityId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
-    index: true
+    
   },
   
   district: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
-    index: true
+    
   },
   
   province: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
-    index: true
+    
   },
   
   // Event details - all fields from Event model
@@ -304,7 +304,7 @@ const eventRequestSchema = new mongoose.Schema({
     enum: Object.values(REQUEST_STATES),
     required: true,
     default: REQUEST_STATES.PENDING_REVIEW,
-    index: true
+    
   },
   
   // Status history
@@ -329,7 +329,7 @@ const eventRequestSchema = new mongoose.Schema({
   eventId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Event',
-    index: true
+    
   },
   
   // Additional metadata

@@ -9,7 +9,11 @@ const locationCache = require('../../utils/locationCache');
 
 class LocationService {
   async getProvinces() {
-    return Location.find({ type: 'province' }).sort({ name: 1 });
+    // OPTIMIZATION: Use .lean() for read-only queries and .select() to project only needed fields
+    return Location.find({ type: 'province', isActive: true })
+      .select('_id name code type level province')
+      .lean()
+      .sort({ name: 1 });
   }
 
   async getDistrictsByProvince(provinceId) {
@@ -18,11 +22,22 @@ class LocationService {
       const districtIds = locationCache.getDistrictsByProvince(provinceId);
       if (districtIds.length > 0) {
         // Fetch full objects from DB using cached IDs
-        return Location.find({ _id: { $in: districtIds }, type: 'district', isActive: true }).sort({ name: 1 });
+        // OPTIMIZATION: Use .lean() and .select() for performance
+        return Location.find({ 
+          _id: { $in: districtIds }, 
+          type: 'district', 
+          isActive: true 
+        })
+          .select('_id name code type parent province level')
+          .lean()
+          .sort({ name: 1 });
       }
     }
     // Fallback to standard query if cache not ready
-    return Location.find({ type: 'district', province: provinceId }).sort({ name: 1 });
+    return Location.find({ type: 'district', province: provinceId, isActive: true })
+      .select('_id name code type parent province level')
+      .lean()
+      .sort({ name: 1 });
   }
 
   async getMunicipalitiesByDistrict(districtId) {
@@ -31,15 +46,30 @@ class LocationService {
       const munIds = locationCache.getMunicipalitiesByDistrict(districtId);
       if (munIds.length > 0) {
         // Fetch full objects from DB using cached IDs
-        return Location.find({ _id: { $in: munIds }, type: 'municipality', isActive: true }).sort({ name: 1 });
+        // OPTIMIZATION: Use .lean() and .select() for performance
+        return Location.find({ 
+          _id: { $in: munIds }, 
+          type: 'municipality', 
+          isActive: true 
+        })
+          .select('_id name code type parent province level')
+          .lean()
+          .sort({ name: 1 });
       }
     }
     // Fallback to standard query if cache not ready
-    return Location.find({ type: 'municipality', parent: districtId }).sort({ name: 1 });
+    return Location.find({ type: 'municipality', parent: districtId, isActive: true })
+      .select('_id name code type parent province level')
+      .lean()
+      .sort({ name: 1 });
   }
 
   async getAllMunicipalities() {
-    return Location.find({ type: 'municipality' }).sort({ name: 1 });
+    // OPTIMIZATION: Use .lean() for read-only queries
+    return Location.find({ type: 'municipality', isActive: true })
+      .select('_id name code type parent province level')
+      .lean()
+      .sort({ name: 1 });
   }
 
   async sendVerificationEmail(data) {

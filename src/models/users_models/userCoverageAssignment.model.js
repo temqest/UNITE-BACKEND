@@ -27,7 +27,7 @@ const userCoverageAssignmentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    index: true
+    
   },
   
   // Coverage area reference
@@ -35,14 +35,14 @@ const userCoverageAssignmentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'CoverageArea',
     required: true,
-    index: true
+    
   },
   
   // Primary coverage assignment flag (user's main/primary coverage)
   isPrimary: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
   
   // Auto-cover descendants flag
@@ -52,7 +52,7 @@ const userCoverageAssignmentSchema = new mongoose.Schema({
   autoCoverDescendants: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
   
   // User who assigned this coverage (admin/system)
@@ -73,14 +73,14 @@ const userCoverageAssignmentSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     required: false,
-    index: true
+    
   },
   
   // Active status (for soft deletion)
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   }
 }, {
   timestamps: true

@@ -6,7 +6,7 @@ const requestedItemSchema = new mongoose.Schema({
 }, { _id: false });
 
 const bloodBagRequestSchema = new mongoose.Schema({
-  Request_ID: { type: String, required: true, unique: true, trim: true },
+  Request_ID: { type: String, required: true, trim: true },
   Requester_ID: { type: String, required: true, trim: true },
   Requestee_ID: { type: String, required: true, trim: true },
   RequestedItems: { type: [requestedItemSchema], required: true },

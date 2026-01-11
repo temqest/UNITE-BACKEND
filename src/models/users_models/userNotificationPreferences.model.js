@@ -12,22 +12,21 @@ const userNotificationPreferencesSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    unique: true,
-    index: true
+    
   },
 
   // Global email notification toggle
   emailNotificationsEnabled: {
     type: Boolean,
     default: true,
-    index: true
+    
   },
 
   // Digest mode settings
   emailDigestMode: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
 
   emailDigestFrequency: {
@@ -63,7 +62,7 @@ const userNotificationPreferencesSchema = new mongoose.Schema({
   temporaryDigestMode: {
     type: Boolean,
     default: false,
-    index: true
+    
   },
 
   temporaryDigestUntil: {
@@ -98,7 +97,7 @@ const userNotificationPreferencesSchema = new mongoose.Schema({
   mutedUntil: {
     type: Date,
     required: false,
-    index: true
+    
   }
 }, {
   timestamps: true

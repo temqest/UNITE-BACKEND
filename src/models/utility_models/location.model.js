@@ -19,11 +19,8 @@ const locationSchema = new mongoose.Schema({
   code: {
     type: String,
     required: false,
-    unique: true,
-    sparse: true, // Allows multiple null values
     trim: true,
-    lowercase: true,
-    index: true
+    lowercase: true
   },
   
   // Display name (e.g., 'Camarines Sur', 'Naga City')
@@ -31,7 +28,7 @@ const locationSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    index: true
+    
   },
   
   // Location type
@@ -39,7 +36,7 @@ const locationSchema = new mongoose.Schema({
     type: String,
     enum: ['province', 'district', 'city', 'municipality', 'barangay', 'custom'],
     required: true,
-    index: true
+    
   },
   
   // Self-referencing parent location (optional for root/province level)
@@ -47,7 +44,7 @@ const locationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
     required: false,
-    index: true
+    
   },
   
   // Hierarchical level (informational, not enforced)
@@ -56,7 +53,7 @@ const locationSchema = new mongoose.Schema({
     type: Number,
     required: false,
     default: 0,
-    index: true
+    
   },
   
   // Denormalized province reference for efficient queries
@@ -65,7 +62,7 @@ const locationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
     required: false,
-    index: true
+    
   },
   
   // Official administrative code (optional)
@@ -107,7 +104,7 @@ const locationSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true,
-    index: true
+    
   }
 }, {
   timestamps: true

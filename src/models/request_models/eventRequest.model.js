@@ -156,17 +156,17 @@ const eventRequestSchema = new mongoose.Schema({
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
-    index: true
+    
   },
   coverageAreaId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'CoverageArea',
-    index: true
+    
   },
   municipalityId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Location',
-    index: true
+    
   },
   reviewer: reviewerSchema,
   creator: {
