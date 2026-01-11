@@ -1603,6 +1603,237 @@ class LocationService {
       throw new Error(`Failed to revoke user location: ${error.message}`);
     }
   }
+
+  // ============================================================================
+  // PERFORMANCE-OPTIMIZED LOCATION TREE METHODS
+  // ============================================================================
+
+  /**
+   * Get provinces only (optimized for initial load)
+   * Returns a minimal list of provinces without nested children
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} Array of provinces
+   */
+  async getProvincesOptimized(options = {}) {
+    const { includeInactive = false } = options;
+    
+    const query = { type: 'province' };
+    if (!includeInactive) {
+      query.isActive = true;
+    }
+
+    // Use .lean() for 30-50% performance boost (returns plain objects instead of Mongoose documents)
+    // Select only essential fields to reduce data transfer
+    return Location.find(query)
+      .select('_id name code type level isActive')
+      .lean()
+      .sort({ name: 1 })
+      .exec();
+  }
+
+  /**
+   * Get single province tree with ALL descendants using aggregation (NO recursion)
+   * This replaces the slow recursive _buildLocationTree method
+   * Performance: Single aggregation query instead of N queries
+   * @param {ObjectId} provinceId - Province ID
+   * @param {Object} options - Query options
+   * @returns {Promise<Object>} Province with nested children
+   */
+  async getProvinceTreeOptimized(provinceId, options = {}) {
+    const { includeInactive = false } = options;
+    const mongoose = require('mongoose');
+
+    // Validate provinceId
+    if (!mongoose.Types.ObjectId.isValid(provinceId)) {
+      throw new Error('Invalid province ID');
+    }
+
+    const province = await Location.findById(provinceId).lean();
+    if (!province) {
+      throw new Error('Province not found');
+    }
+
+    // Use aggregation pipeline for efficient tree building (single query)
+    const pipeline = [
+      // Start with all locations that are active (or all if includeInactive)
+      {
+        $match: includeInactive ? {} : { isActive: true }
+      },
+      // Add lookup to build parent-child relationships
+      {
+        $graphLookup: {
+          from: 'locations',
+          startWith: '$_id',
+          connectFromField: '_id',
+          connectToField: 'parent',
+          as: 'descendants',
+          maxDepth: 3,
+          depthField: 'depth'
+        }
+      },
+      // Match only the province we want
+      {
+        $match: { _id: new mongoose.Types.ObjectId(provinceId) }
+      },
+      // Project only needed fields
+      {
+        $project: {
+          _id: 1,
+          name: 1,
+          code: 1,
+          type: 1,
+          level: 1,
+          isActive: 1,
+          descendants: {
+            _id: 1,
+            name: 1,
+            code: 1,
+            type: 1,
+            parent: 1,
+            level: 1,
+            isActive: 1,
+            'metadata.isCity': 1
+          }
+        }
+      }
+    ];
+
+    const results = await Location.aggregate(pipeline);
+    
+    if (results.length === 0) {
+      return province; // Return province without children if aggregation fails
+    }
+
+    // Build hierarchical structure from flat descendants list
+    const provinceData = results[0];
+    const allLocations = [provinceData, ...provinceData.descendants];
+    
+    // Create a map for O(1) lookups
+    const locationMap = new Map();
+    allLocations.forEach(loc => {
+      locationMap.set(loc._id.toString(), { ...loc, children: [] });
+    });
+
+    // Build parent-child relationships
+    allLocations.forEach(loc => {
+      if (loc.parent) {
+        const parentId = loc.parent.toString();
+        const parent = locationMap.get(parentId);
+        if (parent) {
+          parent.children.push(locationMap.get(loc._id.toString()));
+        }
+      }
+    });
+
+    // Sort children at each level
+    const sortChildren = (node) => {
+      if (node.children && node.children.length > 0) {
+        node.children.sort((a, b) => a.name.localeCompare(b.name));
+        node.children.forEach(sortChildren);
+      }
+    };
+
+    const tree = locationMap.get(provinceId.toString());
+    if (tree) {
+      sortChildren(tree);
+      delete tree.descendants; // Remove the flat descendants array
+    }
+
+    return tree || province;
+  }
+
+  /**
+   * Get immediate children of a location (lazy loading)
+   * Optimized for progressive tree expansion
+   * @param {ObjectId} parentId - Parent location ID
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} Array of child locations
+   */
+  async getLocationChildrenOptimized(parentId, options = {}) {
+    const { includeInactive = false, types = null } = options;
+    const mongoose = require('mongoose');
+
+    // Validate parentId
+    if (!mongoose.Types.ObjectId.isValid(parentId)) {
+      throw new Error('Invalid parent ID');
+    }
+
+    const query = { 
+      parent: new mongoose.Types.ObjectId(parentId)
+    };
+
+    if (!includeInactive) {
+      query.isActive = true;
+    }
+
+    // Optionally filter by type (e.g., only districts or only municipalities)
+    if (types && Array.isArray(types) && types.length > 0) {
+      query.type = { $in: types };
+    }
+
+    // Use .lean() and select only needed fields for performance
+    return Location.find(query)
+      .select('_id name code type parent level isActive metadata.isCity')
+      .lean()
+      .sort({ name: 1 })
+      .exec();
+  }
+
+  /**
+   * Get complete location tree with all provinces and descendants (optimized)
+   * Uses caching and efficient aggregation
+   * WARNING: This can still be slow for very large datasets - prefer lazy loading
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} Array of province trees
+   */
+  async getCompleteTreeOptimized(options = {}) {
+    const { includeInactive = false, useCache = true } = options;
+
+    // Check in-memory cache first (5 minute TTL)
+    const cacheKey = `location-tree:${includeInactive ? 'all' : 'active'}`;
+    
+    if (useCache && this._treeCache && this._treeCache[cacheKey]) {
+      const cached = this._treeCache[cacheKey];
+      const now = Date.now();
+      if (now - cached.timestamp < 5 * 60 * 1000) { // 5 minutes
+        return cached.data;
+      }
+    }
+
+    // Get all provinces
+    const provinces = await this.getProvincesOptimized({ includeInactive });
+
+    // Build tree for each province in parallel (but limit concurrency)
+    const trees = [];
+    const BATCH_SIZE = 3; // Process 3 provinces at a time to avoid overwhelming DB
+    
+    for (let i = 0; i < provinces.length; i += BATCH_SIZE) {
+      const batch = provinces.slice(i, i + BATCH_SIZE);
+      const batchTrees = await Promise.all(
+        batch.map(province => this.getProvinceTreeOptimized(province._id, { includeInactive }))
+      );
+      trees.push(...batchTrees);
+    }
+
+    // Cache the result
+    if (!this._treeCache) {
+      this._treeCache = {};
+    }
+    this._treeCache[cacheKey] = {
+      data: trees,
+      timestamp: Date.now()
+    };
+
+    return trees;
+  }
+
+  /**
+   * Clear location tree cache
+   * Should be called after location CRUD operations
+   */
+  clearTreeCache() {
+    this._treeCache = {};
+  }
 }
 
 module.exports = new LocationService();

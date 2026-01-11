@@ -119,6 +119,12 @@ locationSchema.index({ level: 1, isActive: 1 });
 locationSchema.index({ 'metadata.isCity': 1 });
 locationSchema.index({ 'metadata.isCombined': 1 });
 
+// PERFORMANCE OPTIMIZED INDEXES for tree queries
+// These compound indexes significantly speed up hierarchical queries
+locationSchema.index({ parent: 1, isActive: 1, type: 1 }); // For finding active children of a parent
+locationSchema.index({ type: 1, isActive: 1, name: 1 }); // For finding all provinces/districts/municipalities
+locationSchema.index({ province: 1, type: 1, isActive: 1 }); // For finding locations within a province
+
 // Virtual for full path (e.g., "Camarines Sur > District I > Naga City")
 locationSchema.virtual('path').get(function() {
   // This would need to be populated or computed via a method
