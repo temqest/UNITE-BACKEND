@@ -186,7 +186,8 @@ const validateCreateOrganization = (req, res, next) => {
 
 const validateUpdateOrganization = (req, res, next) => {
   const { error, value } = updateOrganizationSchema.validate(req.body, {
-    abortEarly: false
+    abortEarly: false,
+    stripUnknown: true // drop fields like _id that should not be updated
   });
 
   if (error) {
