@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   calendarController,
+  calendarNoteController,
   eventDetailsController,
   eventOverviewController,
   eventStatisticsController
@@ -94,6 +95,41 @@ router.get('/calendar/week', authenticate, requirePermission('event', 'read'), a
 router.get('/calendar/day', authenticate, requirePermission('event', 'read'), async (req, res, next) => {
   try {
     await calendarController.getDayView(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== CALENDAR NOTES ROUTES ====================
+
+// Authenticated-only notes; public calendar must not expose notes
+router.get('/calendar/notes', authenticate, async (req, res, next) => {
+  try {
+    await calendarNoteController.list(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/calendar/notes', authenticate, async (req, res, next) => {
+  try {
+    await calendarNoteController.create(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/calendar/notes/:id', authenticate, async (req, res, next) => {
+  try {
+    await calendarNoteController.update(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/calendar/notes/:id', authenticate, async (req, res, next) => {
+  try {
+    await calendarNoteController.remove(req, res);
   } catch (error) {
     next(error);
   }

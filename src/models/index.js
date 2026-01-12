@@ -46,6 +46,7 @@ const SystemSettings = require('./utility_models/systemSettings.model');
 const SignUpRequest = require('./utility_models/signupRequest.model');
 const BloodBag = require('./utility_models/bloodbag.model');
 const EmailDailyLimit = require('./utility_models/emailDailyLimit.model');
+const CalendarNote = require('./utility_models/calendarNote.model');
 
 // ============================================
 // CHAT MODELS
@@ -199,6 +200,7 @@ module.exports = {
   SignUpRequest,
   BloodBag,
   EmailDailyLimit,
+  CalendarNote,
   
   // CHAT MODELS
   Message,
