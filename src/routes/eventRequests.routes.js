@@ -16,8 +16,10 @@ const {
   validateUpdateEventRequest,
   validateRequestId
 } = require('../validators/eventRequests_validators/eventRequest.validators');
+const { validateBatchEvents } = require('../validators/eventRequests_validators/batchEvent.validators');
 const { validateExecuteAction } = require('../validators/eventRequests_validators/requestAction.validators');
 const { cacheMiddleware, invalidateCache } = require('../middleware/cacheMiddleware');
+const requireAdminAuthority = require('../middleware/requireAdminAuthority');
 
 /**
  * @route   POST /api/event-requests
@@ -36,6 +38,31 @@ router.post(
       const userId = req.user?._id || req.user?.id;
       if (userId) {
         invalidateCache(userId.toString());
+      }
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @route   POST /api/event-requests/batch
+ * @desc    Create batch of events (admin only, bypasses request workflow)
+ * @access  Private (requires admin authority ≥ 80)
+ */
+router.post(
+  '/event-requests/batch',
+  authenticate,
+  requireAdminAuthority(),
+  validateBatchEvents,
+  async (req, res, next) => {
+    try {
+      await eventRequestController.createBatchEvents(req, res);
+      // Invalidate cache for this user's requests
+      const userId = req.user?._id || req.user?.id;
+      if (userId) {
+        invalidateCache(userId.toString());
+        invalidateCache(/event-requests\?/);
       }
     } catch (error) {
       next(error);

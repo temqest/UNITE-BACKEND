@@ -5,6 +5,7 @@
  */
 
 const eventRequestService = require('../../services/eventRequests_services/eventRequest.service');
+const batchEventService = require('../../services/eventRequests_services/batchEvent.service');
 const actionValidatorService = require('../../services/eventRequests_services/actionValidator.service');
 const permissionService = require('../../services/users_services/permission.service');
 const RequestStateService = require('../../services/eventRequests_services/requestState.service');
@@ -36,6 +37,54 @@ class EventRequestController {
         success: false,
         message: error.message || 'Failed to create event request',
         code: 'VALIDATION_ERROR'
+      });
+    }
+  }
+
+  /**
+   * Create batch of events (admin only)
+   * @route POST /api/event-requests/batch
+   */
+  async createBatchEvents(req, res) {
+    try {
+      const userId = req.user._id || req.user.id;
+      const validatedData = req.validatedData || req.body;
+      const eventsData = validatedData.events || [];
+
+      if (!eventsData || eventsData.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No events provided in batch',
+          code: 'VALIDATION_ERROR'
+        });
+      }
+
+      const result = await batchEventService.createBatchEvents(userId, eventsData);
+
+      // Determine response status based on results
+      const statusCode = result.failed === 0 ? 201 : 
+                        result.created > 0 ? 207 : // Multi-Status
+                        400;
+
+      res.status(statusCode).json({
+        success: result.failed === 0,
+        message: result.failed === 0 
+          ? `Successfully created ${result.created} event(s)`
+          : `Created ${result.created} event(s), ${result.failed} failed`,
+        data: {
+          created: result.created,
+          failed: result.failed,
+          total: eventsData.length,
+          events: result.events,
+          errors: result.errors
+        }
+      });
+    } catch (error) {
+      console.error('[EVENT REQUEST CONTROLLER] Batch create error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to create batch events',
+        code: 'BATCH_CREATE_ERROR'
       });
     }
   }

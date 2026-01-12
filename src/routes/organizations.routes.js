@@ -8,6 +8,7 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/authenticate');
 const { requirePermission } = require('../middleware/requirePermission');
+const requireAdminAuthority = require('../middleware/requireAdminAuthority');
 const organizationController = require('../controller/utility_controller/organization.controller');
 const { validateCreateOrganization, validateUpdateOrganization } = require('../validators/utility_validators/organization.validators');
 
@@ -18,7 +19,7 @@ const { validateCreateOrganization, validateUpdateOrganization } = require('../v
  */
 router.post('/organizations', 
   authenticate, 
-  requirePermission('system', 'settings'), 
+  requireAdminAuthority(),
   validateCreateOrganization, 
   organizationController.createOrganization.bind(organizationController)
 );
@@ -30,7 +31,7 @@ router.post('/organizations',
  */
 router.get('/organizations', 
   authenticate, 
-  requirePermission('user', 'read'), 
+  requireAdminAuthority(),
   organizationController.listOrganizations.bind(organizationController)
 );
 
@@ -41,7 +42,7 @@ router.get('/organizations',
  */
 router.get('/organizations/:id', 
   authenticate, 
-  requirePermission('user', 'read'), 
+  requireAdminAuthority(),
   organizationController.getOrganization.bind(organizationController)
 );
 
@@ -52,7 +53,7 @@ router.get('/organizations/:id',
  */
 router.put('/organizations/:id', 
   authenticate, 
-  requirePermission('system', 'settings'), 
+  requireAdminAuthority(),
   validateUpdateOrganization, 
   organizationController.updateOrganization.bind(organizationController)
 );
@@ -64,7 +65,7 @@ router.put('/organizations/:id',
  */
 router.delete('/organizations/:id', 
   authenticate, 
-  requirePermission('system', 'settings'), 
+  requireAdminAuthority(),
   organizationController.deleteOrganization.bind(organizationController)
 );
 
@@ -75,7 +76,7 @@ router.delete('/organizations/:id',
  */
 router.get('/organizations/:id/coverage-areas', 
   authenticate, 
-  requirePermission('user', 'read'), 
+  requireAdminAuthority(),
   organizationController.getOrganizationCoverageAreas.bind(organizationController)
 );
 
