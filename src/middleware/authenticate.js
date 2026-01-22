@@ -40,7 +40,9 @@ module.exports = function authenticate(req, res, next) {
     }
 
     const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.substring(7) : null;
+    const cookies = parseCookieString(req.headers.cookie || '');
+    const cookieToken = cookies.unite_token || null;
+    const token = header.startsWith('Bearer ') ? header.substring(7) : cookieToken;
 
     if (token) {
       const decoded = verifyToken(token);

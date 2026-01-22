@@ -1500,8 +1500,16 @@ class UserController {
       // Full user data should be fetched via /api/auth/me endpoint
       const displayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
 
-      // Set cookie as fallback (optional, for cookie-based auth)
-      // Cookie also uses minimal data for security
+      // Set HttpOnly cookies for server-side auth
+      // unite_token: signed JWT so requests succeed even if client storage is empty
+      // unite_user: minimal profile for legacy flows (id/email only)
+      res.cookie('unite_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 12 * 60 * 60 * 1000 // 12 hours
+      });
+
       const cookieData = JSON.stringify({
         id: user._id.toString(),
         email: user.email
