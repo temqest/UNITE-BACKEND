@@ -1152,27 +1152,15 @@ class LocationService {
     try {
       const { includeSelf = false, includeInactive = false, includeCitiesAsDistricts = true } = options;
 
-      const location = await Location.findById(locationId);
-      if (!location) {
-        throw new Error('Location not found');
-      }
+      // OPTIMIZED: Use findDescendantsOptimized() instead of recursive approach
+      // This uses MongoDB $graphLookup aggregation (single query) instead of N+1 queries
+      const descendants = await Location.findDescendantsOptimized(locationId, {
+        includeSelf,
+        includeInactive,
+        maxDepth: 10
+      });
 
-      const descendants = [];
-      if (includeSelf && (includeInactive || location.isActive)) {
-        descendants.push(location);
-      }
-
-      // Use the model's static method for recursive traversal
-      const children = await Location.findDescendants(locationId);
-      
-      // Filter by active status if needed
-      const filtered = includeInactive 
-        ? children 
-        : children.filter(loc => loc.isActive);
-
-      descendants.push(...filtered);
-
-      return descendants;
+      return descendants || [];
     } catch (error) {
       throw new Error(`Failed to get location descendants: ${error.message}`);
     }
