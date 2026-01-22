@@ -1665,7 +1665,8 @@ class UserController {
             description: r.description
           })),
           permissions,
-          locations
+          locations,
+          isSystemAdmin: user.authority >= 80
         }
       });
     } catch (error) {
@@ -1898,6 +1899,7 @@ class UserController {
         organizationType, 
         isActive, 
         locationId,
+        coordinatorId,
         page = 1,
         limit = 50
       } = req.query;
@@ -2259,6 +2261,43 @@ class UserController {
             // Final fail safe: return empty list
             filteredUserIds = [];
           }
+        }
+      }
+      
+      // NEW: Coordinator-based coverage area filtering for admin users
+      // When admin selects a coordinator, filter stakeholders to only those within coordinator's coverage
+      // This ensures admins see the same filtered results as non-admin coordinators
+      if (
+        coordinatorId && 
+        capabilities.includes('request.review') && 
+        !capabilities.some(c => c.startsWith('staff.')) && 
+        filteredUserIds.length > 0
+      ) {
+        try {
+          console.log('[listUsersByCapability] Applying coordinator coverage filtering:', {
+            coordinatorId,
+            stakeholdersBeforeFilter: filteredUserIds.length
+          });
+
+          const stakeholderFilteringService = require('../../services/users_services/stakeholderFiltering.service');
+          const coverageFilteredIds = await stakeholderFilteringService.filterStakeholdersByCoverageArea(
+            coordinatorId,
+            filteredUserIds
+          );
+
+          const beforeCoverageFilter = filteredUserIds.length;
+          filteredUserIds = coverageFilteredIds;
+
+          console.log('[listUsersByCapability] Coordinator coverage filtering applied:', {
+            before: beforeCoverageFilter,
+            after: filteredUserIds.length,
+            filtered: beforeCoverageFilter - filteredUserIds.length,
+            coordinatorId
+          });
+        } catch (err) {
+          console.error('[listUsersByCapability] Coordinator coverage filtering error:', err);
+          // On error, continue with unfiltered results (fail open)
+          // This prevents the request from failing, but logs the issue
         }
       }
       
@@ -2882,20 +2921,25 @@ class UserController {
 
   /**
    * Resolve coordinator(s) for a stakeholder
-   * Finds all coordinators who manage this stakeholder based on organization and location matching
+   * 
+   * Uses enhanced CoordinatorResolverService to find valid coordinators that:
+   * 1. Match the stakeholder's organization type
+   * 2. Have coverage areas containing the stakeholder's municipality/district
+   * 
    * @route GET /api/users/:userId/coordinator
+   * @desc Resolve coordinator(s) for a stakeholder
+   * @access Private
    */
   async resolveCoordinatorForStakeholder(req, res) {
     try {
       const { userId } = req.params;
-      const mongoose = require('mongoose');
       
       console.log('[resolveCoordinatorForStakeholder] Resolving coordinator for stakeholder:', {
         userId,
         timestamp: new Date().toISOString()
       });
 
-      // Find stakeholder
+      // Validate that user exists
       const stakeholder = await User.findById(userId);
       if (!stakeholder) {
         return res.status(404).json({
@@ -2915,115 +2959,28 @@ class UserController {
         });
       }
 
-      const coordinators = [];
+      // Use enhanced CoordinatorResolverService
+      const coordinatorResolverService = require('../../services/users_services/coordinatorResolver.service');
+      const result = await coordinatorResolverService.resolveValidCoordinators(userId);
 
-      // Method 1: Check organizations for assignedBy (coordinator who assigned the organization)
-      // OPTIMIZATION: Batch query all assignedBy IDs instead of individual queries
-      if (stakeholder.organizations && stakeholder.organizations.length > 0) {
-        const assignedByIds = stakeholder.organizations
-          .map(org => org.assignedBy)
-          .filter(Boolean)
-          .filter((id, index, self) => self.indexOf(id) === index); // Remove duplicates
-        
-        if (assignedByIds.length > 0) {
-          // Single batch query instead of loop
-          const potentialCoordinators = await User.find({
-            _id: { $in: assignedByIds },
-            isActive: true,
-            authority: { $gte: 60, $lt: 80 }
-          }).select('_id firstName lastName email authority').lean();
-          
-          for (const coordinator of potentialCoordinators) {
-            coordinators.push({
-              _id: coordinator._id,
-              firstName: coordinator.firstName,
-              lastName: coordinator.lastName,
-              email: coordinator.email,
-              fullName: `${coordinator.firstName} ${coordinator.lastName}`,
-              source: 'organization_assignment'
-            });
-          }
-        }
-      }
-
-      // Method 2: Check if stakeholder's location matches a coordinator's coverage area
-      if (stakeholder.locations && stakeholder.locations.municipalityId) {
-        const municipalityId = stakeholder.locations.municipalityId;
-        
-        // Find coordinators with this municipality in their coverage areas
-        const coordinatorsByLocation = await User.find({
-          authority: { $gte: 60, $lt: 80 },
-          isActive: true,
-          'coverageAreas.municipalityIds': municipalityId
-        }).select('_id firstName lastName email');
-
-        // Use Set for O(1) duplicate checking
-        const existingCoordIds = new Set(coordinators.map(c => c._id.toString()));
-        
-        for (const coord of coordinatorsByLocation) {
-          const coordIdStr = coord._id.toString();
-          if (!existingCoordIds.has(coordIdStr)) {
-            coordinators.push({
-              _id: coord._id,
-              firstName: coord.firstName,
-              lastName: coord.lastName,
-              email: coord.email,
-              fullName: `${coord.firstName} ${coord.lastName}`,
-              source: 'coverage_area_match'
-            });
-            existingCoordIds.add(coordIdStr);
-          }
-        }
-      }
-
-      // Method 3: Check if stakeholder's organization matches coordinator's organizations
-      // OPTIMIZATION: Use single query with embedded organizations array
-      if (stakeholder.organizations && stakeholder.organizations.length > 0) {
-        const stakeholderOrgIds = stakeholder.organizations
-          .map(org => org.organizationId)
-          .filter(Boolean)
-          .map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
-
-        if (stakeholderOrgIds.length > 0) {
-          // Single optimized query using embedded organizations array
-          const coordinatorsByOrg = await User.find({
-            authority: { $gte: 60, $lt: 80 },
-            isActive: true,
-            'organizations.organizationId': { $in: stakeholderOrgIds },
-            'organizations.isActive': { $ne: false }
-          }).select('_id firstName lastName email').lean();
-
-          // Use Set for O(1) duplicate checking (reuse from Method 2)
-          const existingCoordIds = new Set(coordinators.map(c => c._id.toString()));
-          
-          for (const coord of coordinatorsByOrg) {
-            const coordIdStr = coord._id.toString();
-            if (!existingCoordIds.has(coordIdStr)) {
-              coordinators.push({
-                _id: coord._id,
-                firstName: coord.firstName,
-                lastName: coord.lastName,
-                email: coord.email,
-                fullName: `${coord.firstName} ${coord.lastName}`,
-                source: 'organization_match'
-              });
-              existingCoordIds.add(coordIdStr);
-            }
-          }
-        }
-      }
-
-      console.log('[resolveCoordinatorForStakeholder] Found coordinators:', {
+      console.log('[resolveCoordinatorForStakeholder] Resolution complete:', {
         stakeholderId: userId,
-        coordinatorsCount: coordinators.length,
-        coordinators: coordinators.map(c => ({ id: c._id, name: c.fullName, source: c.source }))
+        coordinatorsCount: result.coordinators.length,
+        coordinators: result.coordinators.map(c => ({
+          id: c._id.toString(),
+          name: c.fullName,
+          organizationType: c.organizationType
+        }))
       });
 
       return res.status(200).json({
         success: true,
         data: {
-          coordinators: coordinators.length > 0 ? coordinators : [],
-          primaryCoordinator: coordinators.length > 0 ? coordinators[0] : null
+          coordinators: result.coordinators,
+          primaryCoordinator: result.primaryCoordinator,
+          _debug: {
+            validationDetails: process.env.NODE_ENV === 'development' ? result.validationDetails : undefined
+          }
         }
       });
     } catch (error) {
