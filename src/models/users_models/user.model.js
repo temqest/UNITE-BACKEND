@@ -280,6 +280,33 @@ userSchema.index({ 'organizations.organizationId': 1 });
 userSchema.index({ 'coverageAreas.coverageAreaId': 1 });
 userSchema.index({ 'locations.municipalityId': 1 });
 
+// PERFORMANCE: Compound indexes for stakeholder filtering queries
+// These dramatically accelerate coverage-area filtered stakeholder lookups
+userSchema.index({
+  authority: 1,
+  isActive: 1,
+  'locations.municipalityId': 1
+}, { name: 'idx_stakeholder_filter_by_municipality' });
+
+userSchema.index({
+  authority: 1,
+  isActive: 1,
+  'locations.districtId': 1
+}, { name: 'idx_stakeholder_filter_by_district' });
+
+// Index for organization type filtering
+userSchema.index({
+  authority: 1,
+  'organizations.organizationType': 1,
+  isActive: 1
+}, { name: 'idx_stakeholder_filter_by_orgtype' });
+
+// Index for authority + active status (common predicate in most queries)
+userSchema.index({
+  authority: 1,
+  isActive: 1
+}, { name: 'idx_authority_active' });
+
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {
   const parts = [this.firstName];
