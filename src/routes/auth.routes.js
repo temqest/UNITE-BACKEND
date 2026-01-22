@@ -62,6 +62,7 @@ router.post('/logout', async (req, res, next) => {
   try {
     // If session or cookies are used, clear them.
     try {
+      res.clearCookie('unite_token', { path: '/' });
       res.clearCookie('unite_user', { path: '/' });
       res.clearCookie('connect.sid', { path: '/' });
     } catch (e) {
