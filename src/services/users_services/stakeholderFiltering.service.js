@@ -49,7 +49,7 @@ class StakeholderFilteringService {
       
       // ===== STEP 1: Fetch coordinator data (single query) =====
       const coordinator = await User.findById(coordinatorIdObj)
-        .select('coverageAreas organizationTypes organizations')
+        .select('coverageAreas organizations organizationType')
         .lean();
 
       if (!coordinator) {
@@ -95,17 +95,43 @@ class StakeholderFilteringService {
       }
 
       // Normalize and deduplicate location IDs
-      const uniqueLocationIds = new Set(
+      let uniqueLocationIds = new Set(
         allLocationIds
           .map(id => this.normalizeId(id))
           .filter(Boolean)
           .map(id => id.toString())
       );
 
+      // Reduce scope: if coverage mixes high-level (province/district) with lower-level (city/municipality),
+      // prefer the more specific units to avoid over-broad results (e.g., province + city should not include whole province).
+      if (uniqueLocationIds.size > 0) {
+        const locationDocs = await Location.find({ _id: { $in: Array.from(uniqueLocationIds) } })
+          .select('_id type')
+          .lean();
+
+        const typeById = new Map(locationDocs.map(l => [l._id.toString(), l.type]));
+        const hasMunicipalityOrCity = locationDocs.some(l => l.type === 'municipality' || l.type === 'city');
+        const hasDistrict = locationDocs.some(l => l.type === 'district');
+
+        if (hasMunicipalityOrCity) {
+          uniqueLocationIds = new Set(
+            Array.from(uniqueLocationIds).filter(id => {
+              const t = typeById.get(id);
+              return t === 'municipality' || t === 'city' || t === 'barangay';
+            })
+          );
+        } else if (hasDistrict) {
+          uniqueLocationIds = new Set(
+            Array.from(uniqueLocationIds).filter(id => typeById.get(id) === 'district')
+          );
+        }
+      }
+
       console.log('[filterStakeholdersByCoverageArea] Coverage areas extracted:', {
         coordinatorId: coordinatorIdObj.toString(),
         coverageAreasCount: coordinator.coverageAreas.length,
         locationIdsCount: uniqueLocationIds.size,
+        orgTypes: this.extractCoordinatorOrgTypes(coordinator),
         detailedCoverageAreas: coordinator.coverageAreas.map((c, idx) => ({
           index: idx,
           hasGeographicUnits: !!c.geographicUnits,
@@ -196,7 +222,8 @@ class StakeholderFilteringService {
       });
 
       // ===== STEP 4: Single-pass MongoDB query for filtering =====
-      const locationIdObjects = Array.from(coordinatorLocationIds)
+      const locationIdStrings = Array.from(coordinatorLocationIds);
+      const locationIdObjects = locationIdStrings
         .map(id => this.normalizeId(id))
         .filter(Boolean);
 
@@ -219,7 +246,10 @@ class StakeholderFilteringService {
                 ]
               }
             }
-          }
+          },
+          // Fallback for datasets where locations are stored as strings, not ObjectIds
+          { $expr: { $in: [ { $toString: '$locations.municipalityId' }, locationIdStrings ] } },
+          { $expr: { $in: [ { $toString: '$locations.districtId' }, locationIdStrings ] } }
         ]
       };
 
@@ -230,12 +260,22 @@ class StakeholderFilteringService {
         ]
       };
 
-      // Add organization type filtering if coordinator has org type constraints
-      if (coordinator.organizationTypes && coordinator.organizationTypes.length > 0) {
-        const orgTypes = coordinator.organizationTypes.map(o => String(o).toLowerCase());
+      // Add organization type filtering if coordinator has org type constraints.
+      // Coordinator org types are read from the embedded organizations array (source of truth)
+      // with a fallback to the legacy top-level organizationType field for old records.
+      const coordinatorOrgTypes = this.extractCoordinatorOrgTypes(coordinator);
+
+      if (coordinatorOrgTypes.length > 0) {
+        console.log('[filterStakeholdersByCoverageArea] Org type constraint applied:', coordinatorOrgTypes);
+        const orgTypeRegexes = coordinatorOrgTypes.map((t) => new RegExp(`^${this.escapeRegex(t)}$`, 'i'));
         query.$and.push({
-          organizationTypes: { $in: orgTypes }
+          $or: [
+            { 'organizations.organizationType': { $in: orgTypeRegexes } },
+            { organizationType: { $in: orgTypeRegexes } }, // legacy fallback
+          ],
         });
+      } else {
+        console.log('[filterStakeholdersByCoverageArea] No org type constraint (coordinator has none)');
       }
 
       const filtered = await User.find(query)
@@ -251,6 +291,7 @@ class StakeholderFilteringService {
         outputStakeholders: validStakeholderIds.length,
         filtered: stakeholderIds.length - validStakeholderIds.length,
         locationIdsUsed: locationIdObjects.length,
+        locationIdsUsedStringFallback: locationIdStrings.length,
         elapsedMs,
         performance: elapsedMs < 100 ? 'EXCELLENT' : elapsedMs < 500 ? 'GOOD' : 'NEEDS_OPTIMIZATION'
       });
@@ -260,6 +301,28 @@ class StakeholderFilteringService {
       console.error('[filterStakeholdersByCoverageArea] Error during filtering:', error);
       throw new Error(`Failed to filter stakeholders by coverage area: ${error.message}`);
     }
+  }
+
+  /**
+   * Extract normalized organization types from coordinator record.
+   * Prioritizes embedded organizations[].organizationType; falls back to legacy organizationType.
+   * @private
+   */
+  extractCoordinatorOrgTypes(coordinator) {
+    const embedded = (coordinator.organizations || [])
+      .filter(org => org && org.organizationType && org.isActive !== false)
+      .map(org => String(org.organizationType).toLowerCase().trim());
+
+    const legacy = coordinator.organizationType
+      ? [String(coordinator.organizationType).toLowerCase().trim()]
+      : [];
+
+    return Array.from(new Set([...embedded, ...legacy])).filter(Boolean);
+  }
+
+  /** Escape regex special chars */
+  escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**
