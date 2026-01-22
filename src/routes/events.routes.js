@@ -10,6 +10,7 @@ const {
 
 const authenticate = require('../middleware/authenticate');
 const { requirePermission } = require('../middleware/requirePermission');
+const validateCoordinatorAssignment = require('../middleware/validateCoordinatorAssignment');
 
 // Public events (calendar) - intentionally public so calendar can read approved events
 router.get('/public/events', async (req, res, next) => {
@@ -423,8 +424,9 @@ router.get('/events/statistics/dashboard', async (req, res, next) => {
  * @access  Private (requires event.initiate permission)
  * @body    { title, location, startDate, endDate?, category, coordinatorId?, stakeholderId? }
  * @note    Non-admins: coordinatorId forced to req.user.id, stakeholder scoped to jurisdiction
+ * @middleware validateCoordinatorAssignment - Validates coordinator is valid for stakeholder
  */
-router.post('/events', authenticate, requirePermission('event', 'initiate'), async (req, res, next) => {
+router.post('/events', authenticate, requirePermission('event', 'initiate'), validateCoordinatorAssignment, async (req, res, next) => {
   try {
     // Import controller here to avoid circular dependency
     const { eventRequestController } = require('../controller/request_controller');
