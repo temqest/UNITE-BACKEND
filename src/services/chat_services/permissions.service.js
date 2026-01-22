@@ -1,5 +1,7 @@
 const { User } = require('../../models');
 const authorityService = require('../../services/users_services/authority.service');
+const stakeholderFilteringService = require('../../services/users_services/stakeholderFiltering.service');
+const coordinatorResolverService = require('../../services/users_services/coordinatorResolver.service');
 
 // Authority tier constants (must match authority.service.js)
 const AUTHORITY_TIERS = {
@@ -74,30 +76,49 @@ class ChatPermissionsService {
         allowedRecipients.push(...stakeholders.map(u => u._id.toString()));
       }
 
-      // Coordinator (60): Can chat with assigned Stakeholders (30) and System/Operational Admins (80-100)
+      // Coordinator (60): Can chat with assigned Stakeholders (30) - filtered by coverage area + org type - and System Admins (100)
       if (userAuthority >= AUTHORITY_TIERS.COORDINATOR && userAuthority < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-        // Get stakeholders assigned to this coordinator via organizations
-        // Stakeholders have organizations[] with coordinatorId reference
-        const stakeholderIds = await this.getAssignedStakeholders(user._id);
-        allowedRecipients.push(...stakeholderIds);
+        // Get all stakeholders
+        const allStakeholders = await User.find({
+          authority: AUTHORITY_TIERS.STAKEHOLDER,
+          isActive: true
+        }).select('_id');
+        
+        const allStakeholderIds = allStakeholders.map(s => s._id.toString());
+        
+        // Filter stakeholders by coordinator's coverage area + organization type
+        if (allStakeholderIds.length > 0) {
+          const filteredStakeholderIds = await stakeholderFilteringService.filterStakeholdersByCoverageArea(
+            user._id,
+            allStakeholderIds
+          );
+          allowedRecipients.push(...filteredStakeholderIds);
+        }
 
-        // Get System Admins and Operational Admins
+        // Get System Admins only (not operational admins)
         const admins = await User.find({
-          $or: [
-            { authority: AUTHORITY_TIERS.SYSTEM_ADMIN },
-            { authority: AUTHORITY_TIERS.OPERATIONAL_ADMIN }
-          ],
+          authority: AUTHORITY_TIERS.SYSTEM_ADMIN,
           isActive: true
         }).select('_id');
         allowedRecipients.push(...admins.map(u => u._id.toString()));
       }
 
-      // Stakeholder (30): Can chat with assigned Coordinator (60)
+      // Stakeholder (30): Can chat with assigned Coordinators (60) - same org type + coverage - and peer Stakeholders (same coverage + org type)
       if (userAuthority >= AUTHORITY_TIERS.STAKEHOLDER && userAuthority < AUTHORITY_TIERS.COORDINATOR) {
-        // Get coordinator assigned via organizations
-        const coordinatorId = await this.getAssignedCoordinator(user._id);
-        if (coordinatorId) {
-          allowedRecipients.push(coordinatorId);
+        // Get coordinators assigned to this stakeholder (same org type + coverage)
+        try {
+          const coordinatorIds = await this.getAssignedCoordinators(user._id);
+          allowedRecipients.push(...coordinatorIds);
+        } catch (err) {
+          console.error('[ChatPermissions] Error getting assigned coordinators:', err);
+        }
+        
+        // Get peer stakeholders (same coverage area + org type)
+        try {
+          const peerStakeholderIds = await this.getPeerStakeholders(user._id);
+          allowedRecipients.push(...peerStakeholderIds);
+        } catch (err) {
+          console.error('[ChatPermissions] Error getting peer stakeholders:', err);
         }
       }
 
@@ -152,48 +173,98 @@ class ChatPermissionsService {
   }
 
   /**
-   * Get coordinator assigned to a stakeholder
+   * Get coordinators assigned to a stakeholder (same org type + coverage area)
    * @param {string|ObjectId} stakeholderId - Stakeholder's user ID
-   * @returns {string|null} - Coordinator user ID or null
+   * @returns {Array<string>} - Array of coordinator user IDs
    */
-  async getAssignedCoordinator(stakeholderId) {
+  async getAssignedCoordinators(stakeholderId) {
     try {
-      const stakeholder = await User.findById(stakeholderId).select('organizations metadata locations');
-      if (!stakeholder) {
-        return null;
+      console.log('[ChatPermissions] getAssignedCoordinators called for stakeholder:', stakeholderId.toString());
+      
+      // Use the coordinator resolver service which properly matches org type + coverage
+      const result = await coordinatorResolverService.resolveValidCoordinators(stakeholderId);
+      
+      console.log('[ChatPermissions] Coordinator resolver result:', {
+        stakeholderId: stakeholderId.toString(),
+        hasResult: !!result,
+        hasCoordinators: !!(result && result.coordinators),
+        coordinatorCount: result?.coordinators?.length || 0,
+        coordinators: result?.coordinators?.map(c => ({
+          id: c._id.toString(),
+          name: `${c.firstName || ''} ${c.lastName || ''}`.trim()
+        })) || []
+      });
+      
+      if (result && result.coordinators && result.coordinators.length > 0) {
+        return result.coordinators.map(c => c._id.toString());
       }
-
-      // Check organizations for assignedBy (coordinator who assigned the organization)
-      if (stakeholder.organizations && stakeholder.organizations.length > 0) {
-        const primaryOrg = stakeholder.organizations.find(org => org.isPrimary) || stakeholder.organizations[0];
-        if (primaryOrg && primaryOrg.assignedBy) {
-          return primaryOrg.assignedBy.toString();
-        }
-      }
-
-      // Check metadata.assignedCoordinator
-      if (stakeholder.metadata && stakeholder.metadata.assignedCoordinator) {
-        return stakeholder.metadata.assignedCoordinator.toString();
-      }
-
-      // Check if stakeholder's location matches a coordinator's coverage area
-      if (stakeholder.locations && stakeholder.locations.municipalityId) {
-        const coordinators = await User.find({
-          authority: AUTHORITY_TIERS.COORDINATOR,
-          isActive: true,
-          'coverageAreas.municipalityIds': stakeholder.locations.municipalityId
-        }).select('_id').limit(1);
-        
-        if (coordinators.length > 0) {
-          return coordinators[0]._id.toString();
-        }
-      }
-
-      return null;
+      
+      console.log('[ChatPermissions] No coordinators found for stakeholder:', stakeholderId.toString());
+      return [];
     } catch (error) {
-      console.error('[ChatPermissions] Error getting assigned coordinator:', error);
-      return null;
+      console.error('[ChatPermissions] Error getting assigned coordinators:', error);
+      console.error('[ChatPermissions] Error stack:', error.stack);
+      return [];
     }
+  }
+  
+  /**
+   * Get peer stakeholders (same municipality + org type)
+   * @param {string|ObjectId} stakeholderId - Stakeholder's user ID
+   * @returns {Array<string>} - Array of peer stakeholder user IDs
+   */
+  async getPeerStakeholders(stakeholderId) {
+    try {
+      // Get the stakeholder's municipality and org type
+      const stakeholder = await User.findById(stakeholderId)
+        .select('locations organizations')
+        .lean();
+      
+      if (!stakeholder) {
+        return [];
+      }
+      
+      // Extract municipality ID
+      const municipalityId = stakeholder.locations?.municipalityId;
+      if (!municipalityId) {
+        return [];
+      }
+      
+      // Extract organization types (handle both embedded array and legacy field)
+      let orgTypes = [];
+      if (stakeholder.organizations && Array.isArray(stakeholder.organizations)) {
+        orgTypes = stakeholder.organizations.map(o => o.organizationType).filter(Boolean);
+      }
+      if (orgTypes.length === 0 && stakeholder.organizationType) {
+        orgTypes = [stakeholder.organizationType];
+      }
+      
+      if (orgTypes.length === 0) {
+        return [];
+      }
+      
+      // Find peer stakeholders in same municipality with same org type (case-insensitive)
+      const peerStakeholders = await User.find({
+        _id: { $ne: stakeholderId },
+        authority: AUTHORITY_TIERS.STAKEHOLDER,
+        isActive: true,
+        'locations.municipalityId': municipalityId,
+        $or: [
+          { 'organizations.organizationType': { $in: orgTypes.map(t => new RegExp(`^${t}$`, 'i')) } },
+          { organizationType: { $in: orgTypes.map(t => new RegExp(`^${t}$`, 'i')) } }
+        ]
+      }).select('_id');
+      
+      return peerStakeholders.map(p => p._id.toString());
+    } catch (error) {
+      console.error('[ChatPermissions] Error getting peer stakeholders:', error);
+      return [];
+    }
+  }
+  
+  /** Escape regex special chars */
+  escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**
