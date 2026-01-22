@@ -1899,6 +1899,7 @@ class UserController {
         organizationType, 
         isActive, 
         locationId,
+        coordinatorId,
         page = 1,
         limit = 50
       } = req.query;
@@ -2260,6 +2261,43 @@ class UserController {
             // Final fail safe: return empty list
             filteredUserIds = [];
           }
+        }
+      }
+      
+      // NEW: Coordinator-based coverage area filtering for admin users
+      // When admin selects a coordinator, filter stakeholders to only those within coordinator's coverage
+      // This ensures admins see the same filtered results as non-admin coordinators
+      if (
+        coordinatorId && 
+        capabilities.includes('request.review') && 
+        !capabilities.some(c => c.startsWith('staff.')) && 
+        filteredUserIds.length > 0
+      ) {
+        try {
+          console.log('[listUsersByCapability] Applying coordinator coverage filtering:', {
+            coordinatorId,
+            stakeholdersBeforeFilter: filteredUserIds.length
+          });
+
+          const stakeholderFilteringService = require('../../services/users_services/stakeholderFiltering.service');
+          const coverageFilteredIds = await stakeholderFilteringService.filterStakeholdersByCoverageArea(
+            coordinatorId,
+            filteredUserIds
+          );
+
+          const beforeCoverageFilter = filteredUserIds.length;
+          filteredUserIds = coverageFilteredIds;
+
+          console.log('[listUsersByCapability] Coordinator coverage filtering applied:', {
+            before: beforeCoverageFilter,
+            after: filteredUserIds.length,
+            filtered: beforeCoverageFilter - filteredUserIds.length,
+            coordinatorId
+          });
+        } catch (err) {
+          console.error('[listUsersByCapability] Coordinator coverage filtering error:', err);
+          // On error, continue with unfiltered results (fail open)
+          // This prevents the request from failing, but logs the issue
         }
       }
       
