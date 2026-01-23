@@ -10,6 +10,17 @@ const createEventSchema = Joi.object({
       'string.empty': 'Event ID cannot be empty'
     }),
 
+  Request_ID: Joi.string()
+    .optional()
+    .allow('', null)
+    .trim()
+    .messages({
+      'string.empty': 'Request ID cannot be empty'
+    }),
+
+  isBatchCreated: Joi.boolean()
+    .optional(),
+
   Event_Title: Joi.string()
     .required()
     .trim()
@@ -113,6 +124,17 @@ const updateEventSchema = Joi.object({
       'string.empty': 'Event ID cannot be empty'
     }),
 
+  Request_ID: Joi.string()
+    .optional()
+    .allow('', null)
+    .trim()
+    .messages({
+      'string.empty': 'Request ID cannot be empty'
+    }),
+
+  isBatchCreated: Joi.boolean()
+    .optional(),
+
   Event_Title: Joi.string()
     .trim()
     .min(3)
@@ -125,12 +147,6 @@ const updateEventSchema = Joi.object({
 
   Location: Joi.string()
     .trim()
-  // New hierarchical fields
-  province: Joi.string().trim().allow(null, ''),
-  district: Joi.string().trim().allow(null, ''),
-  municipality: Joi.string().trim().allow(null, ''),
-  // Optional stakeholder association when admin/coordinator attaches one
-  stakeholder: Joi.string().trim().allow(null, ''),
     .min(3)
     .max(500)
     .messages({
@@ -138,6 +154,13 @@ const updateEventSchema = Joi.object({
       'string.min': 'Location must be at least 3 characters long',
       'string.max': 'Location must not exceed 500 characters'
     }),
+
+  // New hierarchical fields
+  province: Joi.string().trim().allow(null, ''),
+  district: Joi.string().trim().allow(null, ''),
+  municipality: Joi.string().trim().allow(null, ''),
+  // Optional stakeholder association when admin/coordinator attaches one
+  stakeholder: Joi.string().trim().allow(null, ''),
 
   Start_Date: Joi.date()
     .iso()
@@ -174,27 +197,12 @@ const updateEventSchema = Joi.object({
     }),
 
   Email: Joi.string()
-    .optional()
     .allow('', null)
-    .trim()
-    .lowercase()
-    .email()
-    .messages({
-      'string.email': 'Please provide a valid email address'
-    }),
+    .optional(),
 
   Phone_Number: Joi.string()
-    .optional()
     .allow('', null)
-    .trim()
-    .pattern(/^[0-9+\-\s()]+$/)
-    .min(10)
-    .max(20)
-    .messages({
-      'string.min': 'Phone Number must be at least 10 characters long',
-      'string.max': 'Phone Number must not exceed 20 characters',
-      'string.pattern.base': 'Phone Number can only contain numbers, +, -, spaces, and parentheses'
-    }),
+    .optional(),
 
   Status: Joi.string()
     .valid('Pending', 'Approved', 'Rescheduled', 'Rejected', 'Completed')

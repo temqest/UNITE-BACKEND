@@ -75,6 +75,7 @@ class BatchEventService {
           // Note: Event model requires Email and Phone_Number, so provide defaults if not provided
           const eventDoc = {
             Event_ID: eventId,
+            Request_ID: eventData.Request_ID || undefined,
             Event_Title: eventData.Event_Title,
             Location: eventData.Location,
             Start_Date: new Date(eventData.Start_Date),
@@ -83,6 +84,7 @@ class BatchEventService {
             Phone_Number: eventData.Phone_Number || adminUser.phoneNumber || 'N/A',
             Event_Description: eventData.Event_Description || undefined,
             Category: eventData.Category || undefined,
+            isBatchCreated: true,
             // Location references
             province: eventData.province || undefined,
             district: eventData.district || undefined,

@@ -18,8 +18,8 @@ const validateCreateEventRequest = (req, res, next) => {
     Location: Joi.string().trim().required(),
     Date: Joi.date().optional(), // Can be Date or Start_Date (for backward compatibility)
     Start_Date: Joi.date().optional(), // Support old field name for backward compatibility
-    Email: Joi.string().email().optional(),
-    Phone_Number: Joi.string().trim().optional(),
+    Email: Joi.string().allow('', null).optional(),
+    Phone_Number: Joi.string().allow('', null).optional(),
     // Optional event fields
     Event_Description: Joi.string().trim().allow('', null).optional(),
     Category: Joi.string().trim().optional(),
@@ -83,8 +83,8 @@ const validateUpdateEventRequest = (req, res, next) => {
     Date: Joi.date().optional(),
     Start_Date: Joi.date().optional(),
     End_Date: Joi.date().optional(),
-    Email: Joi.string().email().optional(),
-    Phone_Number: Joi.string().trim().optional(),
+    Email: Joi.string().allow('', null).optional(),
+    Phone_Number: Joi.string().allow('', null).optional(),
     Event_Description: Joi.string().trim().allow('', null).optional(),
     Category: Joi.string().trim().optional(),
     // Category-specific fields
