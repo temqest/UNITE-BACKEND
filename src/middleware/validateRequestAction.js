@@ -1,11 +1,18 @@
-/**
- * Validate Request Action Middleware
- * 
- * Validates that user can perform action on request
- */
 
 const actionValidatorService = require('../services/eventRequests_services/actionValidator.service');
 const EventRequest = require('../models/eventRequests_models/eventRequest.model');
+
+/**
+ * Utility: Check if user is Admin or System Admin by role or StaffType
+ */
+function isAdminUser(user) {
+  return (
+    user.role === 'Admin' ||
+    user.role === 'System Admin' ||
+    user.StaffType === 80 ||
+    user.StaffType === 100
+  );
+}
 
 /**
  * Middleware to validate request action
@@ -38,18 +45,32 @@ const validateRequestAction = async (req, res, next) => {
 
     // Validate action
     const locationId = request.district || request.municipalityId;
-    const validation = await actionValidatorService.validateAction(
-      userId,
-      action,
-      request,
-      { locationId }
-    );
+    
+    // Allow Admins as secondary reviewers for Stakeholder -> Coordinator requests
+    // This bypasses the standard validation for admin secondary review actions
+    const isSecondaryReviewer = 
+      request.initiatorRole === 'Stakeholder' &&
+      request.reviewerRole === 'Coordinator' &&
+      isAdminUser(req.user);
+    
+    if (!isSecondaryReviewer) {
+      // Standard validation for all other cases
+      const validation = await actionValidatorService.validateAction(
+        userId,
+        action,
+        request,
+        { locationId }
+      );
 
-    if (!validation.valid) {
-      return res.status(403).json({
-        success: false,
-        message: validation.reason
-      });
+      if (!validation.valid) {
+        return res.status(403).json({
+          success: false,
+          message: validation.reason
+        });
+      }
+    } else {
+      // Log admin secondary review action
+      console.log(`[VALIDATE REQUEST ACTION] Admin secondary reviewer (${userId}) attempting action '${action}' on Stakeholder->Coordinator request ${requestId}`);
     }
 
     // Attach request to req for use in controller

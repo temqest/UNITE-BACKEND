@@ -10,6 +10,7 @@ const actionValidatorService = require('../../services/eventRequests_services/ac
 const permissionService = require('../../services/users_services/permission.service');
 const RequestStateService = require('../../services/eventRequests_services/requestState.service');
 const EventRequest = require('../../models/eventRequests_models/eventRequest.model');
+const { Event, User } = require('../../models');
 const { STATUS_LABELS, REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
 
 class EventRequestController {
@@ -644,6 +645,87 @@ class EventRequestController {
   }
 
   /**
+   * Get staff assigned to event (works for both request-based and batch events)
+   * @route GET /api/event-requests/:requestId/staff
+   */
+  async getStaff(req, res) {
+    try {
+      const { requestId } = req.params;
+      const EventStaff = require('../../models/events_models/eventStaff.model');
+      const Event = require('../../models/events_models/event.model');
+      const EventRequest = require('../../models/eventRequests_models/eventRequest.model');
+
+      // Try to find event first (works for both batch and request-based)
+      let eventId = null;
+      
+      // Try to find by Request_ID first (for request-based events)
+      const request = await EventRequest.findOne({ Request_ID: requestId });
+      if (request) {
+        // Prefer event linked via Request_ID
+        let event = await Event.findOne({ Request_ID: requestId });
+
+        // If not found, try using the Event_ID stored on the request document
+        if (!event && request.Event_ID) {
+          event = await Event.findOne({ Event_ID: request.Event_ID });
+        }
+
+        // As a last resort, try matching the incoming id directly to Event_ID
+        if (!event) {
+          event = await Event.findOne({ Event_ID: requestId });
+        }
+
+        if (event) {
+          eventId = event.Event_ID;
+        } else if (request.Event_ID) {
+          // Even if the Event document is missing, allow using Event_ID from request
+          eventId = request.Event_ID;
+        }
+      } else {
+        // No request found, try to find event by Event_ID or MongoDB _id (batch event)
+        let event = await Event.findOne({ Event_ID: requestId });
+        if (!event) {
+          // Try MongoDB _id
+          if (requestId && requestId.match(/^[0-9a-fA-F]{24}$/)) {
+            event = await Event.findById(requestId);
+          }
+        }
+        
+        if (event) {
+          eventId = event.Event_ID;
+        }
+      }
+
+      if (!eventId) {
+        return res.status(404).json({
+          success: false,
+          message: 'Event not found'
+        });
+      }
+
+      // Fetch staff assigned to this event
+      const staff = await EventStaff.find({ EventID: eventId }).lean();
+
+      res.status(200).json({
+        success: true,
+        data: {
+          staff: staff.map(s => ({
+            _id: s._id,
+            FullName: s.Staff_FullName,
+            Staff_FullName: s.Staff_FullName,
+            Role: s.Role
+          }))
+        }
+      });
+    } catch (error) {
+      console.error('[EVENT REQUEST CONTROLLER] Get staff error:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to get staff'
+      });
+    }
+  }
+
+  /**
    * Assign staff to event
    * @route POST /api/event-requests/:requestId/staff
    */
@@ -672,42 +754,85 @@ class EventRequestController {
       if (!request && requestId.match(/^[0-9a-fA-F]{24}$/)) {
         request = await EventRequest.findById(requestId);
       }
+
+      let isBatchEvent = false;
+      let targetEvent = null;
+
       if (!request) {
-        return res.status(404).json({
-          success: false,
-          message: 'Request not found'
-        });
-      }
+        // Fallback: allow admin-only staff management for batch-created events without a request
+        console.log('[ASSIGN STAFF] Looking for batch event:', { eventId, requestId });
+        
+        targetEvent = await Event.findOne({ Event_ID: eventId || requestId });
+        console.log('[ASSIGN STAFF] Event lookup by Event_ID:', { found: !!targetEvent, eventId, requestId });
+        
+        // If not found by Event_ID, try by MongoDB _id
+        if (!targetEvent && eventId?.match(/^[0-9a-fA-F]{24}$/)) {
+          targetEvent = await Event.findById(eventId);
+          console.log('[ASSIGN STAFF] Event lookup by MongoDB _id (eventId):', { found: !!targetEvent });
+        }
+        
+        // Also try requestId as MongoDB _id if it looks like one
+        if (!targetEvent && requestId?.match(/^[0-9a-fA-F]{24}$/)) {
+          targetEvent = await Event.findById(requestId);
+          console.log('[ASSIGN STAFF] Event lookup by MongoDB _id (requestId):', { found: !!targetEvent });
+        }
+        
+        if (!targetEvent) {
+          console.error('[ASSIGN STAFF] Event not found:', {
+            eventId,
+            requestId,
+            eventIdType: typeof eventId,
+            requestIdType: typeof requestId
+          });
+          return res.status(404).json({
+            success: false,
+            message: 'Request not found'
+          });
+        }
 
-      // Check permission - use event.manage-staff permission
-      const locationId = request.district || request.municipalityId;
-      const canManageStaff = await permissionService.checkPermission(
-        userId,
-        'event',
-        'manage-staff',
-        { locationId }
-      );
-
-      if (!canManageStaff) {
-        // Check for wildcard permissions
-        const userPermissions = await permissionService.getUserPermissions(userId);
-        const hasWildcard = userPermissions.some(p => 
-          (p.resource === '*' || p.resource === 'event') && 
-          (p.actions?.includes('*') || p.actions?.includes('manage-staff'))
-        );
-
-        if (!hasWildcard) {
+        const user = await User.findById(userId).select('authority');
+        const authority = user?.authority || 0;
+        if (authority < 80) {
           return res.status(403).json({
             success: false,
             message: 'User does not have permission to manage staff for this event'
           });
+        }
+
+        isBatchEvent = true;
+      }
+
+      if (request) {
+        // Check permission - use event.manage-staff permission
+        const locationId = request.district || request.municipalityId;
+        const canManageStaff = await permissionService.checkPermission(
+          userId,
+          'event',
+          'manage-staff',
+          { locationId }
+        );
+
+        if (!canManageStaff) {
+          // Check for wildcard permissions
+          const userPermissions = await permissionService.getUserPermissions(userId);
+          const hasWildcard = userPermissions.some(p => 
+            (p.resource === '*' || p.resource === 'event') && 
+            (p.actions?.includes('*') || p.actions?.includes('manage-staff'))
+          );
+
+          if (!hasWildcard) {
+            return res.status(403).json({
+              success: false,
+              message: 'User does not have permission to manage staff for this event'
+            });
+          }
         }
       }
 
       // Assign staff via service
       const result = await eventRequestService.assignStaffToEvent(
         userId,
-        requestId,
+        request ? request.Request_ID : null,
         eventId,
         staffMembers
       );

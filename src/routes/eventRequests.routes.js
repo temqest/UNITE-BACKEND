@@ -230,6 +230,23 @@ router.delete(
 );
 
 /**
+ * @route   GET /api/event-requests/:requestId/staff
+ * @desc    Get staff assigned to event (works for both request-based and batch events)
+ * @access  Private
+ */
+router.get(
+  '/event-requests/:requestId/staff',
+  authenticate,
+  async (req, res, next) => {
+    try {
+      await eventRequestController.getStaff(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * @route   POST /api/event-requests/:requestId/staff
  * @desc    Assign staff to event
  * @access  Private (requires event.manage-staff permission)

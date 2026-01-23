@@ -241,13 +241,13 @@ const eventRequestSchema = new mongoose.Schema({
   },
   Email: {
     type: String,
-    required: true,
+    required: false,
     trim: true,
     lowercase: true
   },
   Phone_Number: {
     type: String,
-    required: true,
+    required: false,
     trim: true
   },
   Event_Description: {
