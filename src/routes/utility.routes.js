@@ -5,7 +5,8 @@ const { requirePermission, requireAnyPermission } = require('../middleware/requi
 
 const {
   districtController,
-  notificationController
+  notificationController,
+  bugReportController
 } = require('../controller/utility_controller');
 
 const { locationController } = require('../controller/utility_controller');
@@ -19,6 +20,11 @@ const {
   validateCreateNotification,
   validateUpdateNotification
 } = require('../validators/utility_validators/notifications.validators');
+
+const {
+  validateCreateBugReport,
+  validateUpdateBugReport
+} = require('../validators/utility_validators/bugReport.validators');
 
 // ==================== DISTRICT ROUTES ====================
 
@@ -138,7 +144,87 @@ router.get('/districts/:districtId/exists', async (req, res, next) => {
     next(error);
   }
 });
+// ==================== BUG REPORT ROUTES ====================
 
+/**
+ * @route   POST /api/utility/bug-reports
+ * @desc    Create a new bug report (requires authentication)
+ * @access  Private
+ */
+router.post('/utility/bug-reports', authenticate, validateCreateBugReport, async (req, res, next) => {
+  try {
+    await bugReportController.createBugReport(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/utility/bug-reports
+ * @desc    Get all bug reports with filtering (System Admins only)
+ * @access  Private
+ */
+router.get('/utility/bug-reports', authenticate, async (req, res, next) => {
+  try {
+    // Check if user is System Admin (authority 100)
+    // This check can be enhanced with requirePermission middleware if you create a bug-report permission
+    await bugReportController.getAllBugReports(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/utility/bug-reports/statistics
+ * @desc    Get bug report statistics (System Admins only)
+ * @access  Private
+ */
+router.get('/utility/bug-reports/statistics', authenticate, async (req, res, next) => {
+  try {
+    await bugReportController.getBugReportStatistics(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   GET /api/utility/bug-reports/:reportId
+ * @desc    Get bug report by ID
+ * @access  Private
+ */
+router.get('/utility/bug-reports/:reportId', authenticate, async (req, res, next) => {
+  try {
+    await bugReportController.getBugReportById(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   PUT /api/utility/bug-reports/:reportId
+ * @desc    Update bug report (System Admins only)
+ * @access  Private
+ */
+router.put('/utility/bug-reports/:reportId', authenticate, validateUpdateBugReport, async (req, res, next) => {
+  try {
+    await bugReportController.updateBugReport(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route   DELETE /api/utility/bug-reports/:reportId
+ * @desc    Delete bug report (System Admins only)
+ * @access  Private
+ */
+router.delete('/utility/bug-reports/:reportId', authenticate, async (req, res, next) => {
+  try {
+    await bugReportController.deleteBugReport(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
 // ==================== NOTIFICATION ROUTES ====================
 
 /**
