@@ -27,6 +27,117 @@ class EventRequestService {
   }
 
   /**
+   * Handle actions for events without a backing request (batch-created events)
+   * Only supports reschedule/edit with admin authority
+   */
+  async _handleEventActionWithoutRequest(requestId, userId, action, actionData) {
+    // Only handle edit/reschedule for batch-created events
+    if (![REQUEST_ACTIONS.RESCHEDULE, REQUEST_ACTIONS.EDIT].includes(action)) {
+      return null;
+    }
+
+    const event = await Event.findOne({ Event_ID: requestId });
+    if (!event) {
+      return null;
+    }
+
+    const userAuthority = await this._getUserAuthority(userId);
+    if (userAuthority < 80) {
+      throw new Error('User does not have permission to perform this action');
+    }
+
+    if (action === REQUEST_ACTIONS.RESCHEDULE) {
+      if (!actionData?.proposedDate) {
+        throw new Error('proposedDate is required for reschedule action');
+      }
+
+      const newStart = new Date(actionData.proposedDate);
+      const hasDuration = event.Start_Date && event.End_Date;
+      const durationMs = hasDuration ? (event.End_Date - event.Start_Date) : null;
+
+      event.Start_Date = newStart;
+      if (durationMs && durationMs > 0) {
+        event.End_Date = new Date(newStart.getTime() + durationMs);
+      }
+
+      event.Status = 'Rescheduled';
+    }
+
+    if (action === REQUEST_ACTIONS.EDIT) {
+      this._applyEventUpdates(event, actionData || {});
+    }
+
+    await event.save();
+
+    return this._buildPseudoRequestFromEvent(event);
+  }
+
+  _applyEventUpdates(event, updateData) {
+    const eventFields = [
+      'Event_Title', 'Location', 'Email', 'Phone_Number', 'Event_Description', 'Category',
+      'StaffAssignmentID'
+    ];
+
+    eventFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        event[field] = updateData[field];
+      }
+    });
+
+    if (updateData.Start_Date) {
+      event.Start_Date = new Date(updateData.Start_Date);
+    }
+
+    if (updateData.End_Date) {
+      event.End_Date = new Date(updateData.End_Date);
+    }
+
+    // Location references
+    if (updateData.province !== undefined) event.province = updateData.province || null;
+    if (updateData.district !== undefined) event.district = updateData.district || null;
+    if (updateData.municipality !== undefined) event.municipality = updateData.municipality || null;
+    if (updateData.municipalityId !== undefined) event.municipality = updateData.municipalityId || null;
+    if (updateData.stakeholder !== undefined) event.stakeholder = updateData.stakeholder || null;
+  }
+
+  _buildPseudoRequestFromEvent(event) {
+    const pseudo = {
+      Request_ID: event.Request_ID || null,
+      Event_ID: event.Event_ID,
+      Event_Title: event.Event_Title,
+      Location: event.Location,
+      Date: event.Start_Date,
+      Start_Date: event.Start_Date,
+      End_Date: event.End_Date,
+      Email: event.Email,
+      Phone_Number: event.Phone_Number,
+      Event_Description: event.Event_Description,
+      Category: event.Category,
+      StaffAssignmentID: event.StaffAssignmentID,
+      status: event.Status,
+      statusHistory: [],
+      decisionHistory: [],
+      municipalityId: event.municipality,
+      district: event.district,
+      province: event.province,
+      requester: null,
+      reviewer: null,
+      rescheduleProposal: null,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt
+    };
+
+    pseudo.toObject = () => pseudo;
+    return pseudo;
+  }
+
+  async _getUserAuthority(userId) {
+    if (!userId) return 0;
+    const user = await User.findById(userId).select('authority');
+    return user?.authority || 0;
+  }
+
+  /**
    * Create new event request
    * @param {string|ObjectId} requesterId - Requester user ID
    * @param {Object} requestData - Request data
@@ -938,9 +1049,29 @@ class EventRequestService {
    */
   async updateRequest(requestId, userId, updateData) {
     try {
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      let request = await EventRequest.findOne({ Request_ID: requestId });
       if (!request) {
-        throw new Error('Request not found');
+        // Fallback: allow admins to update batch-created events that have no request record
+        // Try to find the event by Event_ID first, then by MongoDB _id
+        let event = await Event.findOne({ Event_ID: requestId });
+        if (!event) {
+          // Try by MongoDB _id in case frontend is sending the event's MongoDB ID
+          event = await Event.findById(requestId);
+        }
+        
+        if (!event) {
+          throw new Error('Request not found');
+        }
+
+        const userAuthority = await this._getUserAuthority(userId);
+        if (userAuthority < 80) {
+          throw new Error('User does not have permission to update this event');
+        }
+
+        this._applyEventUpdates(event, updateData);
+        await event.save();
+
+        return this._buildPseudoRequestFromEvent(event);
       }
 
       const normalizedStatus = RequestStateService.normalizeState(request.status);
@@ -1120,9 +1251,20 @@ class EventRequestService {
         return actionData.notes || actionData.note || '';
       };
 
-      // 1. Get request
-      const request = await EventRequest.findOne({ Request_ID: requestId });
+      // 1. Get request (or fallback to event-only handling for batch-created events)
+      let request = await EventRequest.findOne({ Request_ID: requestId });
       if (!request) {
+        const eventOnlyResult = await this._handleEventActionWithoutRequest(
+          requestId,
+          userId,
+          action,
+          actionData
+        );
+
+        if (eventOnlyResult) {
+          return eventOnlyResult;
+        }
+
         throw new Error('Request not found');
       }
 
@@ -1487,6 +1629,8 @@ class EventRequestService {
     try {
       const EventStaff = require('../../models/events_models/eventStaff.model');
       
+      console.log('[ASSIGN STAFF SERVICE] Starting:', { userId: userId?.toString(), requestId, eventId });
+      
       // Validate input
       if (!staffMembers || !Array.isArray(staffMembers)) {
         throw new Error('Staff members must be an array');
@@ -1509,18 +1653,40 @@ class EventRequestService {
       // Verify event exists.
       // Accept either the external Event_ID or a MongoDB _id (24-hex) for robustness
       let event = await Event.findOne({ Event_ID: eventId }).session(session);
+      console.log('[ASSIGN STAFF SERVICE] Event lookup by Event_ID:', { found: !!event, eventId });
+      
       if (!event && eventId && typeof eventId === 'string' && /^[0-9a-fA-F]{24}$/.test(eventId)) {
         // frontend may send the Mongo _id in some shapes — try lookup by _id as a fallback
         try {
           event = await Event.findById(eventId).session(session);
+          console.log('[ASSIGN STAFF SERVICE] Event lookup by MongoDB _id:', { found: !!event });
         } catch (e) {
           // ignore and continue to throw below if not found
+          console.warn('[ASSIGN STAFF SERVICE] Error looking up by MongoDB _id:', e.message);
           event = null;
         }
       }
 
       if (!event) {
         throw new Error('Event not found');
+      }
+
+      // Resolve request linkage if present
+      let resolvedRequestId = requestId || event.Request_ID;
+      console.log('[ASSIGN STAFF SERVICE] Resolved request ID:', { resolvedRequestId });
+      
+      let request = null;
+      if (resolvedRequestId) {
+        request = await EventRequest.findOne({ Request_ID: resolvedRequestId }).session(session);
+        console.log('[ASSIGN STAFF SERVICE] Request lookup:', { found: !!request, resolvedRequestId });
+      }
+
+      const userAuthority = await this._getUserAuthority(userId);
+      const isBatchEvent = !request && (!event.Request_ID || event.isBatchCreated);
+      console.log('[ASSIGN STAFF SERVICE] Permission check:', { userAuthority, isBatchEvent });
+      
+      if (isBatchEvent && userAuthority < 80) {
+        throw new Error('User does not have permission to manage staff for this event');
       }
 
       // Get existing staff assignments
@@ -1620,15 +1786,11 @@ class EventRequestService {
       await event.save({ session });
 
       // Update request if it exists
-      let request = null;
-      if (requestId) {
-        request = await EventRequest.findOne({ Request_ID: requestId }).session(session);
-        if (request) {
-          request.StaffAssignmentID = staffAssignmentId;
-          await request.save({ session });
-        } else {
-          console.warn(`[EVENT REQUEST SERVICE] Request ${requestId} not found, skipping request update`);
-        }
+      if (request) {
+        request.StaffAssignmentID = staffAssignmentId;
+        await request.save({ session });
+      } else if (resolvedRequestId) {
+        console.warn(`[EVENT REQUEST SERVICE] Request ${resolvedRequestId} not found, skipping request update`);
       }
 
       // Commit transaction

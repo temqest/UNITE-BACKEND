@@ -7,6 +7,18 @@ const eventSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  // Optional link back to a request when the event originated from the request workflow
+  Request_ID: {
+    type: String,
+    required: false,
+    trim: true,
+    index: true
+  },
+  // Flag events that were created directly (e.g., batch create) and have no request history
+  isBatchCreated: {
+    type: Boolean,
+    default: false
+  },
   Event_Title: {
     type: String,
     required: true,
@@ -77,13 +89,13 @@ const eventSchema = new mongoose.Schema({
   },
   Email: {
     type: String,
-    required: true,
+    required: false,
     trim: true,
     lowercase: true
   },
   Phone_Number: {
     type: String,
-    required: true,
+    required: false,
     trim: true
   },
   Event_Description: {

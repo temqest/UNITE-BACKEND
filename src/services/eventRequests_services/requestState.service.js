@@ -6,6 +6,40 @@
 
 const { REQUEST_STATES, REQUEST_ACTIONS, AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
 
+/**
+ * Utility: Check if user is Admin or System Admin by role or StaffType
+ */
+function isAdminUser(user) {
+  return (
+    user.role === 'Admin' ||
+    user.role === 'System Admin' ||
+    user.StaffType === 80 ||
+    user.StaffType === 100
+  );
+}
+
+/**
+ * Utility: Check if user can review this request (primary or secondary logic)
+ * Admins can act as secondary reviewers ONLY for Stakeholder -> Coordinator requests
+ */
+function canUserReviewRequest({ request, user }) {
+  if (!request || !user) return false;
+  const { initiatorRole, reviewerRole } = request;
+  
+  // Coordinator is always primary reviewer
+  if (user.role === reviewerRole) return true;
+  
+  // Admins (role 80/100) can act as secondary reviewer ONLY for Stakeholder -> Coordinator
+  if (
+    initiatorRole === 'Stakeholder' &&
+    reviewerRole === 'Coordinator' &&
+    isAdminUser(user)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 class RequestStateService {
   /**
    * State transition rules
@@ -13,11 +47,10 @@ class RequestStateService {
    */
   static TRANSITIONS = {
     [REQUEST_STATES.PENDING_REVIEW]: {
-      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Directly approve and publish on accept
-      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REJECTED, // Directly reject - no intermediate state
-      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED, // Stakeholder confirm (same as accept) - directly approve and publish
-      [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED, // Stakeholder decline (same as reject) - directly reject
-      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED
+      [REQUEST_ACTIONS.ACCEPT]: REQUEST_STATES.APPROVED, // Coordinator/Admin accept
+      [REQUEST_ACTIONS.REJECT]: REQUEST_STATES.REJECTED, // Coordinator/Admin reject
+      [REQUEST_ACTIONS.DECLINE]: REQUEST_STATES.REJECTED, // Stakeholder decline (equivalent to reject)
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Request reschedule
     },
     [REQUEST_STATES.REVIEW_RESCHEDULED]: {
       [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED, // Stakeholder confirm → auto-publish on confirm
@@ -28,8 +61,8 @@ class RequestStateService {
     },
     [REQUEST_STATES.APPROVED]: {
       [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED,
-      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED, // Allow rescheduling approved events
-      [REQUEST_ACTIONS.CONFIRM]: REQUEST_STATES.APPROVED // Allow stakeholders to confirm approved requests (no state change, just acknowledgment)
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Allow rescheduling approved events
+      // Note: No CONFIRM action in APPROVED - event is already approved and created
     },
     [REQUEST_STATES.REJECTED]: {
       // No transitions from rejected (final state)
@@ -513,5 +546,8 @@ class RequestStateService {
   }
 }
 
-module.exports = RequestStateService;
+// Export utility functions for secondary reviewer logic
+RequestStateService.isAdminUser = isAdminUser;
+RequestStateService.canUserReviewRequest = canUserReviewRequest;
 
+module.exports = RequestStateService;

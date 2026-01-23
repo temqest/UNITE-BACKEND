@@ -331,31 +331,15 @@ class ActionValidatorService {
         
         // Check state-specific confirm rules in order of priority
         
-        // 1. PENDING_REVIEW state: Reviewers (stakeholders/coordinators/admins) can confirm
-        // This is the primary use case: reviewer confirms/accepts the request
+        // 1. PENDING_REVIEW state: Coordinators use accept/reject, NOT confirm
+        // Stakeholders cannot confirm in this state - they use decline action instead
         if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
-          // If user is requester, they can't confirm in pending-review (they're waiting for reviewer)
-          if (isRequester) {
-            return {
-              valid: false,
-              reason: 'Requesters cannot confirm requests in pending-review state. Please wait for reviewer decision.'
-            };
-          }
-          
-          // Check if user is the assigned reviewer or can review
-          const isReviewer = this._isReviewer(userId, requestObj);
-          const canReview = await this._canReview(userId, requestObj, context);
-          
-          if (!isReviewer && !canReview) {
-            return {
-              valid: false,
-              reason: 'Only the assigned reviewer can confirm requests in pending-review state'
-            };
-          }
-          
-          // Reviewer can confirm - permission check will be done below
+          return {
+            valid: false,
+            reason: 'Confirm action is not available in pending-review state. Coordinators use accept/reject, Stakeholders use decline.'
+          };
         }
-        // 2. REVIEW_RESCHEDULED state: Either requester or reviewer can confirm based on active responder
+        // 2. REVIEW_RESCHEDULED state: Stakeholder can confirm reschedule proposals from Coordinator/Admin
         else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
           const activeResponder = RequestStateService.getActiveResponder(requestObj);
           if (activeResponder && activeResponder.userId) {
@@ -379,33 +363,13 @@ class ActionValidatorService {
             }
           }
         }
-        // 3. APPROVED state: Only requester can confirm (acknowledgment)
+        // 3. APPROVED state: Confirm is NOT allowed (event already approved and created)
+        // Stakeholders can only edit/reschedule approved events
         else if (normalizedState === REQUEST_STATES.APPROVED) {
-          // Only requester (stakeholder) can confirm approved requests
-          // Re-check isRequester with normalized userId to ensure accurate comparison
-          const normalizedUserId = this._normalizeUserId(userId);
-          const requesterId = this._normalizeUserId(requestObj.requester?.userId);
-          
-          if (!normalizedUserId || !requesterId || normalizedUserId !== requesterId) {
-            // Check if user is the reviewer (who might have just confirmed it)
-            const reviewerId = this._normalizeUserId(requestObj.reviewer?.userId);
-            const isReviewer = normalizedUserId && reviewerId && normalizedUserId === reviewerId;
-            
-            
-            // If user is the reviewer and request was just approved, provide helpful message
-            if (isReviewer) {
-              return {
-                valid: false,
-                reason: 'This request has already been confirmed and approved. Only the requester can acknowledge approved requests.'
-              };
-            }
-            
-            return {
-              valid: false,
-              reason: 'Only the requester can confirm an approved request'
-            };
-          }
-          // Requester can confirm - permission check will be done below
+          return {
+            valid: false,
+            reason: 'Confirm action is not allowed for approved requests. The event has already been approved and created.'
+          };
         }
         // 4. Other states: Not allowed
         else {
@@ -1070,6 +1034,57 @@ class ActionValidatorService {
             // If lastActorId is null/undefined, log warning but don't block
             if (!lastActorId) {
               console.warn(`[ACTION VALIDATOR] lastActorId is null/undefined for request ${requestObj.Request_ID}`);
+            }
+          }
+        }
+      }
+    }
+
+    // Secondary reviewer: Admin can act on Stakeholder → Coordinator requests
+    // Admins (authority >= 80) are allowed as secondary reviewers for S→C requests only
+    if (!isActiveResponder && normalizedState !== REQUEST_STATES.APPROVED) {
+      // Check if this is a Stakeholder → Coordinator request
+      const isStakeholderToCoordinator = 
+        requestObj.reviewer?.assignmentRule === 'stakeholder-to-coordinator' ||
+        (requestObj.initiatorRole === 'Stakeholder' && requestObj.reviewerRole === 'Coordinator') ||
+        (requestObj.requester?.role === 'Stakeholder' && requestObj.reviewer?.role === 'Coordinator');
+      
+      if (isStakeholderToCoordinator && activeResponder && activeResponder.relationship === 'reviewer') {
+        // Get user authority if not already fetched
+        let userAuthority;
+        try {
+          const user = await User.findById(userIdStr).select('authority').lean();
+          userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
+        } catch (error) {
+          console.error(`[ACTION VALIDATOR] Error getting user authority for secondary reviewer check: ${error.message}`);
+          userAuthority = AUTHORITY_TIERS.BASIC_USER;
+        }
+        
+        // Admins (authority >= 80) can act as secondary reviewers
+        if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+          // For PENDING_REVIEW: Admin can approve/reject/reschedule
+          if (normalizedState === REQUEST_STATES.PENDING_REVIEW) {
+            isActiveResponder = true;
+            console.log(`[ACTION VALIDATOR] Admin (${userIdStr}, authority ${userAuthority}) allowed as secondary reviewer for S→C request ${requestObj.Request_ID}`);
+          }
+          // For REVIEW_RESCHEDULED: Admin can participate in reschedule negotiation
+          else if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
+            let lastActorId = null;
+            if (requestObj.lastAction?.actorId) {
+              // Handle both ObjectId objects and string IDs
+              if (typeof requestObj.lastAction.actorId === 'object' && requestObj.lastAction.actorId.toString) {
+                lastActorId = requestObj.lastAction.actorId.toString();
+              } else if (typeof requestObj.lastAction.actorId === 'string') {
+                lastActorId = requestObj.lastAction.actorId;
+              } else if (requestObj.lastAction.actorId._id) {
+                lastActorId = requestObj.lastAction.actorId._id.toString();
+              }
+            }
+            
+            // Admin can respond unless they rescheduled last
+            if (!lastActorId || lastActorId !== userIdStr) {
+              isActiveResponder = true;
+              console.log(`[ACTION VALIDATOR] Admin (${userIdStr}, authority ${userAuthority}) allowed as secondary reviewer for S→C reschedule ${requestObj.Request_ID}`);
             }
           }
         }
