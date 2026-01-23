@@ -5,6 +5,9 @@
  * - Stakeholder (30-59) → Coordinator (60-79) with org/coverage match
  * - Coordinator (60-79) → Admin (80+)
  * - Admin (80+) → Coordinator (60-79)
+ * 
+ * Also supports secondary reviewer logic:
+ * - Admins can act as secondary reviewers for Stakeholder -> Coordinator requests
  */
 
 const { User } = require('../../models/index');
@@ -528,5 +531,20 @@ class ReviewerAssignmentService {
   }
 }
 
-module.exports = new ReviewerAssignmentService();
+/**
+ * Get valid reviewers for a request (primary + secondary logic)
+ * For Stakeholder -> Coordinator, includes Admins as secondary reviewers
+ */
+function getValidReviewersForRequest(request) {
+  if (!request) return [];
+  const { initiatorRole, reviewerRole } = request;
+  let reviewers = [reviewerRole];
+  // For Stakeholder -> Coordinator, add Admins as secondary reviewers
+  if (initiatorRole === 'Stakeholder' && reviewerRole === 'Coordinator') {
+    reviewers.push('Admin', 'System Admin', 80, 100);
+  }
+  return reviewers;
+}
 
+module.exports = new ReviewerAssignmentService();
+module.exports.getValidReviewersForRequest = getValidReviewersForRequest;

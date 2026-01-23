@@ -75,25 +75,23 @@ const createEventSchema = Joi.object({
     }),
 
   Email: Joi.string()
-    .required()
+    .optional()
+    .allow('', null)
     .trim()
     .lowercase()
     .email()
     .messages({
-      'any.required': 'Email is required',
-      'string.empty': 'Email cannot be empty',
       'string.email': 'Please provide a valid email address'
     }),
 
   Phone_Number: Joi.string()
-    .required()
+    .optional()
+    .allow('', null)
     .trim()
     .pattern(/^[0-9+\-\s()]+$/)
     .min(10)
     .max(20)
     .messages({
-      'any.required': 'Phone Number is required',
-      'string.empty': 'Phone Number cannot be empty',
       'string.min': 'Phone Number must be at least 10 characters long',
       'string.max': 'Phone Number must not exceed 20 characters',
       'string.pattern.base': 'Phone Number can only contain numbers, +, -, spaces, and parentheses'
@@ -176,21 +174,23 @@ const updateEventSchema = Joi.object({
     }),
 
   Email: Joi.string()
+    .optional()
+    .allow('', null)
     .trim()
     .lowercase()
     .email()
     .messages({
-      'string.empty': 'Email cannot be empty',
       'string.email': 'Please provide a valid email address'
     }),
 
   Phone_Number: Joi.string()
+    .optional()
+    .allow('', null)
     .trim()
     .pattern(/^[0-9+\-\s()]+$/)
     .min(10)
     .max(20)
     .messages({
-      'string.empty': 'Phone Number cannot be empty',
       'string.min': 'Phone Number must be at least 10 characters long',
       'string.max': 'Phone Number must not exceed 20 characters',
       'string.pattern.base': 'Phone Number can only contain numbers, +, -, spaces, and parentheses'
