@@ -5,6 +5,7 @@
  */
 
 const { REQUEST_STATES, REQUEST_ACTIONS, AUTHORITY_TIERS } = require('../../utils/eventRequests/requestConstants');
+const PermissionBasedRescheduleService = require('./permissionBasedReschedule.service');
 
 /**
  * Utility: Check if user is Admin or System Admin by role or StaffType
@@ -61,7 +62,9 @@ class RequestStateService {
     },
     [REQUEST_STATES.APPROVED]: {
       [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED,
-      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Allow rescheduling approved events
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED, // Allow rescheduling approved events
+      [REQUEST_ACTIONS.EDIT]: REQUEST_STATES.APPROVED, // Edit event details (stays approved)
+      [REQUEST_ACTIONS.MANAGE_STAFF]: REQUEST_STATES.APPROVED // Manage event staff (stays approved)
       // Note: No CONFIRM action in APPROVED - event is already approved and created
     },
     [REQUEST_STATES.REJECTED]: {
@@ -268,8 +271,9 @@ class RequestStateService {
       const requesterId = request.requester?.userId?.toString();
       const reviewerId = request.reviewer?.userId?.toString();
       
-      // Check for Admin reschedule in coordinator-to-admin requests
-      // If an Admin (not the assigned reviewer) rescheduled, requester becomes active responder
+      // Check for third-party reschedule (neither requester nor assigned reviewer)
+      // Permission-based approach: If an Admin (authority >= 80) or any user with review
+      // permissions rescheduled, requester becomes active responder
       if (request.reviewer?.assignmentRule === 'coordinator-to-admin') {
         let proposerId = null;
         let proposerAuthority = null;
@@ -282,8 +286,10 @@ class RequestStateService {
           proposerAuthority = request.rescheduleProposal.proposedBy.authoritySnapshot;
         }
         
-        // If proposer is Admin (authority >= 80) and not the requester or assigned reviewer
-        if (proposerId && proposerAuthority >= 80 && proposerId !== requesterId && proposerId !== reviewerId) {
+        // If proposer has admin-level authority (>= 80) and is not the requester or assigned reviewer
+        // Route to requester (permission-based: admin has request.review, requester has request.create)
+        if (proposerId && proposerAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && 
+            proposerId !== requesterId && proposerId !== reviewerId) {
           // Admin rescheduled, requester becomes active responder
           if (requesterId && request.requester && request.requester.userId) {
             const requesterUserId = request.requester.userId._id || request.requester.userId;
@@ -319,27 +325,26 @@ class RequestStateService {
           };
         }
         
-        // Handle Admin reschedules in coordinator-to-admin requests
-        // When Admin (not assigned reviewer) reschedules, requester becomes active responder
+        // Handle third-party reschedule (actor is neither requester nor assigned reviewer)
+        // Permission-based logic: If actor has coordinator/admin authority (review permissions),
+        // route back to the original requester
         if (lastActorId !== requesterId && lastActorId !== reviewerId) {
-          // Check if this is an Admin reschedule in coordinator-to-admin request
-          if (request.reviewer?.assignmentRule === 'coordinator-to-admin') {
-            // Get Admin authority from rescheduleProposal
-            if (request.rescheduleProposal?.proposedBy) {
-              const proposerAuthority = request.rescheduleProposal.proposedBy.authoritySnapshot;
-              const proposerId = request.rescheduleProposal.proposedBy.userId?.toString();
-              
-              // If last actor is Admin (authority >= 80) and matches proposer
-              if (proposerId === lastActorId && proposerAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-                // Admin rescheduled, requester becomes active responder
-                if (requesterId && request.requester && request.requester.userId) {
-                  const requesterUserId = request.requester.userId._id || request.requester.userId;
-                  return {
-                    userId: requesterUserId,
-                    relationship: 'requester',
-                    authority: request.requester.authoritySnapshot || null
-                  };
-                }
+          // Check if last actor has review-level authority (coordinator >= 60, admin >= 80)
+          // This is a proxy for having request.review or request.approve permissions
+          if (request.rescheduleProposal?.proposedBy) {
+            const proposerAuthority = request.rescheduleProposal.proposedBy.authoritySnapshot;
+            const proposerId = request.rescheduleProposal.proposedBy.userId?.toString();
+            
+            // If last actor has review-level authority and matches proposer, route to requester
+            if (proposerId === lastActorId && proposerAuthority >= AUTHORITY_TIERS.COORDINATOR) {
+              // Reviewer (coordinator or admin) rescheduled, requester responds next
+              if (requesterId && request.requester && request.requester.userId) {
+                const requesterUserId = request.requester.userId._id || request.requester.userId;
+                return {
+                  userId: requesterUserId,
+                  relationship: 'requester',
+                  authority: request.requester.authoritySnapshot || null
+                };
               }
             }
           }
@@ -370,20 +375,20 @@ class RequestStateService {
           };
         }
         
-        // Handle Admin (not requester/reviewer) who proposed reschedule
-        // In coordinator-to-admin requests, if Admin rescheduled, requester becomes active responder
+        // Handle third-party reschedule (neither requester nor assigned reviewer)
+        // Permission-based approach: Any user with review permissions can reschedule
+        // If they do, the original requester should respond next
         if (proposerId !== requesterId && proposerId !== reviewerId) {
-          if (request.reviewer?.assignmentRule === 'coordinator-to-admin' && 
-              proposerAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-            // Admin rescheduled, requester becomes active responder
-            if (requesterId && request.requester && request.requester.userId) {
-              const requesterUserId = request.requester.userId._id || request.requester.userId;
-              return {
-                userId: requesterUserId,
-                relationship: 'requester',
-                authority: request.requester.authoritySnapshot || null
-              };
-            }
+          // Check if proposer has review permissions (via authority as proxy)
+          // If proposer has review authority (>= 60 for coordinators, >= 80 for admins)
+          if (proposerAuthority >= AUTHORITY_TIERS.COORDINATOR && requesterId) {
+            // Reviewer (coordinator/admin) rescheduled, requester becomes active responder
+            const requesterUserId = request.requester.userId._id || request.requester.userId;
+            return {
+              userId: requesterUserId,
+              relationship: 'requester',
+              authority: request.requester.authoritySnapshot || null
+            };
           }
         }
       }
@@ -404,6 +409,13 @@ class RequestStateService {
 
   /**
    * Update active responder after an action
+   * 
+   * RESCHEDULE LOOP HANDLING:
+   * - Stakeholder → Coordinator/Admin → Stakeholder → loop continues
+   * - All valid coordinators, assigned coordinator, and admins can participate
+   * - Active responder alternates based on who initiated the reschedule
+   * - Loop continues until someone accepts/confirms/rejects
+   * 
    * @param {Object} request - Request document (will be modified)
    * @param {string} action - Action that was performed
    * @param {string|ObjectId} actorId - User who performed the action
@@ -436,13 +448,13 @@ class RequestStateService {
 
     // Handle reschedule: receiver becomes active responder
     if (action === REQUEST_ACTIONS.RESCHEDULE) {
-      // Special case: Admin (authority >= 80) rescheduling coordinator-to-admin request
-      // When Admin (who is NOT the assigned reviewer) reschedules, requester becomes active responder
+      // Permission-based approach: Determine next responder based on who acted and their permissions
       const actorAuthority = context.actorAuthority || null;
       
-      if (!isRequester && !isReviewer && request.reviewer?.assignmentRule === 'coordinator-to-admin') {
-        // Check if actor is Admin (authority >= 80)
-        // First try context, then try rescheduleProposal (which may not be set yet)
+      // Case 1: Actor is neither the original requester nor assigned reviewer
+      // This happens when a valid coordinator or admin (who has review permissions) reschedules
+      if (!isRequester && !isReviewer) {
+        // Get effective authority
         let effectiveAuthority = actorAuthority;
         if (!effectiveAuthority && request.rescheduleProposal && request.rescheduleProposal.proposedBy) {
           const proposedBy = request.rescheduleProposal.proposedBy;
@@ -451,9 +463,11 @@ class RequestStateService {
           }
         }
         
-        // If actor is Admin (authority >= 80) and not requester/reviewer, set requester as active responder
-        if (effectiveAuthority && effectiveAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && requesterId) {
-          console.log(`[REQUEST STATE] Admin (authority ${effectiveAuthority}) rescheduled coordinator-to-admin request, setting requester as active responder`, {
+        // If actor has review-level authority (coordinator or admin), route to requester
+        // Permission logic: Anyone with request.review or request.approve can reschedule
+        // When they do, the original requester (with request.create) should respond
+        if (effectiveAuthority >= AUTHORITY_TIERS.COORDINATOR && requesterId) {
+          console.log(`[REQUEST STATE] Reviewer (authority ${effectiveAuthority}) rescheduled, setting requester as active responder`, {
             actorId: actorIdStr,
             requesterId,
             reviewerId,
@@ -497,25 +511,26 @@ class RequestStateService {
           requestId: request.Request_ID
         });
       } else {
-        // Fallback: if actor is neither requester nor reviewer, try to determine from context
-        // This handles the Admin reschedule case when authority isn't in proposal yet
+        // Fallback: actor is neither requester nor assigned reviewer
+        // Permission-based logic: Route back to requester by default
+        // This handles cases where valid coordinators, admins, or other reviewers participate
         console.warn(`[REQUEST STATE] Reschedule by actor who is neither requester nor reviewer`, {
           actorId: actorIdStr,
           requesterId,
           reviewerId,
-          assignmentRule: request.reviewer?.assignmentRule,
           requestId: request.Request_ID
         });
-        // Will be handled by getActiveResponder() fallback logic
-        // For now, if it's coordinator-to-admin, assume requester should be active responder
-        if (request.reviewer?.assignmentRule === 'coordinator-to-admin' && requesterId) {
+        
+        // Default behavior: Route back to original requester
+        // Assumption: Actor has review permissions, so requester should respond
+        if (requesterId && request.requester) {
           const requesterUserId = request.requester.userId._id || request.requester.userId;
           request.activeResponder = {
             userId: requesterUserId,
             relationship: 'requester',
             authority: request.requester.authoritySnapshot || null
           };
-          console.log(`[REQUEST STATE] Fallback: Set requester as active responder for coordinator-to-admin reschedule`, {
+          console.log(`[REQUEST STATE] Fallback: Set requester as active responder after reviewer reschedule`, {
             actorId: actorIdStr,
             requesterId,
             requestId: request.Request_ID
@@ -542,6 +557,66 @@ class RequestStateService {
           authority: request.reviewer.authoritySnapshot || null
         };
       }
+    }
+  }
+
+  /**
+   * Initialize reschedule loop tracking (legacy compatibility)
+   * Note: This is a stub for backward compatibility with existing code
+   * The permission-based approach doesn't require explicit loop tracking
+   * 
+   * @param {Object} request - Request document
+   * @param {string|ObjectId} userId - User who initiated reschedule
+   * @param {string} proposerRole - Role of proposer (deprecated, not used)
+   */
+  static initializeRescheduleLoop(request, userId, proposerRole) {
+    // Legacy method stub - no-op in permission-based approach
+    // The rescheduleLoop field is deprecated; activeResponder handles loop tracking
+    console.log(`[REQUEST STATE] initializeRescheduleLoop called (legacy stub)`, {
+      requestId: request.Request_ID,
+      userId: userId?.toString(),
+      proposerRole
+    });
+    
+    // If rescheduleLoop field exists on request, initialize it for compatibility
+    if (request.schema && request.schema.paths && request.schema.paths.rescheduleLoop) {
+      request.rescheduleLoop = {
+        rescheduleCount: 1,
+        lastProposerRole: proposerRole,
+        initiatedAt: new Date()
+      };
+    }
+  }
+
+  /**
+   * Update reschedule loop tracker (legacy compatibility)
+   * Note: This is a stub for backward compatibility with existing code
+   * The permission-based approach doesn't require explicit loop tracking
+   * 
+   * @param {Object} request - Request document
+   * @param {string|ObjectId} userId - User who performed reschedule
+   * @param {string} proposerRole - Role of proposer (deprecated, not used)
+   */
+  static updateRescheduleLoopTracker(request, userId, proposerRole) {
+    // Legacy method stub - no-op in permission-based approach
+    console.log(`[REQUEST STATE] updateRescheduleLoopTracker called (legacy stub)`, {
+      requestId: request.Request_ID,
+      userId: userId?.toString(),
+      proposerRole
+    });
+    
+    // If rescheduleLoop field exists, increment counter
+    if (request.rescheduleLoop) {
+      request.rescheduleLoop.rescheduleCount = (request.rescheduleLoop.rescheduleCount || 0) + 1;
+      request.rescheduleLoop.lastProposerRole = proposerRole;
+      request.rescheduleLoop.lastUpdatedAt = new Date();
+    } else if (request.schema && request.schema.paths && request.schema.paths.rescheduleLoop) {
+      // Initialize if field exists but not set
+      request.rescheduleLoop = {
+        rescheduleCount: 1,
+        lastProposerRole: proposerRole,
+        initiatedAt: new Date()
+      };
     }
   }
 }

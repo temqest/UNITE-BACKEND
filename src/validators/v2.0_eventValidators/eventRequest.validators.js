@@ -1,7 +1,7 @@
 /**
- * Event Request Validators
+ * v2.0 Event Request Validators
  * 
- * Validation rules for event request creation and updates using Joi
+ * Validation rules for v2.0 event request endpoints using Joi
  */
 
 const Joi = require('joi');
@@ -11,16 +11,14 @@ const Joi = require('joi');
  */
 const validateCreateEventRequest = (req, res, next) => {
   const schema = Joi.object({
-    // Event_ID is optional - it will be generated when the request is approved and event is created
-    Event_ID: Joi.string().trim().optional(),
     // Required event fields
     Event_Title: Joi.string().trim().required(),
     Location: Joi.string().trim().required(),
-    Date: Joi.date().optional(), // Can be Date or Start_Date (for backward compatibility)
-    Start_Date: Joi.date().optional(), // Support old field name for backward compatibility
-    Email: Joi.string().allow('', null).optional(),
-    Phone_Number: Joi.string().allow('', null).optional(),
+    Start_Date: Joi.date().required(),
+    End_Date: Joi.date().optional(),
     // Optional event fields
+    Email: Joi.string().email().allow('', null).optional(),
+    Phone_Number: Joi.string().allow('', null).optional(),
     Event_Description: Joi.string().trim().allow('', null).optional(),
     Category: Joi.string().trim().optional(),
     // Category-specific fields
@@ -33,21 +31,21 @@ const validateCreateEventRequest = (req, res, next) => {
     ExpectedAudienceSize: Joi.number().optional(),
     PartnerOrganization: Joi.string().trim().optional(),
     StaffAssignmentID: Joi.string().trim().optional(),
-    // Location and organization references
-    organizationId: Joi.string().optional(),
-    coverageAreaId: Joi.string().optional(),
-    municipalityId: Joi.string().optional(),
-    district: Joi.string().optional(),
-    province: Joi.string().optional(),
+    // Location references (at least one required)
+    municipalityId: Joi.string().hex().length(24).optional(),
+    district: Joi.string().hex().length(24).optional(),
+    province: Joi.string().hex().length(24).optional(),
+    organizationId: Joi.string().hex().length(24).optional(),
+    coverageAreaId: Joi.string().hex().length(24).optional(),
+    organizationType: Joi.string().trim().optional(),
     // Request-specific fields
     notes: Joi.string().trim().max(1000).optional(),
-    coordinatorId: Joi.string().optional(),
-    // Frontend field names - should be normalized to backend names in controller
-    coordinator: Joi.string().optional(),
-    stakeholder: Joi.string().optional()
-  }).unknown(true); // Allow unknown fields to pass through
+    // Legacy field support
+    Date: Joi.date().optional()
+  }).unknown(false); // Don't allow unknown fields
 
-  const { error, value } = schema.validate(req.body, { abortEarly: false, allowUnknown: true });
+  const { error, value } = schema.validate(req.body, { abortEarly: false });
+  
   if (error) {
     const errorMessages = error.details.map(d => d.message);
     return res.status(400).json({
@@ -57,18 +55,18 @@ const validateCreateEventRequest = (req, res, next) => {
     });
   }
   
-  // Ensure at least one of Date or Start_Date is provided
-  if (!value.Date && !value.Start_Date) {
+  // Ensure at least one location field is provided
+  if (!value.municipalityId && !value.district && !value.province) {
     return res.status(400).json({
       success: false,
       message: 'Validation failed',
-      errors: ['Either Date or Start_Date is required']
+      errors: ['At least one location field (municipalityId, district, or province) is required']
     });
   }
   
   // Normalize: use Date if provided, otherwise use Start_Date
-  if (!value.Date && value.Start_Date) {
-    value.Date = value.Start_Date;
+  if (!value.Start_Date && value.Date) {
+    value.Start_Date = value.Date;
   }
   
   req.validatedData = value;
@@ -83,10 +81,9 @@ const validateUpdateEventRequest = (req, res, next) => {
     // Event fields
     Event_Title: Joi.string().trim().min(3).max(200).optional(),
     Location: Joi.string().trim().min(3).max(500).optional(),
-    Date: Joi.date().optional(),
     Start_Date: Joi.date().optional(),
     End_Date: Joi.date().optional(),
-    Email: Joi.string().allow('', null).optional(),
+    Email: Joi.string().email().allow('', null).optional(),
     Phone_Number: Joi.string().allow('', null).optional(),
     Event_Description: Joi.string().trim().allow('', null).optional(),
     Category: Joi.string().trim().optional(),
@@ -100,17 +97,20 @@ const validateUpdateEventRequest = (req, res, next) => {
     ExpectedAudienceSize: Joi.number().optional(),
     PartnerOrganization: Joi.string().trim().optional(),
     StaffAssignmentID: Joi.string().trim().optional(),
-    // Location and organization references
+    // Location references
     municipalityId: Joi.string().hex().length(24).optional(),
     district: Joi.string().hex().length(24).optional(),
     province: Joi.string().hex().length(24).optional(),
-    organizationId: Joi.string().optional(),
-    coverageAreaId: Joi.string().optional(),
+    organizationId: Joi.string().hex().length(24).optional(),
+    coverageAreaId: Joi.string().hex().length(24).optional(),
     // Request-specific fields
-    notes: Joi.string().trim().max(1000).optional()
+    notes: Joi.string().trim().max(1000).optional(),
+    // Legacy field support
+    Date: Joi.date().optional()
   }).min(1).messages({ 'object.min': 'At least one field must be provided for update' });
 
   const { error, value } = schema.validate(req.body, { abortEarly: false });
+  
   if (error) {
     const errorMessages = error.details.map(d => d.message);
     return res.status(400).json({
@@ -121,8 +121,8 @@ const validateUpdateEventRequest = (req, res, next) => {
   }
   
   // Normalize: use Date if provided, otherwise use Start_Date
-  if (!value.Date && value.Start_Date) {
-    value.Date = value.Start_Date;
+  if (!value.Start_Date && value.Date) {
+    value.Start_Date = value.Date;
   }
   
   req.validatedData = value;
@@ -138,6 +138,7 @@ const validateRequestId = (req, res, next) => {
   });
 
   const { error } = schema.validate({ requestId: req.params.requestId });
+  
   if (error) {
     return res.status(400).json({
       success: false,
@@ -145,11 +146,66 @@ const validateRequestId = (req, res, next) => {
       errors: error.details.map(d => d.message)
     });
   }
+  
+  next();
+};
+
+/**
+ * Validate execute action
+ */
+const validateExecuteAction = (req, res, next) => {
+  const schema = Joi.object({
+    action: Joi.string()
+      .valid('accept', 'reject', 'reschedule', 'confirm', 'decline', 'cancel')
+      .required(),
+    notes: Joi.string().trim().max(1000).allow('', null).optional(),
+    note: Joi.string().trim().max(1000).allow('', null).optional(), // Support both field names
+    // Reschedule-specific fields
+    proposedDate: Joi.date().when('action', {
+      is: 'reschedule',
+      then: Joi.required(),
+      otherwise: Joi.optional()
+    }),
+    proposedStartTime: Joi.string().trim().optional(),
+    proposedEndTime: Joi.string().trim().optional()
+  });
+
+  const { error, value } = schema.validate(req.body, { abortEarly: false });
+  
+  if (error) {
+    const errorMessages = error.details.map(d => d.message);
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errorMessages
+    });
+  }
+  
+  // Normalize notes field
+  if (value.note && !value.notes) {
+    value.notes = value.note;
+  }
+
+  // Enforce note requirement only for reject/reschedule actions
+  const requiresNote = ['reject', 'reschedule'].includes(value.action);
+  if (requiresNote) {
+    const noteStr = (value.notes || '').trim();
+    if (!noteStr) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: ['Note is required for reject/reschedule actions']
+      });
+    }
+  }
+  
+  req.validatedData = value;
   next();
 };
 
 module.exports = {
   validateCreateEventRequest,
   validateUpdateEventRequest,
-  validateRequestId
+  validateRequestId,
+  validateExecuteAction
 };

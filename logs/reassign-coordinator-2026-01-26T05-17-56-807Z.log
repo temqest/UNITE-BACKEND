@@ -1,0 +1,10 @@
+[2026-01-26T05:17:56.817Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:17:56.819Z] 🔄 COORDINATOR REASSIGNMENT SCRIPT - STARTING
+[2026-01-26T05:17:56.819Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:17:56.820Z] Mode: DRY RUN (no changes)
+[2026-01-26T05:17:56.820Z] Timestamp: 2026-01-26T05:17:56.820Z
+[2026-01-26T05:17:56.820Z] 
+📊 Connecting to MongoDB...
+[2026-01-26T05:17:57.541Z] 
+❌ ERROR: "dbName is not defined"
+[2026-01-26T05:17:57.542Z] Stack: "ReferenceError: dbName is not defined\n    at reassignCoordinators (C:\\Users\\Admin\\Desktop\\Dev\\UNITE-BACKEND\\src\\scripts\\reassignCoordinatorToDavid.js:228:16)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)"

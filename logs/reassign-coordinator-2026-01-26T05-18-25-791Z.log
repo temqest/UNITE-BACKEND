@@ -1,0 +1,24 @@
+[2026-01-26T05:18:25.800Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:18:25.801Z] 🔄 COORDINATOR REASSIGNMENT SCRIPT - STARTING
+[2026-01-26T05:18:25.802Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:18:25.803Z] Mode: DRY RUN (no changes)
+[2026-01-26T05:18:25.803Z] Timestamp: 2026-01-26T05:18:25.803Z
+[2026-01-26T05:18:25.804Z] 
+📊 Connecting to MongoDB...
+[2026-01-26T05:18:26.390Z] ✅ Connected to MongoDB {"database":"unite_app_user:H5QIDcf9dR1RTtlw@unite-cluster.uddazot.mongodb.net","uri":"mongodb+srv://unite_app_user:H5QIDcf9dR1RTtlw@unit..."}
+[2026-01-26T05:18:26.391Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:18:26.391Z] 👤 FINDING USERS
+[2026-01-26T05:18:26.392Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:18:26.392Z] Searching for David (davidjaque@ymail.com)...
+[2026-01-26T05:18:26.585Z] ✅ Found David: {"_id":"6970784d6d0127f028ab85c6","name":"David Jaque","authority":60}
+[2026-01-26T05:18:26.585Z] 
+Searching for Ben (ben@unite.com or similar)...
+[2026-01-26T05:18:27.198Z] ⚠️  WARNING: Ben not found. Will search for all coordinators in District 2, Camarines Sur
+[2026-01-26T05:18:27.199Z] Note: You may need to manually provide Ben's email or user ID
+[2026-01-26T05:18:27.199Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:18:27.199Z] 📍 FINDING GEOGRAPHY
+[2026-01-26T05:18:27.200Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:18:27.200Z] Searching for Camarines Sur province...
+[2026-01-26T05:18:27.270Z] 
+❌ ERROR: "Camarines Sur province not found"
+[2026-01-26T05:18:27.271Z] Stack: "Error: Camarines Sur province not found\n    at reassignCoordinators (C:\\Users\\Admin\\Desktop\\Dev\\UNITE-BACKEND\\src\\scripts\\reassignCoordinatorToDavid.js:284:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)"

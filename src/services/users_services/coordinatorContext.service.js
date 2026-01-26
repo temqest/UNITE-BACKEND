@@ -161,23 +161,10 @@ class CoordinatorContextService {
       })
       .filter(Boolean);
     
-    console.log('[CTX] _resolveOrganizations - Extracted organization IDs:', {
-      userId: userId?.toString(),
-      organizationsCount: user.organizations.length,
-      organizationIdsCount: organizationIds.length,
-      organizationIds: organizationIds.map(id => id.toString())
-    });
-    
     const organizations = await Organization.find({ 
       _id: { $in: organizationIds },
       isActive: true 
     }).sort({ name: 1 });
-    
-    console.log('[CTX] _resolveOrganizations - Found organizations:', {
-      requested: organizationIds.length,
-      found: organizations.length,
-      organizationNames: organizations.map(o => o.name)
-    });
     
     return organizations;
   }
@@ -374,12 +361,12 @@ class CoordinatorContextService {
       }
       
       // Enhanced logging
-      console.log('[CTX] Coordinator validation complete:', {
-        userId: userId.toString(),
-        isValid: issues.length === 0,
-        issues,
-        details
-      });
+      // console.log('[CTX] Coordinator validation complete:', {
+      //   userId: userId.toString(),
+      //   isValid: issues.length === 0,
+      //   issues,
+      //   details
+      // });
       
       return {
         isValid: issues.length === 0,

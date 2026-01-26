@@ -26,7 +26,8 @@ const REQUEST_ACTIONS = Object.freeze({
   DECLINE: 'decline',
   CANCEL: 'cancel',
   DELETE: 'delete',
-  EDIT: 'edit'
+  EDIT: 'edit',
+  MANAGE_STAFF: 'manage-staff'
 });
 
 // Authority Tiers (matching AuthorityService)
