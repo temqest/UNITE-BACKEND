@@ -14,6 +14,7 @@ const usersRoutes = require('./users.routes');
 const eventsRoutes = require('./events.routes');
 const requestsRoutes = require('./requests.routes'); // Legacy routes (kept for backward compatibility)
 const eventRequestsRoutes = require('./eventRequests.routes'); // New event request system
+const v2EventRequestsRoutes = require('./v2.0_eventRoutes'); // v2.0 event request system
 const utilityRoutes = require('./utility.routes');
 const inventoryRoutes = require('./inventory.routes');
 const chatRoutes = require('./chat.routes');
@@ -34,6 +35,7 @@ router.use('/api', usersRoutes);
 router.use('/api', eventsRoutes);
 router.use('/api', requestsRoutes); // Legacy routes (kept for backward compatibility)
 router.use('/api', eventRequestsRoutes); // New event request system
+router.use('/api/v2', v2EventRequestsRoutes); // v2.0 event request system (permission-based)
 router.use('/api', utilityRoutes);
 router.use('/api', inventoryRoutes);
 router.use('/api', locationsRoutes); // New flexible location routes
