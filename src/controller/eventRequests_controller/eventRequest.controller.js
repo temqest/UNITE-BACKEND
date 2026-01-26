@@ -21,7 +21,18 @@ class EventRequestController {
   async createEventRequest(req, res) {
     try {
       const userId = req.user._id || req.user.id;
-      const requestData = req.body;
+      // Use validated data instead of raw body, and normalize frontend field names
+      const requestData = req.validatedData || req.body;
+      
+      // Normalize frontend field name 'coordinator' to backend field name 'coordinatorId'
+      if (requestData.coordinator && !requestData.coordinatorId) {
+        requestData.coordinatorId = requestData.coordinator;
+      }
+      
+      // Normalize frontend field name 'stakeholder' to backend field name 'stakeholderId'
+      if (requestData.stakeholder && !requestData.stakeholderId) {
+        requestData.stakeholderId = requestData.stakeholder;
+      }
 
       const request = await eventRequestService.createRequest(userId, requestData);
 
@@ -851,6 +862,453 @@ class EventRequestController {
       res.status(400).json({
         success: false,
         message: error.message || 'Failed to assign staff'
+      });
+    }
+  }
+
+  /**
+   * Override Coordinator Assignment (BROADCAST MODEL FIX)
+   * Fixes the coordinator selection bug - ensures manual override persists with complete audit trail
+   * 
+   * @route PUT /api/event-requests/:requestId/override-coordinator
+   * @access Admin only (authority >= 80)
+   * @param {string} requestId - Request ID or ObjectId
+   * @param {string} coordinatorId - New coordinator ID (must be in validCoordinators)
+   */
+  async overrideCoordinator(req, res) {
+    try {
+      const { requestId } = req.params;
+      const { coordinatorId } = req.body;
+      const adminId = req.user._id || req.user.id;
+      const AUTHORITY_TIERS = require('../../utils/eventRequests/requestConstants').AUTHORITY_TIERS;
+
+      // Validation: Only admin can override
+      if ((req.user.authority || 0) < AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only administrators can override coordinator assignments',
+          requiredAuthority: AUTHORITY_TIERS.OPERATIONAL_ADMIN
+        });
+      }
+
+      // Validation: coordinatorId is required
+      if (!coordinatorId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Coordinator ID is required',
+          code: 'MISSING_COORDINATOR_ID'
+        });
+      }
+
+      // Get request with populated fields
+      const request = await EventRequest.findOne({ Request_ID: requestId })
+        .populate('validCoordinators.userId', '_id firstName lastName authority organizationType')
+        .populate('requester.userId')
+        .lean(false);
+      
+      if (!request) {
+        return res.status(404).json({
+          success: false,
+          message: 'Request not found',
+          code: 'REQUEST_NOT_FOUND'
+        });
+      }
+
+      // Get new coordinator
+      const coordinator = await User.findById(coordinatorId);
+      if (!coordinator) {
+        return res.status(404).json({
+          success: false,
+          message: 'Coordinator not found',
+          code: 'COORDINATOR_NOT_FOUND'
+        });
+      }
+
+      // Get admin
+      const admin = await User.findById(adminId);
+      if (!admin) {
+        return res.status(404).json({
+          success: false,
+          message: 'Admin user not found',
+          code: 'ADMIN_NOT_FOUND'
+        });
+      }
+
+      // Broadcast validation: New coordinator must be in validCoordinators list
+      const isValidCoordinator = request.validCoordinators?.some(vc => {
+        const vcUserId = vc.userId?._id || vc.userId;
+        return vcUserId.toString() === coordinatorId.toString();
+      });
+      
+      if (!isValidCoordinator) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected coordinator is not in the valid coordinators list for this request',
+          code: 'INVALID_COORDINATOR',
+          validCoordinators: request.validCoordinators
+        });
+      }
+
+      // Capture previous reviewer for audit trail
+      const previousReviewerId = request.reviewer?.userId;
+      const previousReviewerName = request.reviewer?.name || 'Unassigned';
+
+      // CRITICAL FIX: Complete replacement of reviewer object
+      request.reviewer = {
+        userId: coordinator._id,
+        name: `${coordinator.firstName} ${coordinator.lastName}`,
+        roleSnapshot: coordinator.role || 'Coordinator',
+        assignedAt: new Date(),
+        autoAssigned: false,
+        assignmentRule: 'manual',
+        overriddenAt: new Date(),
+        overriddenBy: {
+          userId: admin._id,
+          name: `${admin.firstName} ${admin.lastName}`,
+          roleSnapshot: admin.role,
+          authoritySnapshot: admin.authority
+        }
+      };
+
+      // Add to status history
+      request.addStatusHistory(
+        request.status,
+        {
+          userId: admin._id,
+          name: `${admin.firstName} ${admin.lastName}`,
+          roleSnapshot: admin.role,
+          authoritySnapshot: admin.authority
+        },
+        `Coordinator manually overridden: ${previousReviewerName} → ${coordinator.firstName} ${coordinator.lastName}`
+      );
+
+      // Update latest action tracking
+      request.latestAction = {
+        action: 'COORDINATOR_OVERRIDE',
+        actor: {
+          userId: admin._id,
+          name: `${admin.firstName} ${admin.lastName}`
+        },
+        timestamp: new Date()
+      };
+
+      // Save changes to database
+      const savedRequest = await request.save();
+
+      if (!savedRequest) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to save updated request',
+          code: 'SAVE_FAILED'
+        });
+      }
+
+      // Socket.IO notification (real-time)
+      try {
+        const io = req.app?.get?.('io');
+        if (io) {
+          io.to(`request-${requestId}`).emit('coordinator_assigned', {
+            requestId: savedRequest._id,
+            Request_ID: savedRequest.Request_ID,
+            reviewer: savedRequest.reviewer,
+            overriddenBy: admin.firstName + ' ' + admin.lastName
+          });
+        }
+      } catch (socketError) {
+        console.warn('[OVERRIDE COORDINATOR] Socket notification failed:', socketError.message);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Coordinator assignment updated successfully',
+        data: {
+          requestId: savedRequest._id,
+          Request_ID: savedRequest.Request_ID,
+          previousReviewer: {
+            userId: previousReviewerId,
+            name: previousReviewerName
+          },
+          reviewer: {
+            userId: savedRequest.reviewer.userId,
+            name: savedRequest.reviewer.name,
+            assignmentRule: savedRequest.reviewer.assignmentRule,
+            overriddenAt: savedRequest.reviewer.overriddenAt,
+            overriddenBy: savedRequest.reviewer.overriddenBy
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('[OVERRIDE COORDINATOR] Error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to override coordinator assignment',
+        error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  }
+
+  /**
+   * Claim Request for Review (BROADCAST MODEL)
+   * Enables claim mechanism for broadcast - prevents duplicate actions
+   * 
+   * @route POST /api/event-requests/:requestId/claim
+   * @access Authenticated coordinator
+   */
+  async claimRequest(req, res) {
+    try {
+      const { requestId } = req.params;
+      const userId = req.user._id || req.user.id;
+      const claimDurationMinutes = parseInt(process.env.CLAIM_TIMEOUT_MINUTES || '30');
+
+      // Get request with populated fields
+      const request = await EventRequest.findOne({ Request_ID: requestId })
+        .populate('claimedBy.userId', '_id firstName lastName')
+        .populate('validCoordinators.userId', '_id firstName lastName')
+        .lean(false);
+      
+      if (!request) {
+        return res.status(404).json({
+          success: false,
+          message: 'Request not found',
+          code: 'REQUEST_NOT_FOUND'
+        });
+      }
+
+      // Check if already claimed by someone else
+      if (request.claimedBy?.userId) {
+        const claimedByUserId = request.claimedBy.userId._id || request.claimedBy.userId;
+        const isClaimedByMe = claimedByUserId.toString() === userId.toString();
+        
+        if (!isClaimedByMe) {
+          const timeRemaining = request.claimedBy.claimTimeoutAt 
+            ? Math.ceil((request.claimedBy.claimTimeoutAt - Date.now()) / 1000)
+            : 0;
+          
+          return res.status(409).json({
+            success: false,
+            message: `Request is currently claimed by ${request.claimedBy.userId.firstName}. Please wait or contact them to release.`,
+            claimedBy: {
+              userId: request.claimedBy.userId._id,
+              name: request.claimedBy.userId.firstName + ' ' + request.claimedBy.userId.lastName,
+              claimedAt: request.claimedBy.claimedAt
+            },
+            timeRemainingSeconds: timeRemaining
+          });
+        }
+        // Already claimed by me - just return success
+        return res.status(200).json({
+          success: true,
+          message: 'Request already claimed by you',
+          data: { claimedBy: request.claimedBy }
+        });
+      }
+
+      // Broadcast validation: User must be a valid coordinator
+      const isValidCoordinator = request.validCoordinators?.some(vc => {
+        const vcUserId = vc.userId?._id || vc.userId;
+        return vcUserId.toString() === userId.toString();
+      });
+      
+      if (!isValidCoordinator) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not in the valid coordinators list for this request',
+          code: 'NOT_VALID_COORDINATOR'
+        });
+      }
+
+      // Get current user
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found',
+          code: 'USER_NOT_FOUND'
+        });
+      }
+
+      // Set claim with timeout
+      const claimTimeoutAt = new Date(Date.now() + claimDurationMinutes * 60 * 1000);
+      
+      request.claimedBy = {
+        userId: user._id,
+        name: `${user.firstName} ${user.lastName}`,
+        claimedAt: new Date(),
+        claimTimeoutAt: claimTimeoutAt
+      };
+
+      // Add to status history
+      request.addStatusHistory(
+        request.status,
+        {
+          userId: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          roleSnapshot: user.role,
+          authoritySnapshot: user.authority
+        },
+        `Request claimed by ${user.firstName} ${user.lastName} (timeout: ${claimDurationMinutes}min)`
+      );
+
+      // Update latest action
+      request.latestAction = {
+        action: 'REQUEST_CLAIMED',
+        actor: {
+          userId: user._id,
+          name: `${user.firstName} ${user.lastName}`
+        },
+        timestamp: new Date()
+      };
+
+      await request.save();
+
+      // Socket.IO notification to other valid coordinators
+      try {
+        const io = req.app?.get?.('io');
+        if (io) {
+          io.to(`request-${requestId}`).emit('request_claimed', {
+            requestId: request._id,
+            Request_ID: request.Request_ID,
+            claimedBy: request.claimedBy
+          });
+        }
+      } catch (socketError) {
+        console.warn('[CLAIM REQUEST] Socket notification failed:', socketError.message);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Request claimed successfully',
+        data: {
+          requestId: request._id,
+          Request_ID: request.Request_ID,
+          claimedBy: request.claimedBy,
+          claimTimeoutAt: claimTimeoutAt,
+          timeoutIn: claimDurationMinutes * 60
+        }
+      });
+
+    } catch (error) {
+      console.error('[CLAIM REQUEST] Error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to claim request',
+        error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  }
+
+  /**
+   * Release Claim on Request (BROADCAST MODEL)
+   * Allows claiming coordinator to release for others
+   * 
+   * @route POST /api/event-requests/:requestId/release
+   * @access Authenticated coordinator (must have claimed it)
+   */
+  async releaseRequest(req, res) {
+    try {
+      const { requestId } = req.params;
+      const userId = req.user._id || req.user.id;
+
+      const request = await EventRequest.findOne({ Request_ID: requestId })
+        .populate('claimedBy.userId', '_id firstName lastName')
+        .lean(false);
+      
+      if (!request) {
+        return res.status(404).json({
+          success: false,
+          message: 'Request not found',
+          code: 'REQUEST_NOT_FOUND'
+        });
+      }
+
+      // Check if claimed by someone else
+      if (request.claimedBy?.userId) {
+        const claimedByUserId = request.claimedBy.userId._id || request.claimedBy.userId;
+        const isClaimedByMe = claimedByUserId.toString() === userId.toString();
+        
+        if (!isClaimedByMe) {
+          return res.status(403).json({
+            success: false,
+            message: 'Only the coordinator who claimed this request can release it',
+            claimedBy: {
+              userId: request.claimedBy.userId._id,
+              name: request.claimedBy.userId.firstName + ' ' + request.claimedBy.userId.lastName
+            }
+          });
+        }
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'This request is not claimed',
+          code: 'NOT_CLAIMED'
+        });
+      }
+
+      // Get user info for audit trail
+      const user = await User.findById(userId);
+
+      // Capture release info
+      const releasedBy = request.claimedBy;
+
+      // Clear the claim
+      request.claimedBy = null;
+
+      // Add to status history
+      request.addStatusHistory(
+        request.status,
+        {
+          userId: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          roleSnapshot: user.role,
+          authoritySnapshot: user.authority
+        },
+        `Request claim released by ${user.firstName} ${user.lastName}`
+      );
+
+      // Update latest action
+      request.latestAction = {
+        action: 'REQUEST_RELEASED',
+        actor: {
+          userId: user._id,
+          name: `${user.firstName} ${user.lastName}`
+        },
+        timestamp: new Date()
+      };
+
+      await request.save();
+
+      // Socket.IO notification
+      try {
+        const io = req.app?.get?.('io');
+        if (io) {
+          io.to(`request-${requestId}`).emit('request_released', {
+            requestId: request._id,
+            Request_ID: request.Request_ID,
+            releasedBy: releasedBy
+          });
+        }
+      } catch (socketError) {
+        console.warn('[RELEASE REQUEST] Socket notification failed:', socketError.message);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Request claim released successfully',
+        data: {
+          requestId: request._id,
+          Request_ID: request.Request_ID,
+          releasedBy: releasedBy,
+          releasedAt: new Date()
+        }
+      });
+
+    } catch (error) {
+      console.error('[RELEASE REQUEST] Error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to release request claim',
+        error: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   }

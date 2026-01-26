@@ -1,0 +1,26 @@
+[2026-01-26T05:19:37.387Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:19:37.388Z] 🔄 COORDINATOR REASSIGNMENT SCRIPT - STARTING
+[2026-01-26T05:19:37.389Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:19:37.390Z] Mode: DRY RUN (no changes)
+[2026-01-26T05:19:37.390Z] Timestamp: 2026-01-26T05:19:37.390Z
+[2026-01-26T05:19:37.391Z] 
+📊 Connecting to MongoDB...
+[2026-01-26T05:19:37.969Z] ✅ Connected to MongoDB {"database":"unite_app_user:H5QIDcf9dR1RTtlw@unite-cluster.uddazot.mongodb.net","uri":"mongodb+srv://unite_app_user:H5QIDcf9dR1RTtlw@unit..."}
+[2026-01-26T05:19:37.970Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:19:37.970Z] 👤 FINDING USERS
+[2026-01-26T05:19:37.971Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:19:37.971Z] Searching for David (davidjaque@ymail.com)...
+[2026-01-26T05:19:38.111Z] ✅ Found David: {"_id":"6970784d6d0127f028ab85c6","name":"David Jaque","authority":60}
+[2026-01-26T05:19:38.112Z] 
+Searching for Ben (ben@unite.com or similar)...
+[2026-01-26T05:19:38.490Z] ⚠️  WARNING: Ben not found. Will search for all coordinators in District 2, Camarines Sur
+[2026-01-26T05:19:38.491Z] Note: You may need to manually provide Ben's email or user ID
+[2026-01-26T05:19:38.491Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:19:38.492Z] 📍 FINDING GEOGRAPHY
+[2026-01-26T05:19:38.492Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:19:38.493Z] Searching for Camarines Sur province...
+[2026-01-26T05:19:38.541Z] ✅ Found Camarines Sur: {"_id":"696086f13f2b9335d7bc9685"}
+[2026-01-26T05:19:38.542Z] Searching for District 2 in Camarines Sur...
+[2026-01-26T05:19:38.599Z] 
+❌ ERROR: "District 2 in Camarines Sur not found"
+[2026-01-26T05:19:38.600Z] Stack: "Error: District 2 in Camarines Sur not found\n    at reassignCoordinators (C:\\Users\\Admin\\Desktop\\Dev\\UNITE-BACKEND\\src\\scripts\\reassignCoordinatorToDavid.js:302:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)"

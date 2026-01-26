@@ -193,6 +193,80 @@ const eventRequestSchema = new mongoose.Schema({
     required: false
   },
   
+  // BROADCAST MODEL: All valid coordinators who can act on this request
+  validCoordinators: [{
+    userId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: 'User',
+      required: true
+    },
+    name: { 
+      type: String, 
+      trim: true 
+    },
+    roleSnapshot: { 
+      type: String, 
+      trim: true 
+    },
+    coverageAreaId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CoverageArea'
+    },
+    organizationType: { 
+      type: String, 
+      trim: true 
+    },
+    isActive: { 
+      type: Boolean, 
+      default: true 
+    },
+    discoveredAt: { 
+      type: Date, 
+      default: Date.now 
+    }
+  }],
+
+  // BROADCAST MODEL: Track who is actively reviewing this request (claim mechanism)
+  claimedBy: {
+    userId: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: 'User'
+    },
+    name: { 
+      type: String, 
+      trim: true 
+    },
+    claimedAt: { 
+      type: Date, 
+      default: Date.now 
+    },
+    claimTimeoutAt: { 
+      type: Date 
+    }
+  },
+
+  // BROADCAST MODEL: Track latest action for state machine
+  latestAction: {
+    action: { 
+      type: String, 
+      trim: true 
+    },
+    actor: {
+      userId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'User' 
+      },
+      name: { 
+        type: String, 
+        trim: true 
+      }
+    },
+    timestamp: { 
+      type: Date, 
+      default: Date.now 
+    }
+  },
+  
   // Organization and location references
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -384,6 +458,8 @@ const eventRequestSchema = new mongoose.Schema({
 // Indexes for common queries
 eventRequestSchema.index({ 'requester.userId': 1, status: 1 });
 eventRequestSchema.index({ 'reviewer.userId': 1, status: 1 });
+eventRequestSchema.index({ 'claimedBy.userId': 1, status: 1 });
+eventRequestSchema.index({ 'validCoordinators.userId': 1, status: 1 });
 eventRequestSchema.index({ organizationId: 1, status: 1 });
 eventRequestSchema.index({ coverageAreaId: 1, status: 1 });
 eventRequestSchema.index({ municipalityId: 1, status: 1 });
@@ -395,6 +471,7 @@ eventRequestSchema.index({ Category: 1, status: 1 });
 // Compound indexes for optimized query patterns (status + user + sort)
 eventRequestSchema.index({ status: 1, 'requester.userId': 1, createdAt: -1 });
 eventRequestSchema.index({ status: 1, 'reviewer.userId': 1, createdAt: -1 });
+eventRequestSchema.index({ status: 1, 'claimedBy.userId': 1, createdAt: -1 });
 
 // Pre-save hook to ensure authoritySnapshot is set
 eventRequestSchema.pre('save', function(next) {
