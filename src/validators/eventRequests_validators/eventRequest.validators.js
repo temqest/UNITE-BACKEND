@@ -41,7 +41,10 @@ const validateCreateEventRequest = (req, res, next) => {
     province: Joi.string().optional(),
     // Request-specific fields
     notes: Joi.string().trim().max(1000).optional(),
-    coordinatorId: Joi.string().optional() // For testing purposes
+    coordinatorId: Joi.string().optional(),
+    // Frontend field names - should be normalized to backend names in controller
+    coordinator: Joi.string().optional(),
+    stakeholder: Joi.string().optional()
   }).unknown(true); // Allow unknown fields to pass through
 
   const { error, value } = schema.validate(req.body, { abortEarly: false, allowUnknown: true });

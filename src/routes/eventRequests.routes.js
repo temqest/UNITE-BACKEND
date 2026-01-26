@@ -272,5 +272,98 @@ router.post(
   }
 );
 
+/**
+ * @route   PUT /api/event-requests/:requestId/override-coordinator
+ * @desc    Override coordinator assignment (BROADCAST MODEL FIX)
+ * @access  Private (admin only, authority >= 80)
+ */
+router.put(
+  '/:requestId/override-coordinator',
+  authenticate,
+  requireAdminAuthority,
+  requirePermission('request', 'assign_coordinator'),
+  async (req, res, next) => {
+    try {
+      await eventRequestController.overrideCoordinator(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @route   POST /api/event-requests/:requestId/claim
+ * @desc    Claim request for review (BROADCAST MODEL)
+ * @access  Private (authenticated coordinator)
+ */
+router.post(
+  '/:requestId/claim',
+  authenticate,
+  validateRequestAccess,
+  async (req, res, next) => {
+    try {
+      await eventRequestController.claimRequest(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @route   POST /api/event-requests/:requestId/release
+ * @desc    Release claim on request (BROADCAST MODEL)
+ * @access  Private (authenticated coordinator who claimed it)
+ */
+router.post(
+  '/:requestId/release',
+  authenticate,
+  validateRequestAccess,
+  async (req, res, next) => {
+    try {
+      await eventRequestController.releaseRequest(req, res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @route   GET /api/event-requests/:requestId/valid-coordinators
+ * @desc    Get valid coordinators for request (BROADCAST MODEL)
+ * @access  Private (authenticated user with request access)
+ */
+router.get(
+  '/:requestId/valid-coordinators',
+  authenticate,
+  validateRequestAccess,
+  async (req, res) => {
+    try {
+      const request = req.request;
+
+      if (!request) {
+        return res.status(404).json({
+          success: false,
+          message: 'Request not found'
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          validCoordinators: request.validCoordinators || [],
+          count: request.validCoordinators?.length || 0,
+          claimedBy: request.claimedBy || null
+        }
+      });
+    } catch (error) {
+      console.error('[GET VALID COORDINATORS] Error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get valid coordinators'
+      });
+    }
+  }
+);
+
 module.exports = router;
 

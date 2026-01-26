@@ -448,6 +448,125 @@ class CoordinatorResolverService {
       return { valid: false, reason: error.message };
     }
   }
+
+  /**
+   * BROADCAST MODEL: Find all valid coordinators for an event request
+   * 
+   * Used during request creation to populate validCoordinators array
+   * Returns all coordinators matching:
+   * 1. Location coverage (municipality or district)
+   * 2. Organization type
+   * 3. Active status
+   * 
+   * @param {ObjectId} locationId - Request's municipality or district ID
+   * @param {string} organizationType - Request's organization type (LGU, NGO, Hospital, etc)
+   * @returns {Promise<Array>} Array of valid coordinator objects
+   */
+  async findValidCoordinatorsForRequest(locationId, organizationType) {
+    try {
+      if (!locationId) {
+        console.warn('[findValidCoordinatorsForRequest] locationId is required');
+        return [];
+      }
+
+      console.log('[findValidCoordinatorsForRequest] Searching for coordinators:', {
+        locationId: locationId.toString(),
+        organizationType
+      });
+
+      // Get all active coordinators with coordinator role or authority >= 60
+      const potentialCoordinators = await User.find({
+        $or: [
+          { 'roles.roleCode': 'coordinator', isActive: true },
+          { authority: { $gte: 60 }, isActive: true }
+        ],
+        isActive: true
+      })
+        .populate('organizations.organizationId')
+        .populate('coverageAreas.coverageAreaId')
+        .select('_id firstName lastName authority organizations coverageAreas')
+        .lean();
+
+      console.log('[findValidCoordinatorsForRequest] Found potential coordinators:', potentialCoordinators.length);
+
+      const validCoordinators = [];
+
+      for (const coordinator of potentialCoordinators) {
+        // Check organization type match
+        const coordinatorOrgTypes = (coordinator.organizations || [])
+          .map(o => o.organizationType)
+          .filter(Boolean);
+
+        const hasOrgTypeMatch = organizationType 
+          ? coordinatorOrgTypes.some(cType => this.isOrganizationTypeMatch(organizationType, cType))
+          : true; // If no org type specified, skip org type check
+
+        if (!hasOrgTypeMatch) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[findValidCoordinatorsForRequest] Skipping coordinator (org type mismatch):', {
+              coordinatorId: coordinator._id.toString(),
+              coordinatorOrgTypes,
+              requestOrgType: organizationType
+            });
+          }
+          continue;
+        }
+
+        // Check location coverage
+        const coordinatorCoverageAreas = coordinator.coverageAreas || [];
+        if (coordinatorCoverageAreas.length === 0) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[findValidCoordinatorsForRequest] Skipping coordinator (no coverage areas):', {
+              coordinatorId: coordinator._id.toString()
+            });
+          }
+          continue;
+        }
+
+        let hasLocationCoverage = false;
+        for (const coverage of coordinatorCoverageAreas) {
+          const isCovered = await this.isMunicipalityInCoverage(locationId, coverage);
+          if (isCovered) {
+            hasLocationCoverage = true;
+            break;
+          }
+        }
+
+        if (!hasLocationCoverage) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[findValidCoordinatorsForRequest] Skipping coordinator (location not in coverage):', {
+              coordinatorId: coordinator._id.toString(),
+              locationId: locationId.toString()
+            });
+          }
+          continue;
+        }
+
+        // Coordinator is valid!
+        validCoordinators.push({
+          userId: coordinator._id,
+          name: `${coordinator.firstName || ''} ${coordinator.lastName || ''}`.trim(),
+          roleSnapshot: 'Coordinator',
+          authority: coordinator.authority,
+          organizationType: coordinatorOrgTypes.length > 0 ? coordinatorOrgTypes[0] : null,
+          discoveredAt: new Date()
+        });
+
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[findValidCoordinatorsForRequest] Added valid coordinator:', {
+            coordinatorId: coordinator._id.toString(),
+            name: validCoordinators[validCoordinators.length - 1].name
+          });
+        }
+      }
+
+      console.log('[findValidCoordinatorsForRequest] Found', validCoordinators.length, 'valid coordinators');
+      return validCoordinators;
+    } catch (error) {
+      console.error('[findValidCoordinatorsForRequest] Error:', error);
+      return [];
+    }
+  }
 }
 
 module.exports = new CoordinatorResolverService();

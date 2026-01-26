@@ -276,11 +276,18 @@ class EventRequestService {
       const stakeholderPresent = !!stakeholderId;
 
       // 5. Assign reviewer based on requester authority
-      // If admin (authority >= 80) provides coordinatorId, use it instead of auto-assignment
+      // Priority 1: If admin (authority >= 80) provides coordinatorId, use it instead of auto-assignment
+      // Priority 2: If stakeholder provides valid coordinatorId, use it
+      // Priority 3: Use auto-assignment
       let reviewer;
       
-      if (requester.authority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN && requestData.coordinatorId) {
-        // Admin is manually selecting a coordinator
+      // Check if manual coordinator selection was provided (by admin or stakeholder)
+      const hasManualCoordinatorSelection = requestData.coordinatorId && 
+                                          (requester.authority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN || 
+                                           requester.authority < AUTHORITY_TIERS.COORDINATOR); // Admin or Stakeholder
+      
+      if (hasManualCoordinatorSelection) {
+        // Manual coordinator selection - respect user's choice
         const selectedCoordinatorId = requestData.coordinatorId;
         const selectedCoordinator = await User.findById(selectedCoordinatorId);
         
@@ -427,12 +434,29 @@ class EventRequestService {
       }
       request.lastAction = null; // No action yet
 
-      // 10. Save request
+      // 10. Populate valid coordinators for broadcast model
+      try {
+        const validCoordinators = await this._populateValidCoordinators(request);
+        request.validCoordinators = validCoordinators;
+        console.log(`[EVENT REQUEST SERVICE] createRequest - Populated ${validCoordinators.length} valid coordinators`);
+      } catch (error) {
+        console.error(`[EVENT REQUEST SERVICE] Error populating valid coordinators: ${error.message}`);
+        // Don't fail request creation if broadcast population fails
+        request.validCoordinators = [];
+      }
+
+      // 11. Save request
       await request.save();
 
-      // 11. Trigger notification for reviewer
+      // 12. Trigger notification for reviewer and notify valid coordinators
       try {
         await notificationEngine.notifyRequestCreated(request);
+        
+        // Notify valid coordinators that request is available (broadcast)
+        // Note: IO notifications will be handled by Socket.IO event listener on request creation
+        if (request.validCoordinators && request.validCoordinators.length > 0) {
+          console.log(`[EVENT REQUEST SERVICE] createRequest - ${request.validCoordinators.length} valid coordinators will be notified via Socket.IO`);
+        }
       } catch (notificationError) {
         console.error(`[EVENT REQUEST SERVICE] Error sending notification: ${notificationError.message}`);
         // Don't fail request creation if notification fails
@@ -535,9 +559,11 @@ class EventRequestService {
 
         // Always include requests where user is reviewer, even if they don't have review permission
         // This handles cases where stakeholders are assigned as reviewers
+        // BROADCAST MODEL: Also include requests where user is in validCoordinators array
         query.$or = [
           { 'requester.userId': userIdObjectId },
-          { 'reviewer.userId': userIdObjectId }
+          { 'reviewer.userId': userIdObjectId },
+          { 'validCoordinators.userId': userIdObjectId }
         ];
 
         // If user is a coordinator (authority 60-79), add jurisdiction filtering
@@ -728,6 +754,8 @@ class EventRequestService {
       const limit = filters.limit || 100;
       const skip = filters.skip || 0;
       
+      console.log(`[EVENT REQUEST SERVICE] getRequests - Building aggregation pipeline with query:`, JSON.stringify(query, null, 2));
+      
       const aggregationPipeline = [
         { $match: query },
         // Early projection to reduce data size before lookups
@@ -737,6 +765,7 @@ class EventRequestService {
             Event_ID: 1,
             requester: 1,
             reviewer: 1,
+            validCoordinators: 1,
             organizationId: 1,
             coverageAreaId: 1,
             municipalityId: 1,
@@ -960,6 +989,17 @@ class EventRequestService {
       // Aggregation returns plain objects, which is fine for our use case
       // The controller will format them appropriately
       const requests = result.requests || [];
+
+      // DEBUG: Log validCoordinators for first few requests
+      if (requests.length > 0) {
+        console.log(`[EVENT REQUEST SERVICE] getRequests - Retrieved ${requests.length} requests:`, 
+          requests.slice(0, 2).map(r => ({
+            requestId: r.Request_ID,
+            validCoordinatorsCount: r.validCoordinators?.length || 0,
+            validCoordinators: r.validCoordinators || []
+          }))
+        );
+      }
 
       const queryTime = Date.now() - queryStart;
 
@@ -1317,7 +1357,6 @@ class EventRequestService {
       }
       
       // Execute state transition
-
       // 5. Update request based on action
       // Note: getNote() helper is defined at the start of this method
       const note = getNote();
@@ -1329,6 +1368,11 @@ class EventRequestService {
         request.status = nextState;
         request.addDecisionHistory('accept', actorSnapshot, note);
         
+        // Clear reschedule loop tracker when request is accepted (loop finalized)
+        if (request.rescheduleLoop) {
+          request.rescheduleLoop = null;
+        }
+        
         // Accept action always goes directly to approved and should publish event
         if (nextState === REQUEST_STATES.APPROVED) {
           shouldPublishEvent = true;
@@ -1336,6 +1380,11 @@ class EventRequestService {
       } else if (action === REQUEST_ACTIONS.REJECT) {
         request.status = nextState;
         request.addDecisionHistory('reject', actorSnapshot, note);
+        
+        // Clear reschedule loop tracker when request is rejected (loop finalized)
+        if (request.rescheduleLoop) {
+          request.rescheduleLoop = null;
+        }
       } else if (action === REQUEST_ACTIONS.CONFIRM) {
         request.status = nextState;
         // CONFIRM from pending-review or review-rescheduled is equivalent to ACCEPT - add decision history as accept
@@ -1344,6 +1393,11 @@ class EventRequestService {
         } else if (currentState === REQUEST_STATES.APPROVED) {
           // CONFIRM on approved state is stakeholder acknowledgment - add decision history as confirm
           request.addDecisionHistory('confirm', actorSnapshot, note);
+        }
+        
+        // Clear reschedule loop tracker when request is confirmed (loop finalized)
+        if (request.rescheduleLoop) {
+          request.rescheduleLoop = null;
         }
         
         // Auto-publish event if approved (from pending-review, review-accepted, or review-rescheduled)
@@ -1371,6 +1425,20 @@ class EventRequestService {
           proposedStartTime: actionData.proposedStartTime,
           proposedEndTime: actionData.proposedEndTime
         });
+
+        // RESCHEDULE LOOP TRACKING
+        // Initialize or update reschedule loop tracking to enforce broadcast visibility rules
+        const proposerRole = actorSnapshot.roleSnapshot || actorSnapshot.role;
+        const isFirstReschedule = request.status === REQUEST_STATES.REVIEW_RESCHEDULED && 
+                                 (!request.rescheduleLoop || request.rescheduleLoop.rescheduleCount === 0);
+        
+        if (isFirstReschedule) {
+          // First reschedule: initialize loop tracking
+          RequestStateService.initializeRescheduleLoop(request, userId, proposerRole);
+        } else {
+          // Subsequent reschedule: update loop tracking
+          RequestStateService.updateRescheduleLoopTracker(request, userId, proposerRole);
+        }
       } else if (action === REQUEST_ACTIONS.CANCEL) {
         request.status = nextState;
         
@@ -1844,6 +1912,224 @@ class EventRequestService {
     } finally {
       session.endSession();
     }
+  }
+
+  /**
+   * BROADCAST MODEL: Populate Valid Coordinators
+   * Called when request is created to find all coordinators who should see it.
+   * Matches based on: 1) Coverage area includes request location, 2) Organization type matches, 3) User is active and has coordinator role
+   * 
+   * @param {Object} request - EventRequest document
+   * @returns {Promise<Array>} Array of valid coordinators
+   */
+  async _populateValidCoordinators(request) {
+    const methodName = '[EVENT REQUEST SERVICE] _populateValidCoordinators';
+    
+    try {
+      if (!request) {
+        console.warn(`${methodName} - No request provided`);
+        return [];
+      }
+
+      console.log(`${methodName} - Starting for request ${request.Request_ID}`);
+
+      const AUTHORITY_TIERS = require('../../utils/eventRequests/requestConstants').AUTHORITY_TIERS;
+      const broadcastAccessService = require('./broadcastAccess.service');
+
+      // Step 1: Find coordinators matching org type
+      const query = {
+        authority: { $gte: AUTHORITY_TIERS.COORDINATOR },
+        isActive: true,
+        organizationType: request.organizationType
+      };
+
+      console.log(`${methodName} - Query: organizationType=${request.organizationType}, authority>=${AUTHORITY_TIERS.COORDINATOR}`);
+
+      const potentialCoordinators = await User.find(query)
+        .select('_id firstName lastName authority role organizationType coverageAreas')
+        .lean();
+
+      console.log(`${methodName} - Found ${potentialCoordinators.length} coordinators with matching org type`);
+
+      // Step 2: Filter by location coverage
+      const validCoordinators = [];
+
+      for (const coordinator of potentialCoordinators) {
+        try {
+          const canAccess = await broadcastAccessService.canAccessRequest(coordinator._id, request);
+          if (canAccess) {
+            validCoordinators.push({
+              userId: coordinator._id,
+              name: `${coordinator.firstName} ${coordinator.lastName}`,
+              roleSnapshot: coordinator.role,
+              organizationType: coordinator.organizationType,
+              discoveredAt: new Date()
+            });
+          }
+        } catch (coordError) {
+          console.warn(`${methodName} - Error checking coordinator ${coordinator._id}:`, coordError.message);
+        }
+      }
+
+      console.log(`${methodName} - Final valid coordinators: ${validCoordinators.length}`);
+      return validCoordinators;
+
+    } catch (error) {
+      console.error(`${methodName} - Error:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * BROADCAST MODEL: Notify Valid Coordinators
+   * Sends notifications to all valid coordinators when request is created
+   * Uses both Socket.IO (real-time) and Database (persistent) notifications
+   * 
+   * @param {Object} request - EventRequest document
+   * @param {Array} validCoordinators - Array of valid coordinator objects
+   * @param {Object} io - Socket.IO instance
+   * @returns {Promise<void>}
+   */
+  async _notifyValidCoordinators(request, validCoordinators, io) {
+    const methodName = '[EVENT REQUEST SERVICE] _notifyValidCoordinators';
+
+    if (!validCoordinators || validCoordinators.length === 0) {
+      console.log(`${methodName} - No valid coordinators to notify`);
+      return;
+    }
+
+    try {
+      console.log(`${methodName} - Starting notifications to ${validCoordinators.length} coordinators`);
+
+      // Socket.IO Real-time Events
+      if (io) {
+        console.log(`${methodName} - Emitting Socket.IO notifications...`);
+
+        for (const coordinator of validCoordinators) {
+          try {
+            io.to(`coordinator-${coordinator.userId}`).emit('request_available', {
+              requestId: request._id,
+              Request_ID: request.Request_ID,
+              Event_Title: request.Event_Title,
+              status: request.status,
+              organizationType: request.organizationType,
+              municipality: request.municipalityId
+            });
+          } catch (e) {
+            console.warn(`${methodName} - Failed to emit to coordinator ${coordinator.userId}:`, e.message);
+          }
+        }
+      }
+
+      console.log(`${methodName} - Notifications complete`);
+
+    } catch (error) {
+      console.error(`${methodName} - Error:`, error);
+    }
+  }
+
+  /**
+   * BROADCAST MODEL: Get Pending Requests (Updated Dashboard Query)
+   * Shows requests where user is: 1) Assigned reviewer, 2) Valid coordinator (broadcast), 3) Claimed request, 4) Requester
+   * 
+   * @param {ObjectId|string} userId - Current user ID
+   * @param {Object} filters - Optional filters { status, category, organizationType, etc }
+   * @returns {Promise<Array>} Array of requests visible to user
+   */
+  async getPendingRequests(userId, filters = {}) {
+    const methodName = '[EVENT REQUEST SERVICE] getPendingRequests';
+
+    try {
+      console.log(`${methodName} - Getting pending requests for user ${userId}`);
+
+      // Convert userId to ObjectId for proper MongoDB comparison
+      const userIdObj = mongoose.Types.ObjectId.isValid(userId) 
+        ? new mongoose.Types.ObjectId(userId)
+        : userId;
+
+      // BUILD BROADCAST QUERY: Show if ANY of these match
+      const query = {
+        $or: [
+          { 'reviewer.userId': userIdObj },           // User is assigned reviewer
+          { 'validCoordinators.userId': userIdObj },  // User is valid coordinator (broadcast)
+          { 'claimedBy.userId': userIdObj },          // User claimed the request
+          { 'requester.userId': userIdObj }           // User is the requester
+        ]
+      };
+
+      // Status filter (default: PENDING_REVIEW)
+      const status = filters.status || 'PENDING_REVIEW';
+      if (status) {
+        query.status = status;
+      }
+
+      // Category filter (optional)
+      if (filters.category) {
+        query.Category = filters.category;
+      }
+
+      // Organization type filter (optional)
+      if (filters.organizationType) {
+        query.organizationType = filters.organizationType;
+      }
+
+      console.log(`${methodName} - Query:`, JSON.stringify(query, null, 2));
+
+      const requests = await EventRequest.find(query)
+        .populate('requester.userId', '_id firstName lastName authority')
+        .populate('reviewer.userId', '_id firstName lastName')
+        .populate('validCoordinators.userId', '_id firstName lastName authority')
+        .populate('claimedBy.userId', '_id firstName lastName')
+        .sort({ createdAt: -1 })
+        .limit(filters.limit || 100)
+        .lean();
+
+      console.log(`${methodName} - Found ${requests.length} requests for user ${userId}`);
+
+      // Enhance response with client-side metadata
+      const enhancedRequests = requests.map(request => ({
+        ...request,
+        _isReviewer: request.reviewer?.userId?.toString?.() === userId.toString(),
+        _isRequester: request.requester?.userId?.toString?.() === userId.toString(),
+        _isValidCoordinator: request.validCoordinators?.some(vc =>
+          vc.userId?.toString?.() === userId.toString()
+        ),
+        _isClaimedByMe: request.claimedBy?.userId?.toString?.() === userId.toString(),
+        _role: this._determineUserRole(request, userId)
+      }));
+
+      return enhancedRequests;
+
+    } catch (error) {
+      console.error(`${methodName} - Error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * HELPER: Determine user's role in request context
+   * @private
+   */
+  _determineUserRole(request, userId) {
+    const userIdStr = userId.toString?.() || userId;
+
+    if (request.requester?.userId?.toString?.() === userIdStr) {
+      return 'REQUESTER';
+    }
+
+    if (request.reviewer?.userId?.toString?.() === userIdStr) {
+      return 'ASSIGNED_REVIEWER';
+    }
+
+    if (request.validCoordinators?.some(vc => vc.userId?.toString?.() === userIdStr)) {
+      return 'VALID_COORDINATOR';
+    }
+
+    if (request.claimedBy?.userId?.toString?.() === userIdStr) {
+      return 'CLAIMED_BY_ME';
+    }
+
+    return 'OBSERVER';
   }
 }
 

@@ -1,0 +1,15 @@
+[2026-01-26T05:14:56.138Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:14:56.139Z] 🔄 COORDINATOR REASSIGNMENT SCRIPT - STARTING
+[2026-01-26T05:14:56.139Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:14:56.140Z] Mode: DRY RUN (no changes)
+[2026-01-26T05:14:56.140Z] Timestamp: 2026-01-26T05:14:56.140Z
+[2026-01-26T05:14:56.141Z] 
+📊 Connecting to MongoDB...
+[2026-01-26T05:14:56.886Z] ✅ Connected to MongoDB {"database":"?dbName=unite-test-v2","uri":"mongodb+srv://unite_app_user:H5QIDcf9dR1RTtlw@unit..."}
+[2026-01-26T05:14:56.886Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:14:56.887Z] 👤 FINDING USERS
+[2026-01-26T05:14:56.887Z] ══════════════════════════════════════════════════════════════════════
+[2026-01-26T05:14:56.888Z] Searching for David (davidjaque@ymail.com)...
+[2026-01-26T05:14:57.112Z] 
+❌ ERROR: "David not found in database. Email: davidjaque@ymail.com"
+[2026-01-26T05:14:57.112Z] Stack: "Error: David not found in database. Email: davidjaque@ymail.com\n    at reassignCoordinators (C:\\Users\\Admin\\Desktop\\Dev\\UNITE-BACKEND\\src\\scripts\\reassignCoordinatorToDavid.js:222:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)"
