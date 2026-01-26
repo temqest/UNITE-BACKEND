@@ -960,12 +960,31 @@ class ActionValidatorService {
         const user = await User.findById(userIdStr).select('authority').lean();
         userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
         
-        // For APPROVED state, if user is requester, reviewer, or admin, allow them to proceed
+        // Check if user is a valid coordinator (for APPROVED state, valid coordinators should have same permissions as assigned coordinator)
+        const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
+        console.log(`[ACTION VALIDATOR] APPROVED state check`, {
+          requestId: requestObj.Request_ID,
+          userId: userIdStr,
+          isRequester,
+          isReviewer,
+          userAuthority,
+          isValidCoordinator,
+          validCoordinators: requestObj.validCoordinators?.map(c => {
+            const coordUserId = this._normalizeUserId(c.userId);
+            return { userId: coordUserId, name: c.name };
+          }) || []
+        });
+        
+        // For APPROVED state, if user is requester, reviewer, admin, or valid coordinator, allow them to proceed
         // even without an active responder
-        if (isRequester || isReviewer || userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
+        if (isRequester || isReviewer || userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN || isValidCoordinator) {
           // Continue to action computation below - don't return early
+          if (isValidCoordinator) {
+            console.log(`[ACTION VALIDATOR] Valid coordinator (${userIdStr}) allowed to act on APPROVED request ${requestObj.Request_ID}`);
+          }
         } else {
-          // Not requester, reviewer, or admin - only view
+          // Not requester, reviewer, admin, or valid coordinator - only view
+          console.log(`[ACTION VALIDATOR] User (${userIdStr}) NOT allowed to proceed on APPROVED request ${requestObj.Request_ID} - only view`);
           return available;
         }
       } catch (error) {
@@ -1025,7 +1044,7 @@ class ActionValidatorService {
     // For APPROVED state without active responder, we've already validated user can proceed
     let isActiveResponder = false;
     if (normalizedState === REQUEST_STATES.APPROVED && (!activeResponder || !activeResponder.userId)) {
-      // For APPROVED state, if we got here, user is requester/reviewer/admin (validated above)
+      // For APPROVED state, if we got here, user is requester/reviewer/admin/valid coordinator (validated above)
       isActiveResponder = true; // Treat as active responder to allow action computation
     } else if (responderId) {
       isActiveResponder = userIdStr === responderId;
@@ -1412,15 +1431,35 @@ class ActionValidatorService {
    * @private
    */
   _isValidCoordinator(userId, request) {
-    if (!request.validCoordinators || !userId) return false;
+    if (!request.validCoordinators || !userId) {
+      console.log(`[ACTION VALIDATOR] _isValidCoordinator: missing validCoordinators or userId`, {
+        hasValidCoordinators: !!request.validCoordinators,
+        validCoordinatorsLength: request.validCoordinators?.length || 0,
+        hasUserId: !!userId
+      });
+      return false;
+    }
     
     const userIdStr = this._normalizeUserId(userId);
-    if (!userIdStr) return false;
+    if (!userIdStr) {
+      console.log(`[ACTION VALIDATOR] _isValidCoordinator: failed to normalize userId`, { userId });
+      return false;
+    }
 
-    return request.validCoordinators.some(coord => {
+    const matches = request.validCoordinators.map(coord => {
       const coordUserId = this._normalizeUserId(coord.userId);
-      return coordUserId === userIdStr;
+      const matches = coordUserId === userIdStr;
+      return { coordUserId, userIdStr, matches, coordName: coord.name };
     });
+    
+    const isValid = matches.some(m => m.matches);
+    console.log(`[ACTION VALIDATOR] _isValidCoordinator check`, {
+      userIdStr,
+      matches,
+      isValid
+    });
+    
+    return isValid;
   }
 }
 

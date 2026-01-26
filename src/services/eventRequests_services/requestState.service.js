@@ -62,7 +62,9 @@ class RequestStateService {
     },
     [REQUEST_STATES.APPROVED]: {
       [REQUEST_ACTIONS.CANCEL]: REQUEST_STATES.CANCELLED,
-      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED // Allow rescheduling approved events
+      [REQUEST_ACTIONS.RESCHEDULE]: REQUEST_STATES.REVIEW_RESCHEDULED, // Allow rescheduling approved events
+      [REQUEST_ACTIONS.EDIT]: REQUEST_STATES.APPROVED, // Edit event details (stays approved)
+      [REQUEST_ACTIONS.MANAGE_STAFF]: REQUEST_STATES.APPROVED // Manage event staff (stays approved)
       // Note: No CONFIRM action in APPROVED - event is already approved and created
     },
     [REQUEST_STATES.REJECTED]: {

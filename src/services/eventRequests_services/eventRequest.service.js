@@ -754,7 +754,7 @@ class EventRequestService {
       const limit = filters.limit || 100;
       const skip = filters.skip || 0;
       
-      console.log(`[EVENT REQUEST SERVICE] getRequests - Building aggregation pipeline with query:`, JSON.stringify(query, null, 2));
+      // Building aggregation pipeline
       
       const aggregationPipeline = [
         { $match: query },
@@ -991,15 +991,15 @@ class EventRequestService {
       const requests = result.requests || [];
 
       // DEBUG: Log validCoordinators for first few requests
-      if (requests.length > 0) {
-        console.log(`[EVENT REQUEST SERVICE] getRequests - Retrieved ${requests.length} requests:`, 
-          requests.slice(0, 2).map(r => ({
-            requestId: r.Request_ID,
-            validCoordinatorsCount: r.validCoordinators?.length || 0,
-            validCoordinators: r.validCoordinators || []
-          }))
-        );
-      }
+      // if (requests.length > 0) {
+      //   console.log(`[EVENT REQUEST SERVICE] getRequests - Retrieved ${requests.length} requests:`, 
+      //     requests.slice(0, 2).map(r => ({
+      //       requestId: r.Request_ID,
+      //       validCoordinatorsCount: r.validCoordinators?.length || 0,
+      //       validCoordinators: r.validCoordinators || []
+      //     }))
+      //   );
+      // }
 
       const queryTime = Date.now() - queryStart;
 
