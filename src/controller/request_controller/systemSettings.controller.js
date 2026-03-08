@@ -11,7 +11,8 @@ class SystemSettingsController {
    */
   async getSettings(req, res) {
     try {
-      const settings = systemSettingsService.getSettings();
+      const orgId = req.tenant?.organizationId || null;
+      const settings = await systemSettingsService.getSettings(orgId);
 
       return res.status(200).json({ success: true, data: settings });
     } catch (error) {
@@ -30,7 +31,8 @@ class SystemSettingsController {
     try {
       const { settingKey } = req.params;
       
-      const setting = systemSettingsService.getSetting(settingKey);
+      const orgId = req.tenant?.organizationId || null;
+      const setting = await systemSettingsService.getSetting(settingKey, orgId);
 
       if (setting === undefined) {
         return res.status(404).json({
@@ -67,7 +69,8 @@ class SystemSettingsController {
         });
       }
 
-  const validation = systemSettingsService.validateAdvanceBooking(new Date(eventDate));
+      const orgId = req.tenant?.organizationId || null;
+      const validation = await systemSettingsService.validateAdvanceBooking(new Date(eventDate), orgId);
 
       return res.status(200).json({
         success: true,
@@ -96,7 +99,8 @@ class SystemSettingsController {
         });
       }
 
-  const validation = systemSettingsService.validateWeekendRestriction(new Date(eventDate));
+      const orgId = req.tenant?.organizationId || null;
+      const validation = await systemSettingsService.validateWeekendRestriction(new Date(eventDate), orgId);
 
       return res.status(200).json({
         success: true,
@@ -125,7 +129,8 @@ class SystemSettingsController {
         });
       }
 
-  const validation = systemSettingsService.validatePendingRequestsLimit(parseInt(pendingCount));
+      const orgId = req.tenant?.organizationId || null;
+      const validation = await systemSettingsService.validatePendingRequestsLimit(parseInt(pendingCount), orgId);
 
       return res.status(200).json({
         success: true,
@@ -145,7 +150,8 @@ class SystemSettingsController {
    */
   async getMinBookingDate(req, res) {
     try {
-      const minDate = systemSettingsService.getMinBookingDate();
+      const orgId = req.tenant?.organizationId || null;
+      const minDate = await systemSettingsService.getMinBookingDate(orgId);
       return res.status(200).json({ success: true, minDate });
     } catch (error) {
       return res.status(500).json({
@@ -161,7 +167,8 @@ class SystemSettingsController {
    */
   async getMaxBookingDate(req, res) {
     try {
-      const maxDate = systemSettingsService.getMaxBookingDate();
+      const orgId = req.tenant?.organizationId || null;
+      const maxDate = await systemSettingsService.getMaxBookingDate(orgId);
       return res.status(200).json({ success: true, maxDate });
     } catch (error) {
       return res.status(500).json({
@@ -177,7 +184,8 @@ class SystemSettingsController {
    */
   async isStaffAssignmentRequired(req, res) {
     try {
-      const isRequired = systemSettingsService.isStaffAssignmentRequired();
+      const orgId = req.tenant?.organizationId || null;
+      const isRequired = await systemSettingsService.isStaffAssignmentRequired(orgId);
 
       return res.status(200).json({
         success: true,
@@ -197,7 +205,8 @@ class SystemSettingsController {
    */
   async canCoordinatorAssignStaff(req, res) {
     try {
-      const canAssign = systemSettingsService.canCoordinatorAssignStaff();
+      const orgId = req.tenant?.organizationId || null;
+      const canAssign = await systemSettingsService.canCoordinatorAssignStaff(orgId);
       return res.status(200).json({ success: true, canAssign });
     } catch (error) {
       return res.status(500).json({
@@ -222,7 +231,8 @@ class SystemSettingsController {
         });
       }
 
-      const validation = systemSettingsService.validateAllRules(eventData);
+      const orgId = req.tenant?.organizationId || null;
+      const validation = await systemSettingsService.validateAllRules(eventData, orgId);
 
       return res.status(200).json({ success: true, validation });
     } catch (error) {
@@ -261,7 +271,8 @@ class SystemSettingsController {
         if (Object.prototype.hasOwnProperty.call(payload, k)) updateObj[k] = payload[k];
       }
 
-      const updated = await systemSettingsService.updateSettings(updateObj);
+      const orgId = req.tenant?.organizationId || null;
+      const updated = await systemSettingsService.updateSettings(updateObj, orgId);
 
       return res.status(200).json({ success: true, data: updated });
     } catch (error) {

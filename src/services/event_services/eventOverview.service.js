@@ -47,6 +47,11 @@ class EventOverviewService {
       // Build query
       const query = {};
 
+      // Tenant filter (required when organizationId is provided)
+      if (filters.organizationId) {
+        query.organizationId = filters.organizationId;
+      }
+
       // Status filter
       if (filters.status) {
         if (Array.isArray(filters.status)) {
@@ -150,6 +155,10 @@ class EventOverviewService {
     try {
       const query = {};
 
+      if (filters.organizationId) {
+        query.organizationId = filters.organizationId;
+      }
+
       if (filters.coordinator_id) {
         query.MadeByCoordinatorID = filters.coordinator_id;
       }
@@ -223,6 +232,10 @@ class EventOverviewService {
         Start_Date: { $gte: today },
         Status: { $in: ['Approved', 'Completed'] }
       };
+
+      if (filters.organizationId) {
+        query.organizationId = filters.organizationId;
+      }
 
       if (filters.coordinator_id) {
         query.MadeByCoordinatorID = filters.coordinator_id;

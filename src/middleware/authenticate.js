@@ -54,7 +54,9 @@ module.exports = function authenticate(req, res, next) {
         email: decoded.email,
         // Backward compatibility: include role/isSystemAdmin if present in old tokens
         role: decoded.role || null,
-        isSystemAdmin: decoded.isSystemAdmin || false
+        isSystemAdmin: decoded.isSystemAdmin || false,
+        // Optional: propagate activeOrganizationId if present in token for convenience
+        organizationId: decoded.activeOrganizationId || null
       };
       
       if (isCoordinatorEndpoint) {

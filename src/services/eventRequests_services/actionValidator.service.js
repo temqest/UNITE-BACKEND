@@ -5,6 +5,7 @@
  */
 
 const permissionService = require('../users_services/permission.service');
+const PermissionBasedRescheduleService = require('./permissionBasedReschedule.service');
 const { User } = require('../../models/index');
 const { AUTHORITY_TIERS, REQUEST_ACTIONS, REQUEST_STATES } = require('../../utils/eventRequests/requestConstants');
 const RequestStateService = require('./requestState.service');
@@ -50,6 +51,13 @@ class ActionValidatorService {
         }
       }
 
+      console.log(`[ACTION VALIDATOR] VALIDATE_ACTION called`, {
+        requestId: requestObj.Request_ID || requestObj._id,
+        userId: userId?.toString(),
+        action,
+        state: requestObj.status || requestObj.Status
+      });
+
       // 1. Check if action is valid for current state
       const currentState = requestObj.status || requestObj.Status;
       
@@ -75,69 +83,153 @@ class ActionValidatorService {
         }
       }
 
-      // 2. Check if user is active responder (simplified reschedule logic using lastAction)
+      // 2. Check if user is active responder (permission-based reschedule logic)
+      // PERMISSION-BASED APPROACH:
+      // - Requesters: Users with request.create permission (initiators)
+      // - Reviewers: Users with request.review or request.approve permissions
+      // - The reschedule loop alternates between these permission groups
+      // - Authority level (30, 60, 80) is used as a proxy for permission level
       const isRequester = this._isRequester(userId, requestObj);
       const normalizedState = RequestStateService.normalizeState(currentState);
       
-      // RESCHEDULE LOOP BROADCAST VISIBILITY CHECK
-      // When in REVIEW_RESCHEDULED state with reschedule loop tracking,
-      // enforce that only the correct party (stakeholder or coordinators/admins) can act
-      if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED && action !== REQUEST_ACTIONS.VIEW) {
-        const visibilityValidation = await this.validateRescheduleVisibility(userId, requestObj);
-        if (!visibilityValidation.valid) {
-          return visibilityValidation;
-        }
-      }
-      
       // In review-rescheduled state, use active responder logic
+      // PERMISSION-BASED RESCHEDULE LOOP:
+      // - If a user with review permissions (request.review/approve) reschedules,
+      //   the active responder is set to the original requester (request.create)
+      // - If the original requester reschedules, the active responder is set to
+      //   the reviewer group (anyone with request.review in the jurisdiction)
+      // - Authority levels are used as a proxy: >=60 for reviewers, >=30 for requesters
       if (normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED) {
         const activeResponder = RequestStateService.getActiveResponder(requestObj);
         if (activeResponder && activeResponder.userId) {
           const userIdStr = userId.toString();
           const responderId = activeResponder.userId.toString();
           
-          // Special case: For coordinator-to-admin requests, handle Admin actions
-          // Core principle: activeResponder.relationship === 'reviewer' means "ANY Admin can respond"
+          console.log(`[ACTION VALIDATOR] REVIEW_RESCHEDULED active responder check`, {
+            requestId: requestObj.Request_ID,
+            userId: userIdStr,
+            activeResponderId: responderId,
+            activeResponderRelationship: activeResponder.relationship,
+            action
+          });
+          
+          // PERMISSION-BASED RESCHEDULE LOOP:
+          // When activeResponder.relationship === 'reviewer', ANY qualified reviewer can respond
+          // - Coordinators (authority >= 60) with request.review permission
+          // - Admins (authority >= 80) with request.review/approve permission
+          // - Valid coordinators in the broadcast model
+          // - Check that the user is not the one who last acted (to prevent self-review)
           let isActiveResponder = userIdStr === responderId;
           
-          if (!isActiveResponder && requestObj.reviewer?.assignmentRule === 'coordinator-to-admin') {
+          if (!isActiveResponder && activeResponder.relationship === 'reviewer') {
+            // Get user's authority to check if they're a qualified reviewer
             const User = require('../../models/index').User;
             const user = await User.findById(userIdStr).select('authority').lean();
             const userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
             
-            if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-              const activeResponderRelationship = activeResponder.relationship;
-              
-              // Extract lastActorId with proper ObjectId handling
-              let lastActorId = null;
-              if (requestObj.lastAction?.actorId) {
-                if (typeof requestObj.lastAction.actorId === 'object' && requestObj.lastAction.actorId.toString) {
-                  lastActorId = requestObj.lastAction.actorId.toString();
-                } else if (typeof requestObj.lastAction.actorId === 'string') {
-                  lastActorId = requestObj.lastAction.actorId;
-                } else if (requestObj.lastAction.actorId._id) {
-                  lastActorId = requestObj.lastAction.actorId._id.toString();
-                }
-              }
-              
-              // If activeResponder.relationship === 'reviewer', ANY Admin can respond
-              // UNLESS this Admin was the one who rescheduled (then they're View only)
-              if (activeResponderRelationship === 'reviewer') {
-                if (lastActorId && lastActorId !== userIdStr) {
-                  // Admin can respond (did NOT reschedule last)
-                  isActiveResponder = true;
-                }
-                // If lastActorId === userIdStr, Admin rescheduled last, they remain View only
+            console.log(`[ACTION VALIDATOR] Checking if user can respond as qualified reviewer`, {
+              requestId: requestObj.Request_ID,
+              userId: userIdStr,
+              userAuthority,
+              requiredAuthority: AUTHORITY_TIERS.COORDINATOR
+            });
+            
+            // Extract lastActorId to prevent self-review
+            let lastActorId = null;
+            if (requestObj.lastAction?.actorId) {
+              if (typeof requestObj.lastAction.actorId === 'object' && requestObj.lastAction.actorId.toString) {
+                lastActorId = requestObj.lastAction.actorId.toString();
+              } else if (typeof requestObj.lastAction.actorId === 'string') {
+                lastActorId = requestObj.lastAction.actorId;
+              } else if (requestObj.lastAction.actorId._id) {
+                lastActorId = requestObj.lastAction.actorId._id.toString();
               }
             }
+            
+            console.log(`[ACTION VALIDATOR] Last actor check`, {
+              requestId: requestObj.Request_ID,
+              userId: userIdStr,
+              lastActorId,
+              isSameAsLastActor: lastActorId === userIdStr
+            });
+            
+            // Check if user is a qualified reviewer (coordinator or admin level)
+            // AND is not the last actor (prevent self-review)
+            if (userAuthority >= AUTHORITY_TIERS.COORDINATOR && (!lastActorId || lastActorId !== userIdStr)) {
+              // Additional check: Verify user is either:
+              // 1. The assigned reviewer (already checked above, isActiveResponder would be true)
+              // 2. A valid coordinator (in validCoordinators array)
+              // 3. An admin (authority >= 80)
+              
+              const isValidCoordinator = requestObj.validCoordinators?.some(
+                vc => vc.userId?.toString() === userIdStr
+              );
+              const isAdmin = userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN;
+              
+              console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: Qualified reviewer check result`, {
+                requestId: requestObj.Request_ID,
+                userId: userIdStr,
+                isValidCoordinator,
+                isAdmin,
+                validCoordinatorsCount: requestObj.validCoordinators?.length || 0,
+                action
+              });
+              
+              if (isValidCoordinator || isAdmin) {
+                // Qualified reviewer can respond
+                isActiveResponder = true;
+                console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: ✅ User granted access as qualified reviewer`, {
+                  requestId: requestObj.Request_ID,
+                  userId: userIdStr,
+                  reason: isAdmin ? 'admin' : 'valid-coordinator',
+                  action
+                });
+              } else {
+                console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: ❌ User is NOT a qualified reviewer`, {
+                  requestId: requestObj.Request_ID,
+                  userId: userIdStr,
+                  action,
+                  reason: 'Not a valid coordinator or admin'
+                });
+              }
+            } else {
+              console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: User does not meet authority/last-actor criteria`, {
+                requestId: requestObj.Request_ID,
+                userId: userIdStr,
+                userAuthority,
+                requiredAuthority: AUTHORITY_TIERS.COORDINATOR,
+                lastActorId,
+                action
+              });
+            }
+          } else {
+            console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: User is assigned reviewer or relationship not 'reviewer'`, {
+              requestId: requestObj.Request_ID,
+              userId: userIdStr,
+              isActiveResponder,
+              activeResponderRelationship: activeResponder.relationship,
+              action
+            });
           }
           
           // If user is NOT the active responder, they can only view
           if (!isActiveResponder && action !== REQUEST_ACTIONS.VIEW) {
+            console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: ❌ REJECTING action - user is not active responder`, {
+              requestId: requestObj.Request_ID,
+              userId: userIdStr,
+              action,
+              isActiveResponder
+            });
             return {
               valid: false,
               reason: 'Only the active responder can perform actions on this request'
             };
+          } else if (isActiveResponder) {
+            console.log(`[ACTION VALIDATOR] VALIDATE_ACTION: ✅ User IS active responder, allowing action to proceed to permission check`, {
+              requestId: requestObj.Request_ID,
+              userId: userIdStr,
+              action
+            });
           }
           
           // If user IS the active responder, allow them to respond (confirm/decline/accept/reject/reschedule)
@@ -525,16 +617,63 @@ class ActionValidatorService {
    * @private
    */
   _isValidCoordinator(userId, request) {
-    if (!request.validCoordinators || !userId) return false;
+    if (!request.validCoordinators || !userId) {
+      console.log(`[ACTION VALIDATOR] _isValidCoordinator: returning false`, {
+        hasValidCoordinatorsField: 'validCoordinators' in request,
+        validCoordinatorsValue: request.validCoordinators,
+        userId,
+        hasUserId: !!userId,
+        requestId: request.Request_ID
+      });
+      return false;
+    }
     
     const userIdStr = this._normalizeUserId(userId);
-    if (!userIdStr) return false;
+    if (!userIdStr) {
+      console.log(`[ACTION VALIDATOR] _isValidCoordinator: could not normalize userId`, { userId, requestId: request.Request_ID });
+      return false;
+    }
     
     // Check if user is in the validCoordinators array
-    return request.validCoordinators.some(coord => {
-      const coordUserId = this._normalizeUserId(coord.userId);
-      return coordUserId === userIdStr;
+    const found = request.validCoordinators.some(coord => {
+      // Handle multiple possible shapes:
+      // - { userId: ObjectId }
+      // - { _id: ObjectId }  (legacy/mis-saved form)
+      // - ObjectId or string directly in the array
+      let candidateId = null;
+      if (coord && typeof coord === 'object') {
+        if (coord.userId) {
+          candidateId = this._normalizeUserId(coord.userId);
+        } else if (coord._id) {
+          candidateId = this._normalizeUserId(coord._id);
+        }
+      } else {
+        candidateId = this._normalizeUserId(coord);
+      }
+      return candidateId === userIdStr;
     });
+    
+    if (!found) {
+      console.log(`[ACTION VALIDATOR] _isValidCoordinator: user NOT found in array`, {
+        userId: userIdStr,
+        validCoordinatorsCount: request.validCoordinators?.length || 0,
+        validCoordinatorIds: request.validCoordinators?.map(c => {
+          if (c && typeof c === 'object') {
+            return this._normalizeUserId(c.userId || c._id);
+          }
+          return this._normalizeUserId(c);
+        }) || [],
+        requestId: request.Request_ID
+      });
+    } else {
+      console.log(`[ACTION VALIDATOR] _isValidCoordinator: user FOUND in array`, {
+        userId: userIdStr,
+        validCoordinatorsCount: request.validCoordinators?.length || 0,
+        requestId: request.Request_ID
+      });
+    }
+    
+    return found;
   }
 
   /**
@@ -880,7 +1019,11 @@ class ActionValidatorService {
       userId: userId?.toString?.() || userId,
       state: currentState,
       normalizedState,
-      validCoordinatorsCount: requestObj.validCoordinators?.length || 0
+      validCoordinatorsCount: requestObj.validCoordinators?.length || 0,
+      hasValidCoordinatorsField: 'validCoordinators' in requestObj,
+      validCoordinatorsIsNull: requestObj.validCoordinators === null,
+      validCoordinatorsIsUndefined: requestObj.validCoordinators === undefined,
+      requestObjKeys: Object.keys(requestObj).slice(0, 20) // First 20 keys
     });
     
     // Final states: only view (and delete for admins with permission)
@@ -954,41 +1097,23 @@ class ActionValidatorService {
       try {
         isRequester = this._isRequester(userIdStr, requestObj);
         isReviewer = this._isReviewer(userIdStr, requestObj);
+        const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
         
         // Get user authority for admin check
         const User = require('../../models/index').User;
         const user = await User.findById(userIdStr).select('authority').lean();
         userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
         
-        // Check if user is a valid coordinator (for APPROVED state, valid coordinators should have same permissions as assigned coordinator)
-        const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
-        console.log(`[ACTION VALIDATOR] APPROVED state check`, {
-          requestId: requestObj.Request_ID,
-          userId: userIdStr,
-          isRequester,
-          isReviewer,
-          userAuthority,
-          isValidCoordinator,
-          validCoordinators: requestObj.validCoordinators?.map(c => {
-            const coordUserId = this._normalizeUserId(c.userId);
-            return { userId: coordUserId, name: c.name };
-          }) || []
-        });
-        
-        // For APPROVED state, if user is requester, reviewer, admin, or valid coordinator, allow them to proceed
+        // For APPROVED state, allow requester, reviewer, admins, or valid coordinators to proceed
         // even without an active responder
         if (isRequester || isReviewer || userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN || isValidCoordinator) {
           // Continue to action computation below - don't return early
-          if (isValidCoordinator) {
-            console.log(`[ACTION VALIDATOR] Valid coordinator (${userIdStr}) allowed to act on APPROVED request ${requestObj.Request_ID}`);
-          }
         } else {
           // Not requester, reviewer, admin, or valid coordinator - only view
-          console.log(`[ACTION VALIDATOR] User (${userIdStr}) NOT allowed to proceed on APPROVED request ${requestObj.Request_ID} - only view`);
           return available;
         }
       } catch (error) {
-        console.error(`[ACTION VALIDATOR] Error checking requester/reviewer for APPROVED state: ${error.message}`);
+        console.error(`[ACTION VALIDATOR] Error checking requester/reviewer/coordinator for APPROVED state: ${error.message}`);
         // Fall through to active responder check
       }
     }
@@ -1044,8 +1169,56 @@ class ActionValidatorService {
     // For APPROVED state without active responder, we've already validated user can proceed
     let isActiveResponder = false;
     if (normalizedState === REQUEST_STATES.APPROVED && (!activeResponder || !activeResponder.userId)) {
-      // For APPROVED state, if we got here, user is requester/reviewer/admin/valid coordinator (validated above)
-      isActiveResponder = true; // Treat as active responder to allow action computation
+      // For APPROVED state, if we got here, user is requester/reviewer/admin/valid-coordinator (validated above)
+      // Re-check to make sure they qualify for action computation
+      isRequester = this._isRequester(userIdStr, requestObj);
+      isReviewer = this._isReviewer(userIdStr, requestObj);
+      const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
+      
+      console.log(`[ACTION VALIDATOR] APPROVED state - checking access for user ${userIdStr}:`, {
+        requestId: requestObj.Request_ID,
+        isRequester,
+        isReviewer,
+        isValidCoordinator,
+        validCoordinatorsCount: requestObj.validCoordinators?.length || 0,
+        validCoordinatorsArray: requestObj.validCoordinators || null,
+        validCoordinatorIds: requestObj.validCoordinators?.map(c => c.userId?.toString?.() || c.userId) || []
+      });
+      
+      // Get user authority if not already fetched
+      if (userAuthority === AUTHORITY_TIERS.BASIC_USER) {
+        try {
+          const User = require('../../models/index').User;
+          const user = await User.findById(userIdStr).select('authority').lean();
+          userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
+        } catch (error) {
+          console.error(`[ACTION VALIDATOR] Error fetching user authority for APPROVED isActiveResponder check: ${error.message}`);
+          userAuthority = AUTHORITY_TIERS.BASIC_USER;
+        }
+      }
+      
+      // Allow if requester, reviewer, admin, or valid coordinator
+      if (isRequester || isReviewer || userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN || isValidCoordinator) {
+        isActiveResponder = true;
+        console.log(`[ACTION VALIDATOR] APPROVED state: setting isActiveResponder=true for user`, {
+          requestId: requestObj.Request_ID,
+          userId: userIdStr,
+          isRequester,
+          isReviewer,
+          isValidCoordinator,
+          userAuthority,
+          reason: isRequester ? 'requester' : isReviewer ? 'reviewer' : isValidCoordinator ? 'valid-coordinator' : 'admin'
+        });
+      } else {
+        console.log(`[ACTION VALIDATOR] APPROVED state: NO ACCESS for user`, {
+          requestId: requestObj.Request_ID,
+          userId: userIdStr,
+          isRequester,
+          isReviewer,
+          isValidCoordinator,
+          userAuthority
+        });
+      }
     } else if (responderId) {
       isActiveResponder = userIdStr === responderId;
     }
@@ -1152,27 +1325,52 @@ class ActionValidatorService {
     // Valid coordinators (matching org type + coverage area) can claim and act on broadcast requests
     // They should have the same action permissions as the assigned coordinator
     // This applies to both PENDING_REVIEW and REVIEW_RESCHEDULED states
+    // CRITICAL: In REVIEW_RESCHEDULED, when a stakeholder reschedules, ANY valid coordinator should
+    // be able to respond (not just the assigned reviewer)
     if (!isActiveResponder && (normalizedState === REQUEST_STATES.PENDING_REVIEW || normalizedState === REQUEST_STATES.REVIEW_RESCHEDULED)) {
       const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
-      console.log(`[ACTION VALIDATOR] Valid coordinator check`, {
+      console.log(`[ACTION VALIDATOR] BROADCAST: Valid coordinator check`, {
         requestId: requestObj.Request_ID,
         userId: userIdStr,
         isValidCoordinator,
         state: normalizedState,
-        validCoordinators: requestObj.validCoordinators?.map(c => c.userId?.toString?.() || c.userId) || []
+        assignedReviewer: requestObj.reviewer?.userId?.toString?.() || requestObj.reviewer?.userId,
+        validCoordinatorsCount: requestObj.validCoordinators?.length || 0,
+        validCoordinatorsArray: requestObj.validCoordinators || null,
+        validCoordinatorIds: requestObj.validCoordinators?.map(c => c.userId?.toString?.() || c.userId) || [],
+        activeResponder: activeResponder ? {
+          userId: activeResponder.userId?.toString?.(),
+          relationship: activeResponder.relationship
+        } : null
       });
       if (isValidCoordinator) {
         // Valid coordinators have the same permissions as assigned coordinators
         // In PENDING_REVIEW: can accept/reject/reschedule
         // In REVIEW_RESCHEDULED: can participate in reschedule negotiation (accept/reject/reschedule)
         isActiveResponder = true;
-        console.log(`[ACTION VALIDATOR] Valid coordinator (${userIdStr}) allowed to act on broadcast request ${requestObj.Request_ID} in ${normalizedState} state`);
+        console.log(`[ACTION VALIDATOR] ✅ BROADCAST: Valid coordinator (${userIdStr}) granted full actions on request ${requestObj.Request_ID} in ${normalizedState} state`);
+        console.log(`[ACTION VALIDATOR] BROADCAST: This coordinator can now accept/reject/reschedule even though they are not the assigned reviewer`);
+      } else {
+        console.log(`[ACTION VALIDATOR] ❌ BROADCAST: User (${userIdStr}) is NOT a valid coordinator for request ${requestObj.Request_ID}`);
       }
     }
 
-    // For APPROVED state, allow requester/reviewer/admin to proceed even if not active responder
-    // (APPROVED requests don't have an active responder, but requester/reviewer should still be able to edit/manage)
-    // For APPROVED state, isActiveResponder is already set to true above if user is requester/reviewer/admin
+    // For APPROVED state, allow requester/reviewer/admin/valid-coordinator to proceed even if not active responder
+    // (APPROVED requests don't have an active responder, but requester/reviewer/valid-coordinator should still be able to edit/manage)
+    // For APPROVED state, isActiveResponder should already be set to true above if user is requester/reviewer/admin/valid-coordinator
+    // Add final safety net: if APPROVED and not yet active responder, do one final check for valid coordinator
+    if (!isActiveResponder && normalizedState === REQUEST_STATES.APPROVED) {
+      const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
+      if (isValidCoordinator) {
+        isActiveResponder = true;
+        console.log(`[ACTION VALIDATOR] APPROVED state final safety check: valid coordinator detected, setting isActiveResponder=true`, {
+          requestId: requestObj.Request_ID,
+          userId: userIdStr,
+          validCoordinatorsCount: requestObj.validCoordinators?.length || 0
+        });
+      }
+    }
+    
     let shouldProceed = isActiveResponder;
     
     console.log(`[ACTION VALIDATOR] Before shouldProceed check`, {
@@ -1184,25 +1382,45 @@ class ActionValidatorService {
     });
     
     if (!shouldProceed) {
-      console.log(`[ACTION VALIDATOR] Returning early - NOT proceeding (only view)`, {
+      console.log(`[ACTION VALIDATOR] ❌ NOT proceeding - only view allowed`, {
         requestId: requestObj.Request_ID,
         userId: userIdStr,
+        state: normalizedState,
+        isActiveResponder,
         shouldProceed
       });
       return available; // Only view
     }
     
-    // Get user authority if not already fetched (for APPROVED state we may have already fetched it)
-    if (!userAuthority || userAuthority === AUTHORITY_TIERS.BASIC_USER) {
+    console.log(`[ACTION VALIDATOR] ✅ PROCEEDING TO ACTION COMPUTATION`, {
+      requestId: requestObj.Request_ID,
+      userId: userIdStr,
+      normalizedState,
+      shouldProceed
+    });
+    
+    try {
+      console.log(`[ACTION VALIDATOR] ✅ Proceeding to test actions`, {
+        requestId: requestObj.Request_ID,
+        userId: userIdStr,
+        state: normalizedState,
+        isActiveResponder,
+        shouldProceed
+      });
+    
+    // Get user authority if not already fetched
+    if (typeof userAuthority === 'undefined' || userAuthority === AUTHORITY_TIERS.BASIC_USER) {
       // User IS active responder - get their authority
       // Use normalized userIdStr for the query to avoid issues
-      // Note: We may have already fetched user above for coordinator-to-admin check, but fetch again for consistency
-      const user = await User.findById(userIdStr).select('authority').lean();
-      if (!user) {
-        // If user not found (shouldn't happen), return view only
-        return available; // Only view
+      try {
+        const User = require('../../models/index').User;
+        const user = await User.findById(userIdStr).select('authority').lean();
+        if (user) {
+          userAuthority = user.authority || AUTHORITY_TIERS.BASIC_USER;
+        }
+      } catch (error) {
+        console.error(`[ACTION VALIDATOR] Error fetching user authority: ${error.message}`);
       }
-      userAuthority = user?.authority || AUTHORITY_TIERS.BASIC_USER;
     }
     
     // Get base actions for current state
@@ -1234,10 +1452,26 @@ class ActionValidatorService {
     }
     
     // Check permissions for each action and add if valid
+    console.log(`[ACTION VALIDATOR] Testing actions for request ${requestObj.Request_ID}:`, {
+      userId: userIdStr,
+      state: normalizedState,
+      isActiveResponder,
+      shouldProceed,
+      actionsToTest: mappedActions
+    });
+    
     for (const action of mappedActions) {
       if (action === REQUEST_ACTIONS.VIEW) continue; // Already added
       
       const validation = await this.validateAction(userId, action, request, context);
+      console.log(`[ACTION VALIDATOR] validateAction result for ${action}:`, {
+        requestId: requestObj.Request_ID,
+        userId: userIdStr,
+        action,
+        valid: validation.valid,
+        reason: validation.reason
+      });
+      
       if (validation.valid) {
         available.push(action);
       }
@@ -1301,12 +1535,20 @@ class ActionValidatorService {
       // Determine if user should have access to approved event actions
       // Allow if: requester, reviewer, admin, valid coordinator, OR coordinator with any of the required permissions
       const isValidCoordinator = this._isValidCoordinator(userIdStr, requestObj);
+      
       const shouldHaveAccess = isRequester || 
                               isReviewer || 
                               userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN ||
                               isValidCoordinator ||
                               (isCoordinator && 
                                (hasReschedulePermission || hasEditPermission || hasManageStaffPermission || hasCancelPermission));
+      
+      console.log(`[ACTION VALIDATOR] APPROVED state: shouldHaveAccess determination`, {
+        requestId: requestObj.Request_ID,
+        userId: userIdStr,
+        shouldHaveAccess,
+        reason: isRequester ? 'requester' : isReviewer ? 'reviewer' : userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN ? 'admin' : isValidCoordinator ? 'valid-coordinator' : isCoordinator && (hasReschedulePermission || hasEditPermission || hasManageStaffPermission || hasCancelPermission) ? 'coordinator-with-permission' : 'NONE'
+      });
       
       if (shouldHaveAccess) {
         // Add actions based on permissions (not role)
@@ -1315,7 +1557,7 @@ class ActionValidatorService {
         }
         
         if (hasManageStaffPermission) {
-          available.push('manage-staff');
+          available.push(REQUEST_ACTIONS.MANAGE_STAFF);
         }
         
         // Reschedule: check both permission AND validateAction
@@ -1333,133 +1575,29 @@ class ActionValidatorService {
             available.push(REQUEST_ACTIONS.CANCEL);
           }
         }
+      } else {
+        console.log(`[ACTION VALIDATOR] APPROVED state: ❌ NO ACCESS - user does not qualify`, {
+          requestId: requestObj.Request_ID,
+          userId: userIdStr,
+          isRequester,
+          isReviewer,
+          isAdmin: userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN,
+          isValidCoordinator,
+          hasAnyPermission: hasReschedulePermission || hasEditPermission || hasManageStaffPermission || hasCancelPermission
+        });
       }
     }
     
-    return available;
-  }
-
-  /**
-   * Validate reschedule broadcast visibility
-   * Ensures that during REVIEW_RESCHEDULED state, the correct group can act
-   * 
-   * When Stakeholder reschedules: only valid coordinators + admins can act (broadcast mode)
-   * When Coordinator/Admin reschedules: only original stakeholder can act (exclusive mode)
-   * 
-   * @param {string|ObjectId} userId - User ID attempting action
-   * @param {Object} request - Request document
-   * @returns {Promise<{valid: boolean, reason?: string}>}
-   */
-  async validateRescheduleVisibility(userId, request) {
-    try {
-      const normalizedState = RequestStateService.normalizeState(request.status);
-      
-      // Only validate in REVIEW_RESCHEDULED state
-      if (normalizedState !== REQUEST_STATES.REVIEW_RESCHEDULED) {
-        return { valid: true }; // Not in reschedule state, no special visibility rules
-      }
-
-      const rescheduleLoop = request.rescheduleLoop;
-      if (!rescheduleLoop) {
-        // No loop tracking, fall back to standard active responder logic
-        return { valid: true };
-      }
-
-      const userIdStr = this._normalizeUserId(userId);
-      const lastProposerRole = rescheduleLoop.lastProposerRole;
-
-      // CASE 1: Stakeholder proposed reschedule → valid coordinators and admins can act
-      if (lastProposerRole === 'Stakeholder' || lastProposerRole === 'stakeholder') {
-        const userAuthority = await this._getUserAuthority(userId);
-        
-        // Allow admins (authority >= 80)
-        if (userAuthority >= AUTHORITY_TIERS.OPERATIONAL_ADMIN) {
-          return { valid: true };
-        }
-
-        // Allow valid coordinators (authority >= 60)
-        if (userAuthority >= AUTHORITY_TIERS.COORDINATOR) {
-          const isValidCoordinator = this._isValidCoordinator(userIdStr, request);
-          if (isValidCoordinator) {
-            return { valid: true };
-          }
-          
-          return {
-            valid: false,
-            reason: 'Stakeholder rescheduled - only valid coordinators (matching location and org type) can act, but you are not in the valid list'
-          };
-        }
-
-        // Non-coordinator trying to act on reschedule proposed by stakeholder
-        return {
-          valid: false,
-          reason: 'Stakeholder rescheduled - coordinators and admins are reviewing this proposal'
-        };
-      }
-
-      // CASE 2: Coordinator or Admin proposed reschedule → only stakeholder can act
-      else if (lastProposerRole === 'Coordinator' || lastProposerRole === 'Admin') {
-        const originalRequesterId = rescheduleLoop.originalRequesterId?.toString();
-        const currentUserId = userIdStr;
-
-        if (originalRequesterId && currentUserId === originalRequesterId) {
-          return { valid: true }; // Stakeholder is allowed to act
-        }
-
-        return {
-          valid: false,
-          reason: 'Coordinator/Admin rescheduled - only the original stakeholder can review this proposal'
-        };
-      }
-
-      // Unknown proposer role
-      return {
-        valid: false,
-        reason: 'Unknown reschedule proposer role'
-      };
-    } catch (error) {
-      console.error('[ACTION VALIDATOR] Error validating reschedule visibility:', error);
-      return {
-        valid: false,
-        reason: 'Error validating reschedule visibility'
-      };
-    }
-  }
-
-  /**
-   * Check if a coordinator is valid for a given request (location + org type match)
-   * @private
-   */
-  _isValidCoordinator(userId, request) {
-    if (!request.validCoordinators || !userId) {
-      console.log(`[ACTION VALIDATOR] _isValidCoordinator: missing validCoordinators or userId`, {
-        hasValidCoordinators: !!request.validCoordinators,
-        validCoordinatorsLength: request.validCoordinators?.length || 0,
-        hasUserId: !!userId
+      return available;
+    } catch (actionError) {
+      console.error(`[ACTION VALIDATOR] ERROR in action validation block: ${actionError.message}`, {
+        requestId: requestObj.Request_ID,
+        userId: userIdStr,
+        error: actionError.stack
       });
-      return false;
+      // On error, return only view
+      return available;
     }
-    
-    const userIdStr = this._normalizeUserId(userId);
-    if (!userIdStr) {
-      console.log(`[ACTION VALIDATOR] _isValidCoordinator: failed to normalize userId`, { userId });
-      return false;
-    }
-
-    const matches = request.validCoordinators.map(coord => {
-      const coordUserId = this._normalizeUserId(coord.userId);
-      const matches = coordUserId === userIdStr;
-      return { coordUserId, userIdStr, matches, coordName: coord.name };
-    });
-    
-    const isValid = matches.some(m => m.matches);
-    console.log(`[ACTION VALIDATOR] _isValidCoordinator check`, {
-      userIdStr,
-      matches,
-      isValid
-    });
-    
-    return isValid;
   }
 }
 

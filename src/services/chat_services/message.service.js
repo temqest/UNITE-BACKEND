@@ -7,7 +7,7 @@ const s3 = require('../../utils/s3'); // Add S3 import
 
 class MessageService {
   // Send a message
-  async sendMessage(senderId, receiverId, content, messageType = 'text', attachments = []) {
+  async sendMessage(senderId, receiverId, content, messageType = 'text', attachments = [], organizationId = null) {
     try {
       // Validate permissions
       console.log('[MessageService] Validating send message permission:', {
@@ -33,13 +33,14 @@ class MessageService {
         messageType,
         attachments,
         conversationId,
+        organizationId,
         status: 'sent'
       });
 
       await message.save();
 
       // Update or create conversation
-      await this.updateConversation(conversationId, senderId, receiverId, message);
+      await this.updateConversation(conversationId, senderId, receiverId, message, organizationId);
 
       return message;
     } catch (error) {
@@ -48,9 +49,9 @@ class MessageService {
   }
 
   // Update conversation with last message
-  async updateConversation(conversationId, senderId, receiverId, message) {
+  async updateConversation(conversationId, senderId, receiverId, message, organizationId = null) {
     try {
-      let conversation = await Conversation.findOne({ conversationId });
+      let conversation = await Conversation.findOne({ conversationId, organizationId: organizationId || undefined });
 
       if (!conversation) {
         conversation = new Conversation({
@@ -59,7 +60,8 @@ class MessageService {
             { userId: senderId },
             { userId: receiverId }
           ],
-          type: 'direct'
+          type: 'direct',
+          organizationId
         });
       }
 

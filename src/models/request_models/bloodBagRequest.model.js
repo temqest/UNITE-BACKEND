@@ -12,14 +12,20 @@ const bloodBagRequestSchema = new mongoose.Schema({
   RequestedItems: { type: [requestedItemSchema], required: true },
   RequestedForAt: { type: Date },
   Urgency: { type: String, enum: ['low','medium','high'], default: 'medium' },
-  Notes: { type: String, trim: true }
+  Notes: { type: String, trim: true },
+  // Tenant / organization scope
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: false
+  }
 }, {
   timestamps: true
 });
 
-bloodBagRequestSchema.index({ Requester_ID: 1 });
-bloodBagRequestSchema.index({ Requestee_ID: 1 });
-bloodBagRequestSchema.index({ Request_ID: 1 });
+bloodBagRequestSchema.index({ organizationId: 1, Requester_ID: 1 });
+bloodBagRequestSchema.index({ organizationId: 1, Requestee_ID: 1 });
+bloodBagRequestSchema.index({ organizationId: 1, Request_ID: 1 });
 
 const BloodBagRequest = mongoose.model('BloodBagRequest', bloodBagRequestSchema);
 

@@ -12,6 +12,7 @@ class EventOverviewController {
   async getAllEvents(req, res) {
     try {
       const filters = {
+        organizationId: req.tenant?.organizationId || null,
         status: req.query.status,
         coordinator_id: req.query.coordinator_id,
         location: req.query.location,
@@ -53,6 +54,7 @@ class EventOverviewController {
   async getEventsByStatus(req, res) {
     try {
       const filters = {
+        organizationId: req.tenant?.organizationId || null,
         coordinator_id: req.query.coordinator_id,
         date_from: req.query.date_from,
         date_to: req.query.date_to
@@ -85,6 +87,7 @@ class EventOverviewController {
       const limit = parseInt(req.query.limit) || 10;
       
       const filters = {
+        organizationId: req.tenant?.organizationId || null,
         coordinator_id: req.query.coordinator_id
       };
 
@@ -146,6 +149,7 @@ class EventOverviewController {
       const limit = parseInt(req.query.limit) || 10;
       
       const filters = {
+        organizationId: req.tenant?.organizationId || null,
         coordinator_id: req.query.coordinator_id,
         status: req.query.status
       };
@@ -184,6 +188,7 @@ class EventOverviewController {
       }
 
       const filters = {
+        organizationId: req.tenant?.organizationId || null,
         status: req.query.status,
         coordinator_id: req.query.coordinator_id,
         date_from: req.query.date_from,
@@ -223,6 +228,7 @@ class EventOverviewController {
   async getAllEventsForCalendar(req, res) {
     try {
       const filters = {
+        organizationId: req.tenant?.organizationId || null,
         date_from: req.query.date_from,
         date_to: req.query.date_to
       };

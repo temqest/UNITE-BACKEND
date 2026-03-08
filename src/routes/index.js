@@ -25,27 +25,35 @@ const coverageAreasRoutes = require('./coverageAreas.routes'); // Coverage area 
 const rbacRoutes = require('./rbac.routes'); // RBAC management routes
 const pagesRoutes = require('./pages.routes'); // Page and feature access routes
 const stakeholderRoutes = require('./stakeholder.routes'); // Stakeholder management routes
+const monitoringRoutes = require('./monitoring.routes'); // Monitoring dashboard routes
+const tenantContext = require('../middleware/tenantContext');
 
 // Mount routes
 // Auth routes are mounted under /api/auth (canonical) and also under /api
 // to preserve compatibility with frontend calls that expect /api/login.
 router.use('/api/auth', authRoutes);
 router.use('/api', authRoutes);
+
+// All authenticated application routes should run through tenantContext so that
+// services can rely on req.tenant.organizationId for scoping.
+router.use('/api', tenantContext);
+
 router.use('/api', usersRoutes);
 router.use('/api', eventsRoutes);
 router.use('/api', requestsRoutes); // Legacy routes (kept for backward compatibility)
 router.use('/api', eventRequestsRoutes); // New event request system
-router.use('/api/v2', v2EventRequestsRoutes); // v2.0 event request system (permission-based)
+router.use('/api/v2', tenantContext, v2EventRequestsRoutes); // v2.0 event request system (permission-based)
 router.use('/api', utilityRoutes);
 router.use('/api', inventoryRoutes);
 router.use('/api', locationsRoutes); // New flexible location routes
 router.use('/api', organizationsRoutes); // Organization management routes
 router.use('/api', coverageAreasRoutes); // Coverage area management routes
-router.use('/api/rbac', rbacRoutes); // RBAC management routes
+router.use('/api/rbac', tenantContext, rbacRoutes); // RBAC management routes
 router.use('/api', pagesRoutes); // Page and feature access routes
 router.use('/api', stakeholderRoutes); // Stakeholder management routes
-router.use('/api/chat', chatRoutes);
-router.use('/api/files', filesRoutes);
+router.use('/api/chat', tenantContext, chatRoutes);
+router.use('/api/files', tenantContext, filesRoutes);
+router.use('/api', monitoringRoutes);
 
 // Add direct routes under /api for frontend compatibility
 // These routes are also available under /api/rbac for consistency

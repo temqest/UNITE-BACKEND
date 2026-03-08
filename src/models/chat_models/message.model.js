@@ -56,14 +56,20 @@ const messageSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
+  },
+  // Tenant / organization scope
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true
   }
 }, {
   timestamps: true
 });
 
-// Index for efficient querying
-messageSchema.index({ conversationId: 1, timestamp: -1 });
-messageSchema.index({ senderId: 1, receiverId: 1, timestamp: -1 });
+// Indexes for efficient querying within a tenant
+messageSchema.index({ organizationId: 1, conversationId: 1, timestamp: -1 });
+messageSchema.index({ organizationId: 1, senderId: 1, receiverId: 1, timestamp: -1 });
 
 const Message = mongoose.model('Message', messageSchema);
 

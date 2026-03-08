@@ -114,10 +114,20 @@ const eventSchema = new mongoose.Schema({
     enum: ['Pending', 'Approved', 'Rescheduled', 'Rejected', 'Completed', 'Cancelled'],
     required: true,
     default: 'Pending'
+  },
+  // Tenant / organization scope
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true
   }
 }, {
   timestamps: true
 });
+
+// Indexes to support common tenant-scoped queries
+eventSchema.index({ organizationId: 1, Start_Date: 1 });
+eventSchema.index({ organizationId: 1, Status: 1 });
 
 const Event = mongoose.model('Event', eventSchema);
 

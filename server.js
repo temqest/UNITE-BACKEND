@@ -5,8 +5,11 @@ const cors = require('cors');
 const compression = require('compression');
 const routes = require('./src/routes');
 const rateLimiter = require('./src/middleware/rateLimiter');
+const monitoringMiddleware = require('./src/middleware/monitoring');
 const http = require('http');
 const socketIo = require('socket.io');
+const monitoringService = require('./src/services/utility_services/monitoring.service');
+const authorityService = require('./src/services/users_services/authority.service');
 
 // Initialize Express app
 const app = express();
@@ -117,6 +120,9 @@ app.use(compression());
 // Body Parser Middleware
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Monitoring middleware (request timing + activity capture)
+app.use(monitoringMiddleware);
 
 // Security Headers
 app.use((req, res, next) => {
@@ -245,6 +251,26 @@ const s3 = require('./src/utils/s3');
 // Store connected users: userId -> socketId
 const connectedUsers = new Map();
 
+const ADMIN_SOCKET_CACHE_TTL_MS = 60 * 1000;
+const adminSocketCache = new Map();
+
+async function isMonitoringAdmin(userId) {
+  if (!userId) return false;
+  const cached = adminSocketCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.isAdmin;
+  }
+
+  try {
+    const authority = await authorityService.calculateUserAuthority(userId);
+    const isAdmin = authority >= 80;
+    adminSocketCache.set(userId, { isAdmin, expiresAt: Date.now() + ADMIN_SOCKET_CACHE_TTL_MS });
+    return isAdmin;
+  } catch (error) {
+    return false;
+  }
+}
+
 io.use(async (socket, next) => {
   try {
     // Get token from handshake
@@ -266,11 +292,12 @@ io.use(async (socket, next) => {
   }
 });
 
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   console.log(`User ${socket.userId} connected with socket ${socket.id}`);
 
   // Store connection
   connectedUsers.set(socket.userId, socket.id);
+  monitoringService.setSocketStats({ connectedUsers: connectedUsers.size });
 
   // Set user online
   presenceService.setOnline(socket.userId, socket.id);
@@ -280,6 +307,31 @@ io.on('connection', (socket) => {
 
   // Join user's personal room for direct messages
   socket.join(socket.userId);
+
+  const isAdmin = await isMonitoringAdmin(socket.userId);
+  if (isAdmin) {
+    socket.join('monitoring-admin');
+    socket.emit('monitoring_ready', monitoringService.getSnapshot());
+  }
+
+  socket.on('monitoring_subscribe', () => {
+    if (!isAdmin) {
+      socket.emit('monitoring_error', { message: 'Unauthorized', timestamp: Date.now() });
+      return;
+    }
+    socket.emit('monitoring_ready', monitoringService.getSnapshot());
+  });
+
+  socket.on('monitoring_ping', (payload = {}) => {
+    if (!isAdmin) {
+      socket.emit('monitoring_error', { message: 'Unauthorized', timestamp: Date.now() });
+      return;
+    }
+    socket.emit('monitoring_pong', {
+      requestId: payload.requestId || null,
+      serverTime: new Date().toISOString()
+    });
+  });
 
   // Send message
     socket.on('send_message', async (data) => {
@@ -291,7 +343,8 @@ io.on('connection', (socket) => {
         receiverId,
         content,
         messageType,
-        attachments
+        attachments,
+        socket.user.organizationId || null
       );
 
       // Prepare emitted copy with signed GET URLs for attachments
@@ -446,6 +499,7 @@ io.on('connection', (socket) => {
 
     // Remove from connected users
     connectedUsers.delete(socket.userId);
+    monitoringService.setSocketStats({ connectedUsers: connectedUsers.size });
 
     // Clear typing indicators
     typingService.clearUserTyping(socket.userId);
@@ -489,6 +543,22 @@ app.use('*', (req, res) => {
 
 // Global Error Handler Middleware
 app.use((err, req, res, next) => {
+  const requestId = res.locals && res.locals.requestId ? res.locals.requestId : null;
+  const errorEntry = {
+    requestId,
+    method: req.method,
+    path: (req.originalUrl || req.url || '').split('?')[0],
+    statusCode: err.status || 500,
+    message: err.message || 'Unknown error',
+    timestamp: Date.now()
+  };
+
+  monitoringService.recordError(errorEntry);
+  const io = req.app && req.app.get && req.app.get('io');
+  if (io) {
+    io.to('monitoring-admin').emit('monitoring_error', errorEntry);
+  }
+
   // CORS Error
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({

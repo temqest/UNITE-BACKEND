@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 
 const SystemSettingsSchema = new mongoose.Schema({
+  // Optional tenant / organization scope. When null/absent, acts as global default.
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: false,
+    index: true
+  },
   notificationsEnabled: { type: Boolean, default: true },
   maxBloodBagsPerDay: { type: Number, default: 200 },
   maxEventsPerDay: { type: Number, default: 3 },
@@ -18,5 +25,7 @@ const SystemSettingsSchema = new mongoose.Schema({
   notifyCounterpartAdmins: { type: Boolean, default: true }
 }, { timestamps: true });
 
-// We'll keep a single document storing global settings. Use model name 'SystemSettings'.
+// Ensure at most one document per organization (including global default with null org)
+SystemSettingsSchema.index({ organizationId: 1 }, { unique: true, sparse: false });
+
 module.exports = mongoose.models.SystemSettings || mongoose.model('SystemSettings', SystemSettingsSchema);

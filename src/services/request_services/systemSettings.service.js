@@ -29,62 +29,97 @@ const DEFAULTS = {
   notifyCounterpartAdmins: true
 };
 
-let cachedSettings = Object.assign({}, DEFAULTS);
+// In-memory cache keyed by organizationId (string) or 'global'
+const cache = new Map();
 
-// Load persisted settings into cache (best-effort). This runs once on module load.
-(async function initCache() {
-  try {
-    const doc = await SystemSettingsModel.findOne({}).lean().exec();
-    if (doc) {
-      cachedSettings = Object.assign({}, DEFAULTS, doc);
-    } else {
-      // create default document
-      const created = await SystemSettingsModel.findOneAndUpdate({}, DEFAULTS, { upsert: true, new: true, setDefaultsOnInsert: true }).lean().exec();
-      if (created) cachedSettings = Object.assign({}, DEFAULTS, created);
-    }
-    // strip mongoose internal fields if present
-    delete cachedSettings._id;
-    delete cachedSettings.__v;
-  } catch (e) {
-    // If DB isn't ready or an error occurs, keep using in-memory defaults
-    try { console.warn('[SystemSettingsService] failed to load settings from DB, using defaults', e.message); } catch (e2) {}
+function cacheKey(orgId) {
+  return orgId ? String(orgId) : 'global';
+}
+
+async function loadSettingsForOrg(orgId) {
+  const key = cacheKey(orgId);
+  if (cache.has(key)) {
+    return cache.get(key);
   }
-})();
+
+  try {
+    const query = orgId ? { organizationId: orgId } : { organizationId: { $exists: false } };
+    let doc = await SystemSettingsModel.findOne(query).lean().exec();
+    if (!doc) {
+      // create default document for this org/global
+      const toSet = Object.assign({}, DEFAULTS);
+      if (orgId) {
+        toSet.organizationId = orgId;
+      }
+      doc = await SystemSettingsModel.findOneAndUpdate(
+        query,
+        { $set: toSet },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).lean().exec();
+    }
+    const merged = Object.assign({}, DEFAULTS, doc);
+    delete merged._id;
+    delete merged.__v;
+    cache.set(key, merged);
+    return merged;
+  } catch (e) {
+    try {
+      console.warn('[SystemSettingsService] failed to load settings from DB, using defaults', e.message);
+    } catch {}
+    const fallback = Object.assign({}, DEFAULTS);
+    cache.set(key, fallback);
+    return fallback;
+  }
+}
 
 class SystemSettingsService {
   /**
    * Get all system settings
-   * @returns {Object} All system settings
+   * @param {string|ObjectId|null} organizationId - optional tenant organization id
+   * @returns {Promise<Object>} All system settings
    */
-  getSettings() {
-    // Return a shallow copy of cached settings so callers don't mutate the cache accidentally
-    return Object.assign({}, cachedSettings);
+  async getSettings(organizationId = null) {
+    const settings = await loadSettingsForOrg(organizationId);
+    // Return a shallow copy so callers don't mutate the cache accidentally
+    return Object.assign({}, settings);
   }
 
   /**
    * Get a specific setting
    * @param {string} settingKey 
+   * @param {string|ObjectId|null} organizationId 
    * @returns {any} Setting value
    */
-  getSetting(settingKey) {
-    const settings = this.getSettings();
+  async getSetting(settingKey, organizationId = null) {
+    const settings = await this.getSettings(organizationId);
     return settings[settingKey];
   }
 
   /**
    * Update persistent settings and refresh in-memory cache
    * @param {Object} newSettings
+   * @param {string|ObjectId|null} organizationId
    * @returns {Object} updated settings
    */
-  async updateSettings(newSettings) {
+  async updateSettings(newSettings, organizationId = null) {
     try {
-      const updated = await SystemSettingsModel.findOneAndUpdate({}, { $set: newSettings }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean().exec();
+      const query = organizationId ? { organizationId } : { organizationId: { $exists: false } };
+      const updated = await SystemSettingsModel.findOneAndUpdate(
+        query,
+        { $set: newSettings },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).lean().exec();
+      const key = cacheKey(organizationId);
       if (updated) {
-        cachedSettings = Object.assign({}, DEFAULTS, updated);
-        delete cachedSettings._id;
-        delete cachedSettings.__v;
+        const merged = Object.assign({}, DEFAULTS, updated);
+        delete merged._id;
+        delete merged.__v;
+        cache.set(key, merged);
+        return Object.assign({}, merged);
       }
-      return Object.assign({}, cachedSettings);
+      // Fallback to existing cache or defaults
+      const settings = await loadSettingsForOrg(organizationId);
+      return Object.assign({}, settings);
     } catch (e) {
       throw new Error(`Failed to persist settings: ${e.message}`);
     }
@@ -93,10 +128,12 @@ class SystemSettingsService {
   /**
    * Check if a date is allowed based on advance booking rules
    * @param {Date} eventDate 
+   * @param {string|ObjectId|null} organizationId
    * @returns {Object} Validation result
    */
-  validateAdvanceBooking(eventDate) {
-    const advanceDays = this.getSetting('advanceBookingDays') || this.getSetting('advanceBookingDays') === 0 ? this.getSetting('advanceBookingDays') : DEFAULTS.advanceBookingDays;
+  async validateAdvanceBooking(eventDate, organizationId = null) {
+    const advanceDaysSetting = await this.getSetting('advanceBookingDays', organizationId);
+    const advanceDays = advanceDaysSetting || advanceDaysSetting === 0 ? advanceDaysSetting : DEFAULTS.advanceBookingDays;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -120,12 +157,13 @@ class SystemSettingsService {
   /**
    * Check if weekend events are allowed
    * @param {Date} eventDate 
+   * @param {string|ObjectId|null} organizationId
    * @returns {Object} Validation result
    */
-  validateWeekendRestriction(eventDate) {
+  async validateWeekendRestriction(eventDate, organizationId = null) {
     const dayOfWeek = eventDate.getDay(); // 0 = Sunday, 6 = Saturday
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const allowWeekends = this.getSetting('allowWeekendEvents');
+    const allowWeekends = await this.getSetting('allowWeekendEvents', organizationId);
 
     return {
       isWeekend,
@@ -140,10 +178,11 @@ class SystemSettingsService {
   /**
    * Check if coordinator has reached max pending requests
    * @param {number} pendingCount 
+   * @param {string|ObjectId|null} organizationId
    * @returns {Object} Validation result
    */
-  validatePendingRequestsLimit(pendingCount) {
-    const maxPending = this.getSetting('maxPendingRequests');
+  async validatePendingRequestsLimit(pendingCount, organizationId = null) {
+    const maxPending = await this.getSetting('maxPendingRequests', organizationId);
     const isValid = pendingCount < maxPending;
 
     return {
@@ -159,10 +198,12 @@ class SystemSettingsService {
 
   /**
    * Get minimum date coordinator can book
+   * @param {string|ObjectId|null} organizationId
    * @returns {Date} Minimum allowed date
    */
-  getMinBookingDate() {
-    const advanceDays = this.getSetting('advanceBookingDays') || DEFAULTS.advanceBookingDays;
+  async getMinBookingDate(organizationId = null) {
+    const advanceDaysSetting = await this.getSetting('advanceBookingDays', organizationId);
+    const advanceDays = advanceDaysSetting || DEFAULTS.advanceBookingDays;
     const minDate = new Date();
     minDate.setDate(minDate.getDate() + advanceDays);
     return minDate;
@@ -170,9 +211,10 @@ class SystemSettingsService {
 
   /**
    * Get maximum date coordinator can book
+   * @param {string|ObjectId|null} organizationId
    * @returns {Date} Maximum allowed date
    */
-  getMaxBookingDate() {
+  async getMaxBookingDate(organizationId = null) {
     // No hard maximum, but set to 1 year from today for UI purposes
     const maxDate = new Date();
     maxDate.setFullYear(maxDate.getFullYear() + 1);
@@ -181,26 +223,31 @@ class SystemSettingsService {
 
   /**
    * Check if staff assignment is required
+   * @param {string|ObjectId|null} organizationId
    * @returns {boolean} True if required
    */
-  isStaffAssignmentRequired() {
-    return !!this.getSetting('requireStaffAssignment');
+  async isStaffAssignmentRequired(organizationId = null) {
+    const val = await this.getSetting('requireStaffAssignment', organizationId);
+    return !!val;
   }
 
   /**
    * Check if coordinators can assign staff
+   * @param {string|ObjectId|null} organizationId
    * @returns {boolean} True if allowed
    */
-  canCoordinatorAssignStaff() {
-    return !!this.getSetting('allowCoordinatorStaffAssignment');
+  async canCoordinatorAssignStaff(organizationId = null) {
+    const val = await this.getSetting('allowCoordinatorStaffAssignment', organizationId);
+    return !!val;
   }
 
   /**
    * Get all validation checks for an event request
    * @param {Object} eventData 
+   * @param {string|ObjectId|null} organizationId
    * @returns {Object} All validation results
    */
-  validateAllRules(eventData) {
+  async validateAllRules(eventData, organizationId = null) {
     const results = {
       advanceBooking: null,
       weekend: null,
@@ -209,14 +256,14 @@ class SystemSettingsService {
     };
 
     if (eventData.Start_Date) {
-      results.advanceBooking = this.validateAdvanceBooking(eventData.Start_Date);
-      results.weekend = this.validateWeekendRestriction(eventData.Start_Date);
+      results.advanceBooking = await this.validateAdvanceBooking(eventData.Start_Date, organizationId);
+      results.weekend = await this.validateWeekendRestriction(eventData.Start_Date, organizationId);
     }
 
     return {
       isValid: results.advanceBooking?.isValid && results.weekend?.allowed,
       results,
-      settings: this.getSettings()
+      settings: await this.getSettings(organizationId)
     };
   }
 }

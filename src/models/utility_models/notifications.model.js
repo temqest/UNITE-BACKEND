@@ -156,6 +156,12 @@ const notificationSchema = new mongoose.Schema({
   Conversation_ID: {
     type: String,
     trim: true
+  },
+  // Tenant / organization scope
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: false
   }
 }, {
   timestamps: true
@@ -166,16 +172,16 @@ const notificationSchema = new mongoose.Schema({
 notificationSchema.index({ Recipient_ID: 1, RecipientType: 1, IsRead: 1 });
 notificationSchema.index({ Request_ID: 1 });
 
-// New indexes for modern notification system
-notificationSchema.index({ recipientUserId: 1, IsRead: 1, createdAt: -1 });
-notificationSchema.index({ NotificationType: 1, createdAt: -1 });
+// New indexes for modern notification system (tenant-scoped)
+notificationSchema.index({ organizationId: 1, recipientUserId: 1, IsRead: 1, createdAt: -1 });
+notificationSchema.index({ organizationId: 1, NotificationType: 1, createdAt: -1 });
 notificationSchema.index({ batchId: 1 });
-notificationSchema.index({ Request_ID: 1, NotificationType: 1 });
-notificationSchema.index({ Event_ID: 1, NotificationType: 1 });
+notificationSchema.index({ organizationId: 1, Request_ID: 1, NotificationType: 1 });
+notificationSchema.index({ organizationId: 1, Event_ID: 1, NotificationType: 1 });
 
 // Deduplication indexes (for checking duplicates within time window)
-notificationSchema.index({ recipientUserId: 1, NotificationType: 1, Request_ID: 1, createdAt: -1 });
-notificationSchema.index({ recipientUserId: 1, NotificationType: 1, Event_ID: 1, createdAt: -1 });
+notificationSchema.index({ organizationId: 1, recipientUserId: 1, NotificationType: 1, Request_ID: 1, createdAt: -1 });
+notificationSchema.index({ organizationId: 1, recipientUserId: 1, NotificationType: 1, Event_ID: 1, createdAt: -1 });
 
 // Method to mark notification as read
 notificationSchema.methods.markAsRead = function() {
