@@ -161,7 +161,7 @@ const notificationSchema = new mongoose.Schema({
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
-    required: false
+    required: true
   }
 }, {
   timestamps: true

@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const tenantPlugin = require('../utils/tenantPlugin');
+
+// Apply multi-tenancy scoping globally to all schemas
+mongoose.plugin(tenantPlugin);
 
 // ============================================
 // USER MODELS

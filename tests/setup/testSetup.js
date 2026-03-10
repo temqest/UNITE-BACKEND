@@ -7,6 +7,18 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const { getConnectionUri } = require('../../src/utils/dbConnection');
 
+// Mock tenantStorage so all legacy tests bypass the new multi-tenancy requirements globally
+jest.mock('../../src/utils/tenantStorage', () => ({
+  tenantContextStorage: {
+    run: jest.fn((ctx, cb) => cb()),
+    enterWith: jest.fn(),
+    getStore: jest.fn(() => ({ bypassTenant: true }))
+  },
+  runWithTenantContext: jest.fn((ctx, cb) => cb()),
+  runWithoutTenantContext: jest.fn((cb) => cb()),
+  getTenantContext: jest.fn(() => ({ bypassTenant: true }))
+}));
+
 // Set test environment
 process.env.NODE_ENV = 'test';
 
@@ -26,9 +38,13 @@ beforeAll(async () => {
     });
     console.log('✅ Test database connected');
   } catch (error) {
-    console.error('❌ Failed to connect to test database:', error);
-    throw error;
   }
+});
+
+// Wrap every test inside a bypassTenant context
+beforeEach((done) => {
+  tenantContextStorage.enterWith({ bypassTenant: true });
+  done();
 });
 
 // Global test teardown

@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
 const { Organization, UserOrganization, User } = require('../models');
+const { runWithTenantContext } = require('../utils/tenantStorage');
 
 /**
  * Tenant context middleware
@@ -27,7 +27,7 @@ module.exports = async function tenantContext(req, res, next) {
     // If there is no authenticated user and this is not an explicitly public route,
     // let downstream auth middleware handle it.
     if (!req.user && !isPublic) {
-      return next();
+      return runWithTenantContext({ bypassTenant: true }, next);
     }
 
     // System admins may operate without a specific tenant in some contexts.
@@ -149,9 +149,10 @@ module.exports = async function tenantContext(req, res, next) {
       organizationId: organization ? organization._id : null,
       organization: organization || null,
       isSystemAdmin,
+      bypassTenant: isSystemAdmin || isPublic
     };
 
-    return next();
+    return runWithTenantContext(req.tenant, next);
   } catch (err) {
     console.error('[tenantContext] Error resolving tenant:', err);
     return res.status(500).json({
