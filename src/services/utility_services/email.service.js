@@ -216,6 +216,64 @@ unitehealth.tech`;
       throw new Error('Failed to send password activation email');
     }
   }
+
+  /**
+   * Send waitlist confirmation email natively utilizing core provider logic
+   * @param {string} email - Recipient email address
+   * @param {string} userName - Optional user name
+   * @returns {Promise<void>}
+   */
+  async sendWaitlistConfirmation(email, userName = '') {
+    const subject = "You're on the waitlist!";
+    const recipientName = userName || 'Future Member';
+    
+    const text = `Hello ${recipientName},
+
+Thank you for joining our waitlist.
+
+We've successfully reserved your spot! We are currently building something special for you. Since you're on the list, you'll be among the first to get early access as soon as we launch our public beta.
+
+Keep an eye on your inbox for future updates!
+
+If you didn't sign up for this, you can safely ignore this email.
+
+Best regards,
+Unite Project Team
+unitehealth.tech`;
+
+    const html = `
+<div style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 20px; margin: 0 auto;">
+  <div style="max-width: 600px; margin: auto; background: #ffffff; padding: 30px; border-radius: 8px;">
+    <h2 style="color: #333333; text-align: center;">Welcome to the family, ${recipientName}! 🎉</h2>
+    <p style="color: #555555; text-align: center;">Thank you for joining our waitlist.</p>
+    
+    <div style="background-color: #f1f5f9; padding: 15px; border-radius: 6px; text-align: center; margin: 20px 0;">
+      <p style="margin: 0; color: #334155; font-weight: bold;">We've successfully reserved your spot!</p>
+    </div>
+    
+    <p style="color: #666666; line-height: 1.6;">
+      We are currently building something special for you. Since you're on the list, you'll be among 
+      the first to get early access as soon as we launch our public beta.
+    </p>
+    
+    <br/>
+    <p style="color: #666666;">Keep an eye on your inbox for future updates!</p>
+    <p style="color: #999999; font-size: 12px; margin-top: 30px; text-align: center;">
+      If you didn't sign up for this, you can safely ignore this email.
+    </p>
+  </div>
+</div>`;
+
+    try {
+      await this.sendEmail(email, subject, text, html);
+      const providerName = this.providerName || 'EMAIL';
+      console.log(`[${providerName}] Waitlist confirmation email sent to ${email}`);
+    } catch (error) {
+      const providerName = this.providerName || 'EMAIL';
+      console.error(`[${providerName}] Failed to send waitlist email to ${email}: ${error.message}`);
+      // Only log softly here, we don't want to crash the main Waitlist process if email servers drop completely
+    }
+  }
 }
 
 module.exports = new EmailService();
