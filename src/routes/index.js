@@ -25,6 +25,7 @@ const coverageAreasRoutes = require('./coverageAreas.routes'); // Coverage area 
 const rbacRoutes = require('./rbac.routes'); // RBAC management routes
 const pagesRoutes = require('./pages.routes'); // Page and feature access routes
 const stakeholderRoutes = require('./stakeholder.routes'); // Stakeholder management routes
+const waitlistRoutes = require('./waitlist.routes'); // Waitlist route
 
 // Mount routes
 // Auth routes are mounted under /api/auth (canonical) and also under /api
@@ -44,6 +45,7 @@ router.use('/api', coverageAreasRoutes); // Coverage area management routes
 router.use('/api/rbac', rbacRoutes); // RBAC management routes
 router.use('/api', pagesRoutes); // Page and feature access routes
 router.use('/api', stakeholderRoutes); // Stakeholder management routes
+router.use('/api', waitlistRoutes); // Waitlist routes
 router.use('/api/chat', chatRoutes);
 router.use('/api/files', filesRoutes);
 
